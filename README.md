@@ -64,5 +64,12 @@ publish it according to Google Calendar's sharing settings. The embedded
 visual view is not filtered by the dashboard's therapist selector; the
 appointment list below it is.
 
+The primary calendar ID must be the calendar owner's actual calendar ID. For
+the Gmail account in this project, leave `GOOGLE_PRIMARY_CALENDAR_ID` unset or
+set it to `mythaithaimassage@gmail.com`. In Google Calendar, open the primary
+calendar's **Settings and sharing**, add the service-account email, and grant
+**Make changes to events** permission. Without that permission, bookings
+cannot be written to the primary calendar.
+
 Store the service-account values only in Vercel Environment Variables. Do not
 commit the JSON key or paste its private key into source control.

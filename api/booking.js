@@ -110,14 +110,13 @@ export default async function handler(req, res) {
         });
         const sheetRows = sheetResult.data.values || [];
         const dataRows = sheetRows[0]?.[0] === 'Booking ID' ? sheetRows.slice(1) : sheetRows;
-        const calendarIds = [...new Set(dataRows.map((row) => row[15]).filter(Boolean))];
+        const calendarIds = [...new Set([
+          PRIMARY_CALENDAR_ID,
+          ...dataRows.map((row) => row[15]).filter(Boolean),
+        ])];
         const calendars = await calendarApi.calendarList.list({ minAccessRole: 'reader', maxResults: 250 });
-        for (const calendar of calendars.data.items || []) {
-          if (calendar.id && calendar.summary?.endsWith(' - MY THAI THAI') && !calendarIds.includes(calendar.id)) {
-            calendarIds.push(calendar.id);
-          }
-        }
         const events = [];
+        const calendarErrors = [];
 
         for (const calendarId of calendarIds) {
           try {
@@ -135,7 +134,7 @@ export default async function handler(req, res) {
               if (
                 start.slice(0, 10) === date &&
                 (!branch || location.toLowerCase().includes(branch)) &&
-                (!therapist || (calendar?.summary || '').toLowerCase().includes(therapist))
+                (!therapist || (event.description || '').toLowerCase().includes(`therapist: ${therapist}`))
               ) {
                 events.push({
                   id: event.id,
@@ -150,9 +149,16 @@ export default async function handler(req, res) {
             }
           } catch (error) {
             console.error(`Unable to load calendar ${calendarId}:`, error);
+            calendarErrors.push(`${calendarId}: ${error.message || 'access denied'}`);
           }
         }
-        return res.status(200).json({ date, events });
+        return res.status(200).json({
+          date,
+          calendarId: PRIMARY_CALENDAR_ID,
+          calendarUrl: `https://calendar.google.com/calendar/u/0/r?cid=${encodeURIComponent(PRIMARY_CALENDAR_ID)}`,
+          events,
+          errors: calendarErrors,
+        });
       }
 
       const result = await sheets.spreadsheets.values.get({
@@ -195,7 +201,7 @@ export default async function handler(req, res) {
 
     const calendarEvent = await calendarApi.events.insert({
       calendarId,
-      sendUpdates: 'all',
+      sendUpdates: 'none',
       requestBody: {
         summary: `${payload.serviceName} - ${payload.customerName}`,
         location: payload.branchAddress || payload.branchName,

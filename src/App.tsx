@@ -1032,6 +1032,8 @@ function AdminPortal({
   const [calendarEvents, setCalendarEvents] = useState([]);
   const [isLoadingCalendar, setIsLoadingCalendar] = useState(false);
   const [calendarLoadError, setCalendarLoadError] = useState('');
+  const [calendarUrl, setCalendarUrl] = useState('');
+  const [calendarWarnings, setCalendarWarnings] = useState([]);
 
   // Staff management state
   const [showAddTherapistModal, setShowAddTherapistModal] = useState(false);
@@ -1100,6 +1102,8 @@ function AdminPortal({
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
       setCalendarEvents(data.events || []);
+      setCalendarUrl(data.calendarUrl || '');
+      setCalendarWarnings(data.errors || []);
     } catch (error) {
       setCalendarLoadError(error.message || 'Unable to load Google Calendar events');
     } finally {
@@ -1379,6 +1383,16 @@ function AdminPortal({
             </div>
           </div>
           {calendarLoadError && <div className="p-3 bg-red-50 border border-red-200 text-red-800 rounded-xl text-xs">{calendarLoadError}</div>}
+          {calendarWarnings.length > 0 && (
+            <div className="p-3 bg-amber-50 border border-amber-200 text-amber-900 rounded-xl text-xs">
+              Calendar access warning: {calendarWarnings.join(' · ')}
+            </div>
+          )}
+          {calendarUrl && (
+            <a href={calendarUrl} target="_blank" rel="noreferrer" className="inline-flex text-xs font-semibold text-emerald-800 underline">
+              Open the primary Google Calendar
+            </a>
+          )}
           <div className="rounded-xl overflow-hidden border border-stone-200 bg-stone-50">
             <iframe
               title="MY THAI THAI Google Calendar"
