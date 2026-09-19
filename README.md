@@ -44,5 +44,10 @@ verified sender address. The Calendar event does not invite attendees because
 standard Google service accounts cannot invite external attendees without
 Google Workspace Domain-Wide Delegation.
 
+The Admin Dashboard schedule loads live booking rows from `GET /api/booking`,
+which reads `Sheet1!A:R`. Existing sheets may include the header row from the
+schema, but the API also works when bookings are already present without a
+header row.
+
 Store the service-account values only in Vercel Environment Variables. Do not
 commit the JSON key or paste its private key into source control.

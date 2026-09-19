@@ -106,10 +106,6 @@ async function sendConfirmationEmail(payload, calendarEvent) {
         '',
         'Your appointment has been added to the therapist calendar.',
       ].join('\n'),
-      headers: {
-        'X-Booking-Reference': payload.id,
-        'X-Calendar-Event-ID': calendarEvent.data.id || '',
-      },
     }),
   });
 
@@ -120,7 +116,7 @@ async function sendConfirmationEmail(payload, calendarEvent) {
 }
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') {
+  if (!['GET', 'POST'].includes(req.method)) {
     return res.status(405).json({ message: 'Method Not Allowed' });
   }
 
@@ -138,6 +134,39 @@ export default async function handler(req, res) {
 
     const sheets = google.sheets({ version: 'v4', auth });
     const calendarApi = google.calendar({ version: 'v3', auth });
+
+    if (req.method === 'GET') {
+      const result = await sheets.spreadsheets.values.get({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: 'Sheet1!A:R',
+      });
+      const rows = result.data.values || [];
+      const dataRows = rows[0]?.[0] === 'Booking ID' ? rows.slice(1) : rows;
+      return res.status(200).json({
+        bookings: dataRows.reverse().map((row) => ({
+          id: row[0] || '',
+          customerName: row[1] || '',
+          phone: row[2] || '',
+          email: row[3] || '',
+          branchName: row[4] || '',
+          serviceName: row[5] || '',
+          therapistName: row[6] || '',
+          date: row[7] || '',
+          time: row[8] || '',
+          paymentOption: row[9] || '',
+          paidAmount: Number(row[10]) || 0,
+          total: Number(row[11]) || 0,
+          durationMinutes: Number(row[12]) || 0,
+          branchAddress: row[13] || '',
+          intakeNotes: row[14] || '',
+          calendarId: row[15] || '',
+          calendarEventId: row[16] || '',
+          createdAt: row[17] || '',
+          syncedToSheets: true,
+        })),
+      });
+    }
+
     const payload = req.body;
     const therapistName = payload.therapistName || 'Any Available';
     const calendarId = await getOrCreateTherapistCalendar(calendarApi, therapistName);
@@ -197,13 +226,22 @@ export default async function handler(req, res) {
       },
     });
 
-    await sendConfirmationEmail(payload, calendarEvent);
+    let emailSent = false;
+    let emailError = '';
+    try {
+      await sendConfirmationEmail(payload, calendarEvent);
+      emailSent = true;
+    } catch (error) {
+      emailError = error.message || 'Confirmation email failed';
+      console.error('Booking confirmation email error:', error);
+    }
 
     return res.status(200).json({
       status: 'success',
       calendarId,
       calendarEventId: calendarEvent.data.id,
-      emailSent: true,
+      emailSent,
+      emailError,
     });
   } catch (error) {
     console.error('Google Sheets API Error:', error);

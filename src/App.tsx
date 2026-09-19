@@ -154,7 +154,12 @@ async function sendBookingToGoogleSheets(apiUrl, bookingPayload) {
     });
 
     if (response.ok) {
-      return { success: true };
+      const result = await response.json().catch(() => ({}));
+      return {
+        success: true,
+        emailSent: result.emailSent !== false,
+        emailReason: result.emailError || ''
+      };
     } else {
       const errData = await response.json().catch(() => ({}));
       return { success: false, reason: errData.message || `Server returned status ${response.status}` };
@@ -356,8 +361,8 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
     // Use the Vercel route by default; retain support for a configured webhook.
     const syncResult = await sendBookingToGoogleSheets(sheetsWebhookUrl, payloadForSheets);
     const syncSuccess = syncResult.success;
-    if (!syncSuccess) {
-      setSheetsSyncReason(syncResult.reason || 'The Google Sheets and Calendar sync failed.');
+    if (!syncSuccess || syncResult.emailSent === false) {
+      setSheetsSyncReason(syncResult.reason || syncResult.emailReason || 'The Google Sheets and Calendar sync failed.');
     }
 
     const newRecord = {
@@ -380,7 +385,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
 
     onNewBooking(newRecord);
     setBookingData(prev => ({ ...prev, confirmationCode: code }));
-    setSheetsSyncStatus(syncSuccess ? 'success' : 'failed');
+    setSheetsSyncStatus(syncSuccess ? (syncResult.emailSent === false ? 'email_failed' : 'success') : 'failed');
     setIsSubmitting(false);
     setStep(5);
   };
@@ -889,6 +894,12 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                 {sheetsSyncReason && <span>{sheetsSyncReason}</span>}
               </div>
             )}
+            {sheetsSyncStatus === 'email_failed' && (
+              <div className="inline-flex flex-col items-center space-y-1 bg-amber-50 border border-amber-300 text-amber-900 px-4 py-2 rounded-xl text-xs">
+                <span className="font-semibold">Saved to Google Sheets and Calendar, but confirmation email failed.</span>
+                {sheetsSyncReason && <span>{sheetsSyncReason}</span>}
+              </div>
+            )}
 
             <div className="bg-stone-50 border border-stone-200 rounded-2xl p-5 max-w-md mx-auto text-left space-y-2 text-xs sm:text-sm">
               <div className="flex justify-between border-b pb-2">
@@ -956,6 +967,8 @@ function AdminPortal({
   const [inputUrl, setInputUrl] = useState(sheetsWebhookUrl);
   const [testResult, setTestResult] = useState(null);
   const [isTesting, setIsTesting] = useState(false);
+  const [isLoadingBookings, setIsLoadingBookings] = useState(false);
+  const [bookingLoadError, setBookingLoadError] = useState('');
 
   // Staff management state
   const [showAddTherapistModal, setShowAddTherapistModal] = useState(false);
@@ -994,6 +1007,25 @@ function AdminPortal({
 
   const totalRevenue = useMemo(() => bookings.reduce((sum, b) => sum + b.total, 0), [bookings]);
   const hstCollected = useMemo(() => bookings.reduce((sum, b) => sum + (b.total - (b.total / 1.13)), 0), [bookings]);
+
+  const loadBookingsFromBackend = async () => {
+    setIsLoadingBookings(true);
+    setBookingLoadError('');
+    try {
+      const response = await fetch('/api/booking');
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+      setBookings(data.bookings || []);
+    } catch (error) {
+      setBookingLoadError(error.message || 'Unable to load bookings from Google Sheets');
+    } finally {
+      setIsLoadingBookings(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'schedule') loadBookingsFromBackend();
+  }, [activeTab]);
 
   const handleSaveWebhook = (e) => {
     e.preventDefault();
@@ -1144,7 +1176,15 @@ function AdminPortal({
         <div className="bg-white rounded-2xl p-6 border border-stone-200 shadow-sm space-y-4">
           <div className="flex justify-between items-center">
             <h2 className="text-lg font-bold text-stone-900">{t.schedule}</h2>
-            <button
+            <div className="flex items-center gap-2">
+              <button
+                onClick={loadBookingsFromBackend}
+                disabled={isLoadingBookings}
+                className="px-3 py-2 border border-stone-300 text-stone-700 rounded-xl text-xs font-bold hover:bg-stone-50 disabled:opacity-50"
+              >
+                {isLoadingBookings ? 'Loading...' : 'Refresh from Google Sheets'}
+              </button>
+              <button
               onClick={() => {
                 const customerName = prompt(lang === 'th' ? "ชื่อลูกค้า (Walk-in / Phone):" : "Customer Name:");
                 if (!customerName) return;
@@ -1168,10 +1208,16 @@ function AdminPortal({
                 setBookings(prev => [newB, ...prev]);
               }}
               className="px-4 py-2 bg-emerald-800 text-white rounded-xl text-xs font-bold hover:bg-emerald-900 transition flex items-center"
-            >
-              <Plus className="w-4 h-4 mr-1" /> {t.addBooking}
-            </button>
+              >
+                <Plus className="w-4 h-4 mr-1" /> {t.addBooking}
+              </button>
+            </div>
           </div>
+          {bookingLoadError && (
+            <div className="p-3 bg-red-50 border border-red-200 text-red-800 rounded-xl text-xs">
+              {bookingLoadError}
+            </div>
+          )}
 
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs sm:text-sm">
