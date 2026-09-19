@@ -264,6 +264,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [sheetsSyncStatus, setSheetsSyncStatus] = useState(null);
+  const [sheetsSyncReason, setSheetsSyncReason] = useState('');
   
   const [bookingData, setBookingData] = useState({
     branch: branches[0],
@@ -325,6 +326,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
     e.preventDefault();
     setIsSubmitting(true);
     setSheetsSyncStatus('pending');
+    setSheetsSyncReason('');
 
     const code = 'MTT-' + Math.floor(100000 + Math.random() * 900000);
     const customerFullName = `${bookingData.customer.firstName} ${bookingData.customer.lastName}`;
@@ -354,6 +356,9 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
     // Use the Vercel route by default; retain support for a configured webhook.
     const syncResult = await sendBookingToGoogleSheets(sheetsWebhookUrl, payloadForSheets);
     const syncSuccess = syncResult.success;
+    if (!syncSuccess) {
+      setSheetsSyncReason(syncResult.reason || 'The Google Sheets and Calendar sync failed.');
+    }
 
     const newRecord = {
       id: code,
@@ -875,7 +880,13 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
             {sheetsSyncStatus === 'not_configured' && (
               <div className="inline-flex items-center space-x-2 bg-amber-50 border border-amber-300 text-amber-800 px-4 py-1.5 rounded-full text-xs">
                 <AlertCircle className="w-4 h-4 text-amber-600" />
-                <span>Saved locally. Configure Google Sheets URL in Admin Panel to auto-sync.</span>
+                <span>Saved locally. Google Sheets and Calendar sync is not configured.</span>
+              </div>
+            )}
+            {sheetsSyncStatus === 'failed' && (
+              <div className="inline-flex flex-col items-center space-y-1 bg-red-50 border border-red-300 text-red-800 px-4 py-2 rounded-xl text-xs">
+                <span className="font-semibold">Saved locally, but Google Sheets and Calendar sync failed.</span>
+                {sheetsSyncReason && <span>{sheetsSyncReason}</span>}
               </div>
             )}
 
