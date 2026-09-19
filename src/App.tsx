@@ -157,6 +157,7 @@ async function sendBookingToGoogleSheets(apiUrl, bookingPayload) {
       const result = await response.json().catch(() => ({}));
       return {
         success: true,
+        data: result,
         emailSent: result.emailSent !== false,
         emailReason: result.emailError || ''
       };
@@ -401,6 +402,9 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
       branchName: bookingData.branch.name,
       serviceName: bookingData.service.name,
       therapistName: bookingData.therapist?.name || 'Any Available',
+      therapistCandidates: therapists
+        .filter((therapist) => therapist.branches.includes(bookingData.branch.id))
+        .map((therapist) => therapist.name),
       date: bookingData.date,
       time: bookingData.time,
       durationMinutes: bookingData.service.duration,
@@ -430,8 +434,8 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
       serviceId: bookingData.service.id,
       serviceName: bookingData.service.name,
       branchId: bookingData.branch.id,
-      therapistId: bookingData.therapist?.id || 0,
-      therapistName: bookingData.therapist?.name || 'Any Available',
+      therapistId: therapists.find((therapist) => therapist.name === syncResult.data?.therapistName)?.id || bookingData.therapist?.id || 0,
+      therapistName: syncResult.data?.therapistName || bookingData.therapist?.name || 'Any Available',
       date: bookingData.date,
       time: bookingData.time,
       status: 'Confirmed',
@@ -1393,17 +1397,36 @@ function AdminPortal({
               Open the primary Google Calendar
             </a>
           )}
-          <div className="rounded-xl overflow-hidden border border-stone-200 bg-stone-50">
-            <iframe
-              title="MY THAI THAI Google Calendar"
-              src="https://calendar.google.com/calendar/embed?src=mythaithaimassage%40gmail.com&ctz=America%2FToronto"
-              className="w-full h-[620px] border-0"
-              loading="lazy"
-            />
+          <div className="rounded-xl overflow-hidden border border-stone-200 bg-white">
+            <div className="flex items-center justify-between px-4 py-3 bg-stone-50 border-b border-stone-200">
+              <div>
+                <p className="font-bold text-stone-900">{new Date(`${calendarDate}T12:00:00`).toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</p>
+                <p className="text-xs text-stone-500">MY THAI THAI · live primary calendar view</p>
+              </div>
+              <CalendarIcon className="w-5 h-5 text-emerald-700" />
+            </div>
+            <div className="max-h-[620px] overflow-y-auto">
+              {Array.from({ length: 12 }, (_, index) => index + 8).map((hour) => {
+                const hourLabel = new Date(2000, 0, 1, hour).toLocaleTimeString([], { hour: 'numeric' });
+                const hourEvents = calendarEvents.filter((event) => new Date(event.start).getHours() === hour);
+                return (
+                  <div key={hour} className="grid grid-cols-[72px_1fr] min-h-[58px] border-b border-stone-100">
+                    <div className="p-2 text-[11px] text-stone-400 text-right border-r border-stone-100">{hourLabel}</div>
+                    <div className="p-1.5 space-y-1">
+                      {hourEvents.map((event) => (
+                        <div key={event.id} className="rounded-lg bg-emerald-100 border-l-4 border-emerald-700 px-3 py-2 text-xs">
+                          <div className="font-bold text-emerald-950">{event.summary}</div>
+                          <div className="text-emerald-800">{new Date(event.start).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} · {event.calendarName.replace(' - MY THAI THAI', '')}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
           <p className="text-xs text-stone-500">
-            The calendar above is the native Google Calendar view. Therapist and branch filters apply to the live list below.
-            The Google Calendar must be shared or published for the embedded view to show events.
+            This live visual uses the same Google Calendar events and the same date, branch, and therapist filters as the appointment list below.
           </p>
           {calendarEvents.length === 0 && !isLoadingCalendar ? (
             <p className="py-8 text-center text-sm text-stone-500">No appointments found for this date and branch.</p>

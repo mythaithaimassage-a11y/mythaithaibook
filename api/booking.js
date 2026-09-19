@@ -37,6 +37,15 @@ function addMinutes(dateTime, minutes) {
   return `${value.getUTCFullYear()}-${String(value.getUTCMonth() + 1).padStart(2, '0')}-${String(value.getUTCDate()).padStart(2, '0')}T${String(value.getUTCHours()).padStart(2, '0')}:${String(value.getUTCMinutes()).padStart(2, '0')}:${String(value.getUTCSeconds()).padStart(2, '0')}`;
 }
 
+function getTherapistFromDescription(description = '') {
+  return description.match(/^Therapist:\s*(.+)$/m)?.[1]?.trim() || '';
+}
+
+function hasTimeOverlap(startA, endA, startB, endB) {
+  return new Date(startA).getTime() < new Date(endB).getTime() &&
+    new Date(endA).getTime() > new Date(startB).getTime();
+}
+
 async function sendConfirmationEmail(payload, calendarEvent) {
   if (!process.env.RESEND_API_KEY) {
     throw new Error('RESEND_API_KEY is not configured');
@@ -193,11 +202,36 @@ export default async function handler(req, res) {
     }
 
     const payload = req.body;
-    const therapistName = payload.therapistName || 'Any Available';
+    const requestedTherapist = payload.therapistName || 'Any Available';
     const calendarId = PRIMARY_CALENDAR_ID;
     const startDateTime = parseBookingDateTime(payload.date, payload.time);
     const durationMinutes = Number(payload.durationMinutes) || 60;
     const endDateTime = addMinutes(startDateTime, durationMinutes);
+    const startInstant = `${startDateTime}-04:00`;
+    const endInstant = `${endDateTime}-04:00`;
+    const dayEvents = await calendarApi.events.list({
+      calendarId,
+      timeMin: `${payload.date}T00:00:00Z`,
+      timeMax: `${payload.date}T23:59:59Z`,
+      singleEvents: true,
+    });
+    const busyTherapists = new Set(
+      (dayEvents.data.items || [])
+        .filter((event) => {
+          const eventStart = event.start?.dateTime || event.start?.date || '';
+          const eventEnd = event.end?.dateTime || event.end?.date || '';
+          return eventStart && eventEnd && hasTimeOverlap(startInstant, endInstant, eventStart, eventEnd);
+        })
+        .map((event) => getTherapistFromDescription(event.description)),
+    );
+    const candidates = Array.isArray(payload.therapistCandidates) ? payload.therapistCandidates : [];
+    const availableCandidates = candidates.filter((name) => !busyTherapists.has(name));
+    const therapistName = requestedTherapist !== 'Any Available' && !busyTherapists.has(requestedTherapist)
+      ? requestedTherapist
+      : availableCandidates[0] || (requestedTherapist === 'Any Available' ? 'Any Available' : '');
+    if (!therapistName) {
+      return res.status(409).json({ message: 'The selected therapist is busy and no other therapist is available for this time.' });
+    }
 
     const calendarEvent = await calendarApi.events.insert({
       calendarId,
@@ -267,6 +301,7 @@ export default async function handler(req, res) {
       calendarEventId: calendarEvent.data.id,
       emailSent,
       emailError,
+      therapistName,
     });
   } catch (error) {
     console.error('Google Sheets API Error:', error);
