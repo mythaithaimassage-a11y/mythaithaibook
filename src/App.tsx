@@ -1028,6 +1028,7 @@ function AdminPortal({
   const [bookingLoadError, setBookingLoadError] = useState('');
   const [calendarDate, setCalendarDate] = useState(new Date().toISOString().split('T')[0]);
   const [calendarBranch, setCalendarBranch] = useState('all');
+  const [calendarTherapist, setCalendarTherapist] = useState('all');
   const [calendarEvents, setCalendarEvents] = useState([]);
   const [isLoadingCalendar, setIsLoadingCalendar] = useState(false);
   const [calendarLoadError, setCalendarLoadError] = useState('');
@@ -1094,7 +1095,8 @@ function AdminPortal({
     setCalendarLoadError('');
     try {
       const branch = calendarBranch === 'all' ? '' : branches.find((item) => item.id === calendarBranch)?.address || '';
-      const response = await fetch(`/api/booking?view=calendar&date=${encodeURIComponent(calendarDate)}&branch=${encodeURIComponent(branch)}`);
+      const therapist = calendarTherapist === 'all' ? '' : therapists.find((item) => item.id === calendarTherapist)?.name || '';
+      const response = await fetch(`/api/booking?view=calendar&date=${encodeURIComponent(calendarDate)}&branch=${encodeURIComponent(branch)}&therapist=${encodeURIComponent(therapist)}`);
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
       setCalendarEvents(data.events || []);
@@ -1107,7 +1109,7 @@ function AdminPortal({
 
   useEffect(() => {
     if (activeTab === 'calendar') loadCalendar();
-  }, [activeTab, calendarDate, calendarBranch]);
+  }, [activeTab, calendarDate, calendarBranch, calendarTherapist]);
 
   const handleSaveWebhook = (e) => {
     e.preventDefault();
@@ -1350,7 +1352,7 @@ function AdminPortal({
           <div className="flex flex-wrap items-end justify-between gap-3">
             <div>
               <h2 className="text-lg font-bold text-stone-900">Live Google Calendar</h2>
-              <p className="text-xs text-stone-500">Appointments from each therapist calendar.</p>
+              <p className="text-xs text-stone-500">Google Calendar view and live appointment list.</p>
             </div>
             <div className="flex flex-wrap gap-2">
               <label className="text-xs font-semibold text-stone-600">
@@ -1364,12 +1366,31 @@ function AdminPortal({
                   {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
                 </select>
               </label>
+              <label className="text-xs font-semibold text-stone-600">
+                Therapist
+                <select value={calendarTherapist} onChange={(event) => setCalendarTherapist(event.target.value)} className="block mt-1 p-2 rounded-lg border border-stone-300">
+                  <option value="all">All therapists</option>
+                  {therapists.map((therapist) => <option key={therapist.id} value={therapist.id}>{therapist.name}</option>)}
+                </select>
+              </label>
               <button onClick={loadCalendar} disabled={isLoadingCalendar} className="h-9 px-3 bg-emerald-800 text-white rounded-lg text-xs font-bold disabled:opacity-50">
                 {isLoadingCalendar ? 'Loading...' : 'Refresh'}
               </button>
             </div>
           </div>
           {calendarLoadError && <div className="p-3 bg-red-50 border border-red-200 text-red-800 rounded-xl text-xs">{calendarLoadError}</div>}
+          <div className="rounded-xl overflow-hidden border border-stone-200 bg-stone-50">
+            <iframe
+              title="MY THAI THAI Google Calendar"
+              src="https://calendar.google.com/calendar/embed?src=mythaithaimassage%40gmail.com&ctz=America%2FToronto"
+              className="w-full h-[620px] border-0"
+              loading="lazy"
+            />
+          </div>
+          <p className="text-xs text-stone-500">
+            The calendar above is the native Google Calendar view. Therapist and branch filters apply to the live list below.
+            The Google Calendar must be shared or published for the embedded view to show events.
+          </p>
           {calendarEvents.length === 0 && !isLoadingCalendar ? (
             <p className="py-8 text-center text-sm text-stone-500">No appointments found for this date and branch.</p>
           ) : (

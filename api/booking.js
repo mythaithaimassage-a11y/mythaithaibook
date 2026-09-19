@@ -2,6 +2,7 @@ import { google } from 'googleapis';
 
 const CALENDAR_TIME_ZONE = process.env.GOOGLE_CALENDAR_TIME_ZONE || 'America/Toronto';
 const CALENDAR_OWNER_EMAIL = process.env.GOOGLE_CALENDAR_OWNER_EMAIL || 'mythaithaimassage@gmail.com';
+const PRIMARY_CALENDAR_ID = process.env.GOOGLE_PRIMARY_CALENDAR_ID || CALENDAR_OWNER_EMAIL;
 const RESEND_FROM_EMAIL = process.env.RESEND_FROM_EMAIL || 'mythaithaimassage@gmail.com';
 
 function parseBookingDateTime(date, time) {
@@ -34,43 +35,6 @@ function addMinutes(dateTime, minutes) {
   ));
   value.setUTCMinutes(value.getUTCMinutes() + minutes);
   return `${value.getUTCFullYear()}-${String(value.getUTCMonth() + 1).padStart(2, '0')}-${String(value.getUTCDate()).padStart(2, '0')}T${String(value.getUTCHours()).padStart(2, '0')}:${String(value.getUTCMinutes()).padStart(2, '0')}:${String(value.getUTCSeconds()).padStart(2, '0')}`;
-}
-
-async function getOrCreateTherapistCalendar(calendarApi, therapistName) {
-  const summary = `${therapistName} - MY THAI THAI`;
-  let pageToken;
-
-  do {
-    const calendars = await calendarApi.calendarList.list({
-      minAccessRole: 'owner',
-      maxResults: 250,
-      pageToken,
-    });
-    const existing = calendars.data.items?.find((calendar) => calendar.summary === summary);
-    if (existing?.id) return existing.id;
-    pageToken = calendars.data.nextPageToken;
-  } while (pageToken);
-
-  const created = await calendarApi.calendars.insert({
-    requestBody: {
-      summary,
-      description: `Appointments for ${therapistName}`,
-      timeZone: CALENDAR_TIME_ZONE,
-    },
-  });
-  const calendarId = created.data.id;
-  if (!calendarId) throw new Error(`Unable to create a calendar for ${therapistName}`);
-
-  await calendarApi.acl.insert({
-    calendarId,
-    sendNotifications: true,
-    requestBody: {
-      scope: { type: 'user', value: CALENDAR_OWNER_EMAIL },
-      role: 'writer',
-    },
-  });
-
-  return calendarId;
 }
 
 async function sendConfirmationEmail(payload, calendarEvent) {
@@ -139,6 +103,7 @@ export default async function handler(req, res) {
       if (req.query?.view === 'calendar') {
         const date = req.query.date || new Date().toISOString().slice(0, 10);
         const branch = String(req.query.branch || '').toLowerCase();
+        const therapist = String(req.query.therapist || '').toLowerCase();
         const sheetResult = await sheets.spreadsheets.values.get({
           spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
           range: 'Sheet1!A:R',
@@ -167,7 +132,11 @@ export default async function handler(req, res) {
             for (const event of result.data.items || []) {
               const location = event.location || '';
               const start = event.start?.dateTime || event.start?.date || '';
-              if (start.slice(0, 10) === date && (!branch || location.toLowerCase().includes(branch))) {
+              if (
+                start.slice(0, 10) === date &&
+                (!branch || location.toLowerCase().includes(branch)) &&
+                (!therapist || (calendar?.summary || '').toLowerCase().includes(therapist))
+              ) {
                 events.push({
                   id: event.id,
                   calendarName: calendar?.summary || calendarId,
@@ -219,7 +188,7 @@ export default async function handler(req, res) {
 
     const payload = req.body;
     const therapistName = payload.therapistName || 'Any Available';
-    const calendarId = await getOrCreateTherapistCalendar(calendarApi, therapistName);
+    const calendarId = PRIMARY_CALENDAR_ID;
     const startDateTime = parseBookingDateTime(payload.date, payload.time);
     const durationMinutes = Number(payload.durationMinutes) || 60;
     const endDateTime = addMinutes(startDateTime, durationMinutes);
