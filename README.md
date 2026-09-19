@@ -49,5 +49,11 @@ which reads `Sheet1!A:R`. Existing sheets may include the header row from the
 schema, but the API also works when bookings are already present without a
 header row.
 
+The admin dashboard includes a live Google Calendar tab with date and branch
+filters. Admin access is currently gated in the browser with the temporary
+password `mythai`. This is a UI gate, not production-grade authentication;
+replace it with server-side authentication before exposing the dashboard
+publicly.
+
 Store the service-account values only in Vercel Environment Variables. Do not
 commit the JSON key or paste its private key into source control.

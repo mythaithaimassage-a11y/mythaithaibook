@@ -136,6 +136,39 @@ export default async function handler(req, res) {
     const calendarApi = google.calendar({ version: 'v3', auth });
 
     if (req.method === 'GET') {
+      if (req.query?.view === 'calendar') {
+        const date = req.query.date || new Date().toISOString().slice(0, 10);
+        const branch = String(req.query.branch || '').toLowerCase();
+        const calendars = await calendarApi.calendarList.list({ minAccessRole: 'reader', maxResults: 250 });
+        const events = [];
+
+        for (const calendar of calendars.data.items || []) {
+          if (!calendar.id || !calendar.summary?.endsWith(' - MY THAI THAI')) continue;
+          const result = await calendarApi.events.list({
+            calendarId: calendar.id,
+            timeMin: `${date}T00:00:00-04:00`,
+            timeMax: `${date}T23:59:59-04:00`,
+            singleEvents: true,
+            orderBy: 'startTime',
+          });
+          for (const event of result.data.items || []) {
+            const location = event.location || '';
+            if (!branch || location.toLowerCase().includes(branch)) {
+              events.push({
+                id: event.id,
+                calendarName: calendar.summary,
+                summary: event.summary || '',
+                location,
+                description: event.description || '',
+                start: event.start?.dateTime || event.start?.date || '',
+                end: event.end?.dateTime || event.end?.date || '',
+              });
+            }
+          }
+        }
+        return res.status(200).json({ date, events });
+      }
+
       const result = await sheets.spreadsheets.values.get({
         spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
         range: 'Sheet1!A:R',

@@ -238,21 +238,23 @@ export default function App() {
             onNewBooking={(newBkg) => setExistingBookings(prev => [newBkg, ...prev])}
           />
         ) : (
-          <AdminPortal 
-            branches={MOCK_BRANCHES} 
-            services={servicesList} 
-            setServices={setServicesList}
-            therapists={therapistsList}
-            setTherapists={setTherapistsList}
-            bookings={existingBookings}
-            setBookings={setExistingBookings}
-            selectedBranchId={selectedBranchId}
-            setSelectedBranchId={setSelectedBranchId}
-            lang={adminLang}
-            setLang={setAdminLang}
-            sheetsWebhookUrl={sheetsWebhookUrl}
-            onUpdateWebhookUrl={handleUpdateWebhookUrl}
-          />
+          <AdminGate>
+            <AdminPortal
+              branches={MOCK_BRANCHES}
+              services={servicesList}
+              setServices={setServicesList}
+              therapists={therapistsList}
+              setTherapists={setTherapistsList}
+              bookings={existingBookings}
+              setBookings={setExistingBookings}
+              selectedBranchId={selectedBranchId}
+              setSelectedBranchId={setSelectedBranchId}
+              lang={adminLang}
+              setLang={setAdminLang}
+              sheetsWebhookUrl={sheetsWebhookUrl}
+              onUpdateWebhookUrl={handleUpdateWebhookUrl}
+            />
+          </AdminGate>
         )}
       </main>
 
@@ -260,6 +262,61 @@ export default function App() {
       <footer className="bg-stone-900 text-stone-400 text-xs py-4 px-6 text-center border-t border-stone-800">
         <p>© 2026 MY THAI THAI MASSAGE AND WELLNESS INC. All rights reserved. • Toronto & Mississauga, Ontario</p>
       </footer>
+    </div>
+  );
+}
+
+function AdminGate({ children }) {
+  const [authenticated, setAuthenticated] = useState(() => sessionStorage.getItem('mtt_admin_authenticated') === 'true');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+
+  if (authenticated) {
+    return (
+      <div>
+        <div className="flex justify-end mb-2">
+          <button
+            onClick={() => {
+              sessionStorage.removeItem('mtt_admin_authenticated');
+              setAuthenticated(false);
+            }}
+            className="text-xs text-stone-500 underline hover:text-stone-900"
+          >
+            Sign out of admin
+          </button>
+        </div>
+        {children}
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-md mx-auto my-10 bg-white rounded-2xl border border-stone-200 shadow-sm p-6">
+      <h1 className="text-xl font-bold text-stone-900">Admin access</h1>
+      <p className="text-sm text-stone-500 mt-1 mb-5">Enter the admin password to continue.</p>
+      <form onSubmit={(event) => {
+        event.preventDefault();
+        if (password === 'mythai') {
+          sessionStorage.setItem('mtt_admin_authenticated', 'true');
+          setAuthenticated(true);
+          setError('');
+        } else {
+          setError('Incorrect password.');
+        }
+      }} className="space-y-3">
+        <input
+          type="password"
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+          autoComplete="current-password"
+          className="w-full p-3 rounded-xl border border-stone-300 focus:ring-2 focus:ring-amber-600 focus:outline-none"
+          placeholder="Admin password"
+        />
+        {error && <p className="text-xs text-red-700">{error}</p>}
+        <button type="submit" className="w-full py-3 bg-amber-700 text-white rounded-xl font-bold hover:bg-amber-800">
+          Sign in
+        </button>
+      </form>
     </div>
   );
 }
@@ -969,6 +1026,11 @@ function AdminPortal({
   const [isTesting, setIsTesting] = useState(false);
   const [isLoadingBookings, setIsLoadingBookings] = useState(false);
   const [bookingLoadError, setBookingLoadError] = useState('');
+  const [calendarDate, setCalendarDate] = useState(new Date().toISOString().split('T')[0]);
+  const [calendarBranch, setCalendarBranch] = useState('all');
+  const [calendarEvents, setCalendarEvents] = useState([]);
+  const [isLoadingCalendar, setIsLoadingCalendar] = useState(false);
+  const [calendarLoadError, setCalendarLoadError] = useState('');
 
   // Staff management state
   const [showAddTherapistModal, setShowAddTherapistModal] = useState(false);
@@ -1026,6 +1088,26 @@ function AdminPortal({
   useEffect(() => {
     if (activeTab === 'schedule') loadBookingsFromBackend();
   }, [activeTab]);
+
+  const loadCalendar = async () => {
+    setIsLoadingCalendar(true);
+    setCalendarLoadError('');
+    try {
+      const branch = calendarBranch === 'all' ? '' : branches.find((item) => item.id === calendarBranch)?.address || '';
+      const response = await fetch(`/api/booking?view=calendar&date=${encodeURIComponent(calendarDate)}&branch=${encodeURIComponent(branch)}`);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+      setCalendarEvents(data.events || []);
+    } catch (error) {
+      setCalendarLoadError(error.message || 'Unable to load Google Calendar events');
+    } finally {
+      setIsLoadingCalendar(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'calendar') loadCalendar();
+  }, [activeTab, calendarDate, calendarBranch]);
 
   const handleSaveWebhook = (e) => {
     e.preventDefault();
@@ -1148,6 +1230,7 @@ function AdminPortal({
       <div className="flex border-b border-stone-200 bg-white rounded-xl px-2 pt-2 shadow-sm space-x-1 overflow-x-auto">
         {[
           { id: 'schedule', label: t.schedule, icon: CalendarIcon },
+          { id: 'calendar', label: 'Live Google Calendar', icon: CalendarIcon },
           { id: 'sheets', label: t.sheetsTab, icon: Database },
           { id: 'services', label: t.services, icon: Layers },
           { id: 'staff', label: t.staff, icon: Users },
@@ -1216,6 +1299,50 @@ function AdminPortal({
           {bookingLoadError && (
             <div className="p-3 bg-red-50 border border-red-200 text-red-800 rounded-xl text-xs">
               {bookingLoadError}
+            </div>
+          )}
+
+          {activeTab === 'calendar' && (
+            <div className="bg-white rounded-2xl p-6 border border-stone-200 shadow-sm space-y-4">
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <h2 className="text-lg font-bold text-stone-900">Live Google Calendar</h2>
+                  <p className="text-xs text-stone-500">Appointments from each therapist calendar.</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <label className="text-xs font-semibold text-stone-600">
+                    Date
+                    <input type="date" value={calendarDate} onChange={(event) => setCalendarDate(event.target.value)} className="block mt-1 p-2 rounded-lg border border-stone-300" />
+                  </label>
+                  <label className="text-xs font-semibold text-stone-600">
+                    Branch
+                    <select value={calendarBranch} onChange={(event) => setCalendarBranch(event.target.value)} className="block mt-1 p-2 rounded-lg border border-stone-300">
+                      <option value="all">All branches</option>
+                      {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
+                    </select>
+                  </label>
+                  <button onClick={loadCalendar} disabled={isLoadingCalendar} className="h-9 px-3 bg-emerald-800 text-white rounded-lg text-xs font-bold disabled:opacity-50">
+                    {isLoadingCalendar ? 'Loading...' : 'Refresh'}
+                  </button>
+                </div>
+              </div>
+              {calendarLoadError && <div className="p-3 bg-red-50 border border-red-200 text-red-800 rounded-xl text-xs">{calendarLoadError}</div>}
+              {calendarEvents.length === 0 && !isLoadingCalendar ? (
+                <p className="py-8 text-center text-sm text-stone-500">No appointments found for this date and branch.</p>
+              ) : (
+                <div className="space-y-3">
+                  {calendarEvents.map((event) => (
+                    <div key={event.id} className="p-4 rounded-xl border border-stone-200 bg-stone-50">
+                      <div className="flex flex-wrap justify-between gap-2">
+                        <span className="font-bold text-stone-900">{event.summary}</span>
+                        <span className="text-sm font-semibold text-emerald-800">{new Date(event.start).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>
+                      </div>
+                      <div className="text-xs text-stone-500 mt-1">{event.calendarName} · {event.location}</div>
+                      <p className="text-xs text-stone-600 mt-2 whitespace-pre-line">{event.description}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
