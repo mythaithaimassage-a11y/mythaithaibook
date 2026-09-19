@@ -41,6 +41,30 @@ function getTherapistFromDescription(description = '') {
   return description.match(/^Therapist:\s*(.+)$/m)?.[1]?.trim() || '';
 }
 
+function getLocalDateTime(value) {
+  const date = new Date(value);
+  return {
+    date: new Intl.DateTimeFormat('en-CA', {
+      timeZone: CALENDAR_TIME_ZONE,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(date),
+    time: new Intl.DateTimeFormat('en-US', {
+      timeZone: CALENDAR_TIME_ZONE,
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: false,
+    }).format(date),
+  };
+}
+
+function shiftDate(dateString, days) {
+  const date = new Date(`${dateString}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
 function hasTimeOverlap(startA, endA, startB, endB) {
   return new Date(startA).getTime() < new Date(endB).getTime() &&
     new Date(endA).getTime() > new Date(startB).getTime();
@@ -119,6 +143,7 @@ export default async function handler(req, res) {
         });
         const sheetRows = sheetResult.data.values || [];
         const dataRows = sheetRows[0]?.[0] === 'Booking ID' ? sheetRows.slice(1) : sheetRows;
+        const bookingByEventId = new Map(dataRows.map((row) => [row[16], row[6]]).filter(([id]) => id));
         const calendarIds = [...new Set([
           PRIMARY_CALENDAR_ID,
           ...dataRows.map((row) => row[15]).filter(Boolean),
@@ -132,18 +157,20 @@ export default async function handler(req, res) {
             const calendar = calendars.data.items?.find((item) => item.id === calendarId);
             const result = await calendarApi.events.list({
               calendarId,
-              timeMin: `${date}T00:00:00Z`,
-              timeMax: `${date}T23:59:59Z`,
+              timeMin: `${shiftDate(date, -1)}T00:00:00Z`,
+              timeMax: `${shiftDate(date, 2)}T00:00:00Z`,
               singleEvents: true,
               orderBy: 'startTime',
             });
             for (const event of result.data.items || []) {
               const location = event.location || '';
               const start = event.start?.dateTime || event.start?.date || '';
+              const localStart = start ? getLocalDateTime(start) : { date: '', time: '' };
+              const eventTherapist = bookingByEventId.get(event.id) || getTherapistFromDescription(event.description);
               if (
-                start.slice(0, 10) === date &&
+                localStart.date === date &&
                 (!branch || location.toLowerCase().includes(branch)) &&
-                (!therapist || (event.description || '').toLowerCase().includes(`therapist: ${therapist}`))
+                (!therapist || eventTherapist.toLowerCase() === therapist)
               ) {
                 events.push({
                   id: event.id,
@@ -153,6 +180,8 @@ export default async function handler(req, res) {
                   description: event.description || '',
                   start,
                   end: event.end?.dateTime || event.end?.date || '',
+                  therapistName: eventTherapist,
+                  localTime: localStart.time,
                 });
               }
             }
@@ -245,6 +274,7 @@ export default async function handler(req, res) {
           `Phone: ${payload.phone}`,
           `Email: ${payload.email}`,
           `Service: ${payload.serviceName}`,
+          `Therapist: ${therapistName}`,
           `Payment: ${payload.paymentOption}`,
           `Paid: $${payload.paidAmount}`,
           `Total: $${payload.totalAmount}`,

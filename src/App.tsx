@@ -1100,8 +1100,8 @@ function AdminPortal({
     setIsLoadingCalendar(true);
     setCalendarLoadError('');
     try {
-      const branch = calendarBranch === 'all' ? '' : branches.find((item) => item.id === calendarBranch)?.address || '';
-      const therapist = calendarTherapist === 'all' ? '' : therapists.find((item) => item.id === calendarTherapist)?.name || '';
+      const branch = calendarBranch === 'all' ? '' : branches.find((item) => String(item.id) === calendarBranch)?.address || '';
+      const therapist = calendarTherapist === 'all' ? '' : therapists.find((item) => String(item.id) === calendarTherapist)?.name || '';
       const response = await fetch(`/api/booking?view=calendar&date=${encodeURIComponent(calendarDate)}&branch=${encodeURIComponent(branch)}&therapist=${encodeURIComponent(therapist)}`);
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
@@ -1408,7 +1408,7 @@ function AdminPortal({
             <div className="max-h-[620px] overflow-y-auto">
               {Array.from({ length: 12 }, (_, index) => index + 8).map((hour) => {
                 const hourLabel = new Date(2000, 0, 1, hour).toLocaleTimeString([], { hour: 'numeric' });
-                const hourEvents = calendarEvents.filter((event) => new Date(event.start).getHours() === hour);
+                const hourEvents = calendarEvents.filter((event) => Number(event.localTime?.split(':')[0]) === hour);
                 return (
                   <div key={hour} className="grid grid-cols-[72px_1fr] min-h-[58px] border-b border-stone-100">
                     <div className="p-2 text-[11px] text-stone-400 text-right border-r border-stone-100">{hourLabel}</div>
@@ -1416,7 +1416,7 @@ function AdminPortal({
                       {hourEvents.map((event) => (
                         <div key={event.id} className="rounded-lg bg-emerald-100 border-l-4 border-emerald-700 px-3 py-2 text-xs">
                           <div className="font-bold text-emerald-950">{event.summary}</div>
-                          <div className="text-emerald-800">{new Date(event.start).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} · {event.calendarName.replace(' - MY THAI THAI', '')}</div>
+                            <div className="text-emerald-800">{event.localTime} · {event.therapistName || event.calendarName.replace(' - MY THAI THAI', '')}</div>
                         </div>
                       ))}
                     </div>
@@ -1436,9 +1436,9 @@ function AdminPortal({
                 <div key={event.id} className="p-4 rounded-xl border border-stone-200 bg-stone-50">
                   <div className="flex flex-wrap justify-between gap-2">
                     <span className="font-bold text-stone-900">{event.summary}</span>
-                    <span className="text-sm font-semibold text-emerald-800">{new Date(event.start).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>
+                    <span className="text-sm font-semibold text-emerald-800">{event.localTime}</span>
                   </div>
-                  <div className="text-xs text-stone-500 mt-1">{event.calendarName} · {event.location}</div>
+                  <div className="text-xs text-stone-500 mt-1">{event.therapistName || event.calendarName} · {event.location}</div>
                   <p className="text-xs text-stone-600 mt-2 whitespace-pre-line">{event.description}</p>
                 </div>
               ))}
