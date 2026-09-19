@@ -56,6 +56,19 @@ const MOCK_THERAPISTS = [
 ];
 
 const AVAILABLE_TIMES = ["09:30 AM", "11:00 AM", "01:00 PM", "02:30 PM", "04:00 PM", "05:30 PM", "07:00 PM"];
+const THERAPIST_CALENDAR_COLORS = [
+  { name: 'Emerald', event: 'bg-emerald-100 border-emerald-700', dot: 'bg-emerald-600', text: 'text-emerald-950' },
+  { name: 'Blue', event: 'bg-blue-100 border-blue-700', dot: 'bg-blue-600', text: 'text-blue-950' },
+  { name: 'Amber', event: 'bg-amber-100 border-amber-700', dot: 'bg-amber-500', text: 'text-amber-950' },
+  { name: 'Purple', event: 'bg-purple-100 border-purple-700', dot: 'bg-purple-600', text: 'text-purple-950' },
+  { name: 'Rose', event: 'bg-rose-100 border-rose-700', dot: 'bg-rose-600', text: 'text-rose-950' },
+  { name: 'Cyan', event: 'bg-cyan-100 border-cyan-700', dot: 'bg-cyan-600', text: 'text-cyan-950' },
+];
+
+function getTherapistCalendarColor(therapistName, therapists) {
+  const index = therapists.findIndex((therapist) => therapist.name === therapistName);
+  return THERAPIST_CALENDAR_COLORS[(index < 0 ? 0 : index) % THERAPIST_CALENDAR_COLORS.length];
+}
 
 const TRANSLATIONS = {
   en: {
@@ -1414,9 +1427,9 @@ function AdminPortal({
                     <div className="p-2 text-[11px] text-stone-400 text-right border-r border-stone-100">{hourLabel}</div>
                     <div className="p-1.5 space-y-1">
                       {hourEvents.map((event) => (
-                        <div key={event.id} className="rounded-lg bg-emerald-100 border-l-4 border-emerald-700 px-3 py-2 text-xs">
-                          <div className="font-bold text-emerald-950">{event.summary}</div>
-                            <div className="text-emerald-800">{event.localTime} · {event.therapistName || event.calendarName.replace(' - MY THAI THAI', '')}</div>
+                        <div key={event.id} className={`rounded-lg border-l-4 px-3 py-2 text-xs ${getTherapistCalendarColor(event.therapistName, therapists).event}`}>
+                          <div className={`font-bold ${getTherapistCalendarColor(event.therapistName, therapists).text}`}>{event.summary}</div>
+                            <div className={getTherapistCalendarColor(event.therapistName, therapists).text}>{event.localTime} · {event.therapistName || event.calendarName.replace(' - MY THAI THAI', '')}</div>
                         </div>
                       ))}
                     </div>
@@ -1428,12 +1441,30 @@ function AdminPortal({
           <p className="text-xs text-stone-500">
             This live visual uses the same Google Calendar events and the same date, branch, and therapist filters as the appointment list below.
           </p>
+          <div className="flex flex-wrap gap-3 items-center rounded-xl bg-stone-50 border border-stone-200 px-3 py-2">
+            <span className="text-xs font-bold text-stone-700">Therapists:</span>
+            {(calendarTherapist === 'all' ? therapists : therapists.filter((therapist) => String(therapist.id) === calendarTherapist)).map((therapist) => {
+              const color = getTherapistCalendarColor(therapist.name, therapists);
+              return (
+                <span key={therapist.id} className="inline-flex items-center gap-1.5 text-xs text-stone-700">
+                  <span className={`w-2.5 h-2.5 rounded-full ${color.dot}`} />
+                  {therapist.name}
+                </span>
+              );
+            })}
+            {calendarTherapist === 'all' && (
+              <span className="inline-flex items-center gap-1.5 text-xs text-stone-500">
+                <span className="w-2.5 h-2.5 rounded-full bg-stone-400" />
+                Any Available
+              </span>
+            )}
+          </div>
           {calendarEvents.length === 0 && !isLoadingCalendar ? (
             <p className="py-8 text-center text-sm text-stone-500">No appointments found for this date and branch.</p>
           ) : (
             <div className="space-y-3">
               {calendarEvents.map((event) => (
-                <div key={event.id} className="p-4 rounded-xl border border-stone-200 bg-stone-50">
+                <div key={event.id} className={`p-4 rounded-xl border border-stone-200 ${getTherapistCalendarColor(event.therapistName, therapists).event}`}>
                   <div className="flex flex-wrap justify-between gap-2">
                     <span className="font-bold text-stone-900">{event.summary}</span>
                     <span className="text-sm font-semibold text-emerald-800">{event.localTime}</span>
