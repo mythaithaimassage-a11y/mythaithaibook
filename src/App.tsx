@@ -1231,7 +1231,6 @@ function AdminPortal({
         {[
           { id: 'schedule', label: t.schedule, icon: CalendarIcon },
           { id: 'calendar', label: 'Live Google Calendar', icon: CalendarIcon },
-          { id: 'sheets', label: t.sheetsTab, icon: Database },
           { id: 'services', label: t.services, icon: Layers },
           { id: 'staff', label: t.staff, icon: Users },
           { id: 'financials', label: t.financials, icon: DollarSign }
@@ -1302,50 +1301,6 @@ function AdminPortal({
             </div>
           )}
 
-          {activeTab === 'calendar' && (
-            <div className="bg-white rounded-2xl p-6 border border-stone-200 shadow-sm space-y-4">
-              <div className="flex flex-wrap items-end justify-between gap-3">
-                <div>
-                  <h2 className="text-lg font-bold text-stone-900">Live Google Calendar</h2>
-                  <p className="text-xs text-stone-500">Appointments from each therapist calendar.</p>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <label className="text-xs font-semibold text-stone-600">
-                    Date
-                    <input type="date" value={calendarDate} onChange={(event) => setCalendarDate(event.target.value)} className="block mt-1 p-2 rounded-lg border border-stone-300" />
-                  </label>
-                  <label className="text-xs font-semibold text-stone-600">
-                    Branch
-                    <select value={calendarBranch} onChange={(event) => setCalendarBranch(event.target.value)} className="block mt-1 p-2 rounded-lg border border-stone-300">
-                      <option value="all">All branches</option>
-                      {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
-                    </select>
-                  </label>
-                  <button onClick={loadCalendar} disabled={isLoadingCalendar} className="h-9 px-3 bg-emerald-800 text-white rounded-lg text-xs font-bold disabled:opacity-50">
-                    {isLoadingCalendar ? 'Loading...' : 'Refresh'}
-                  </button>
-                </div>
-              </div>
-              {calendarLoadError && <div className="p-3 bg-red-50 border border-red-200 text-red-800 rounded-xl text-xs">{calendarLoadError}</div>}
-              {calendarEvents.length === 0 && !isLoadingCalendar ? (
-                <p className="py-8 text-center text-sm text-stone-500">No appointments found for this date and branch.</p>
-              ) : (
-                <div className="space-y-3">
-                  {calendarEvents.map((event) => (
-                    <div key={event.id} className="p-4 rounded-xl border border-stone-200 bg-stone-50">
-                      <div className="flex flex-wrap justify-between gap-2">
-                        <span className="font-bold text-stone-900">{event.summary}</span>
-                        <span className="text-sm font-semibold text-emerald-800">{new Date(event.start).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>
-                      </div>
-                      <div className="text-xs text-stone-500 mt-1">{event.calendarName} · {event.location}</div>
-                      <p className="text-xs text-stone-600 mt-2 whitespace-pre-line">{event.description}</p>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs sm:text-sm">
               <thead className="bg-stone-50 text-stone-600 font-bold border-b">
@@ -1387,6 +1342,50 @@ function AdminPortal({
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+
+      {activeTab === 'calendar' && (
+        <div className="bg-white rounded-2xl p-6 border border-stone-200 shadow-sm space-y-4">
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-bold text-stone-900">Live Google Calendar</h2>
+              <p className="text-xs text-stone-500">Appointments from each therapist calendar.</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <label className="text-xs font-semibold text-stone-600">
+                Date
+                <input type="date" value={calendarDate} onChange={(event) => setCalendarDate(event.target.value)} className="block mt-1 p-2 rounded-lg border border-stone-300" />
+              </label>
+              <label className="text-xs font-semibold text-stone-600">
+                Branch
+                <select value={calendarBranch} onChange={(event) => setCalendarBranch(event.target.value)} className="block mt-1 p-2 rounded-lg border border-stone-300">
+                  <option value="all">All branches</option>
+                  {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
+                </select>
+              </label>
+              <button onClick={loadCalendar} disabled={isLoadingCalendar} className="h-9 px-3 bg-emerald-800 text-white rounded-lg text-xs font-bold disabled:opacity-50">
+                {isLoadingCalendar ? 'Loading...' : 'Refresh'}
+              </button>
+            </div>
+          </div>
+          {calendarLoadError && <div className="p-3 bg-red-50 border border-red-200 text-red-800 rounded-xl text-xs">{calendarLoadError}</div>}
+          {calendarEvents.length === 0 && !isLoadingCalendar ? (
+            <p className="py-8 text-center text-sm text-stone-500">No appointments found for this date and branch.</p>
+          ) : (
+            <div className="space-y-3">
+              {calendarEvents.map((event) => (
+                <div key={event.id} className="p-4 rounded-xl border border-stone-200 bg-stone-50">
+                  <div className="flex flex-wrap justify-between gap-2">
+                    <span className="font-bold text-stone-900">{event.summary}</span>
+                    <span className="text-sm font-semibold text-emerald-800">{new Date(event.start).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>
+                  </div>
+                  <div className="text-xs text-stone-500 mt-1">{event.calendarName} · {event.location}</div>
+                  <p className="text-xs text-stone-600 mt-2 whitespace-pre-line">{event.description}</p>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

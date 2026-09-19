@@ -139,31 +139,48 @@ export default async function handler(req, res) {
       if (req.query?.view === 'calendar') {
         const date = req.query.date || new Date().toISOString().slice(0, 10);
         const branch = String(req.query.branch || '').toLowerCase();
+        const sheetResult = await sheets.spreadsheets.values.get({
+          spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+          range: 'Sheet1!A:R',
+        });
+        const sheetRows = sheetResult.data.values || [];
+        const dataRows = sheetRows[0]?.[0] === 'Booking ID' ? sheetRows.slice(1) : sheetRows;
+        const calendarIds = [...new Set(dataRows.map((row) => row[15]).filter(Boolean))];
         const calendars = await calendarApi.calendarList.list({ minAccessRole: 'reader', maxResults: 250 });
+        for (const calendar of calendars.data.items || []) {
+          if (calendar.id && calendar.summary?.endsWith(' - MY THAI THAI') && !calendarIds.includes(calendar.id)) {
+            calendarIds.push(calendar.id);
+          }
+        }
         const events = [];
 
-        for (const calendar of calendars.data.items || []) {
-          if (!calendar.id || !calendar.summary?.endsWith(' - MY THAI THAI')) continue;
-          const result = await calendarApi.events.list({
-            calendarId: calendar.id,
-            timeMin: `${date}T00:00:00-04:00`,
-            timeMax: `${date}T23:59:59-04:00`,
-            singleEvents: true,
-            orderBy: 'startTime',
-          });
-          for (const event of result.data.items || []) {
-            const location = event.location || '';
-            if (!branch || location.toLowerCase().includes(branch)) {
-              events.push({
-                id: event.id,
-                calendarName: calendar.summary,
-                summary: event.summary || '',
-                location,
-                description: event.description || '',
-                start: event.start?.dateTime || event.start?.date || '',
-                end: event.end?.dateTime || event.end?.date || '',
-              });
+        for (const calendarId of calendarIds) {
+          try {
+            const calendar = calendars.data.items?.find((item) => item.id === calendarId);
+            const result = await calendarApi.events.list({
+              calendarId,
+              timeMin: `${date}T00:00:00Z`,
+              timeMax: `${date}T23:59:59Z`,
+              singleEvents: true,
+              orderBy: 'startTime',
+            });
+            for (const event of result.data.items || []) {
+              const location = event.location || '';
+              const start = event.start?.dateTime || event.start?.date || '';
+              if (start.slice(0, 10) === date && (!branch || location.toLowerCase().includes(branch))) {
+                events.push({
+                  id: event.id,
+                  calendarName: calendar?.summary || calendarId,
+                  summary: event.summary || '',
+                  location,
+                  description: event.description || '',
+                  start,
+                  end: event.end?.dateTime || event.end?.date || '',
+                });
+              }
             }
+          } catch (error) {
+            console.error(`Unable to load calendar ${calendarId}:`, error);
           }
         }
         return res.status(200).json({ date, events });
