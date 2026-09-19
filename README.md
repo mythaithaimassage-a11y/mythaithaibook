@@ -30,11 +30,19 @@ Configure these Vercel environment variables before using it:
 - `GOOGLE_SPREADSHEET_ID`
 - `GOOGLE_CALENDAR_OWNER_EMAIL` (defaults to `mythaithaimassage@gmail.com`)
 - `GOOGLE_CALENDAR_TIME_ZONE` (defaults to `America/Toronto`)
+- `RESEND_API_KEY`
+- `RESEND_FROM_EMAIL`
 
 Share the Google Sheet with the service account email as an Editor. Enable the
 Google Sheets API and Google Calendar API in the Google Cloud project. The
 service account creates calendars named `<Therapist> - MY THAI THAI` and shares
 each calendar with `GOOGLE_CALENDAR_OWNER_EMAIL`.
+
+Confirmation emails are sent through Resend. Create a Resend API key and
+verify the sender address or domain in Resend. Set `RESEND_FROM_EMAIL` to the
+verified sender address. The Calendar event does not invite attendees because
+standard Google service accounts cannot invite external attendees without
+Google Workspace Domain-Wide Delegation.
 
 Store the service-account values only in Vercel Environment Variables. Do not
 commit the JSON key or paste its private key into source control.

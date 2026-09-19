@@ -2,6 +2,7 @@ import { google } from 'googleapis';
 
 const CALENDAR_TIME_ZONE = process.env.GOOGLE_CALENDAR_TIME_ZONE || 'America/Toronto';
 const CALENDAR_OWNER_EMAIL = process.env.GOOGLE_CALENDAR_OWNER_EMAIL || 'mythaithaimassage@gmail.com';
+const RESEND_FROM_EMAIL = process.env.RESEND_FROM_EMAIL || 'mythaithaimassage@gmail.com';
 
 function parseBookingDateTime(date, time) {
   const match = /^(\d{1,2}):(\d{2})\s*(AM|PM)$/i.exec(time || '');
@@ -72,6 +73,52 @@ async function getOrCreateTherapistCalendar(calendarApi, therapistName) {
   return calendarId;
 }
 
+async function sendConfirmationEmail(payload, calendarEvent) {
+  if (!process.env.RESEND_API_KEY) {
+    throw new Error('RESEND_API_KEY is not configured');
+  }
+  if (!payload.email) {
+    throw new Error('Customer email is required for confirmation email');
+  }
+
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from: RESEND_FROM_EMAIL,
+      to: [payload.email],
+      subject: `MY THAI THAI booking confirmation - ${payload.id}`,
+      text: [
+        `Your MY THAI THAI appointment is confirmed.`,
+        '',
+        `Booking: ${payload.id}`,
+        `Service: ${payload.serviceName}`,
+        `Therapist: ${payload.therapistName}`,
+        `Date: ${payload.date}`,
+        `Time: ${payload.time}`,
+        `Branch: ${payload.branchName}`,
+        `Payment: ${payload.paymentOption}`,
+        `Paid: $${payload.paidAmount}`,
+        `Total: $${payload.totalAmount}`,
+        '',
+        'Your appointment has been added to the therapist calendar.',
+      ].join('\n'),
+      headers: {
+        'X-Booking-Reference': payload.id,
+        'X-Calendar-Event-ID': calendarEvent.data.id || '',
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    const details = await response.text();
+    throw new Error(`Resend email failed (${response.status}): ${details}`);
+  }
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ message: 'Method Not Allowed' });
@@ -117,7 +164,6 @@ export default async function handler(req, res) {
         ].filter(Boolean).join('\n'),
         start: { dateTime: startDateTime, timeZone: CALENDAR_TIME_ZONE },
         end: { dateTime: endDateTime, timeZone: CALENDAR_TIME_ZONE },
-        attendees: payload.email ? [{ email: payload.email }] : [],
       },
     });
 
@@ -151,10 +197,13 @@ export default async function handler(req, res) {
       },
     });
 
+    await sendConfirmationEmail(payload, calendarEvent);
+
     return res.status(200).json({
       status: 'success',
       calendarId,
       calendarEventId: calendarEvent.data.id,
+      emailSent: true,
     });
   } catch (error) {
     console.error('Google Sheets API Error:', error);

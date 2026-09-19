@@ -874,7 +874,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
             {sheetsSyncStatus === 'success' && (
               <div className="inline-flex items-center space-x-2 bg-emerald-50 border border-emerald-300 text-emerald-800 px-4 py-1.5 rounded-full text-xs font-semibold">
                 <Database className="w-4 h-4 text-emerald-600" />
-                <span>Synced directly to Google Sheet (`mythaithaimassage@gmail.com`)</span>
+                <span>Saved to Google Sheets, Google Calendar, and confirmation email sent</span>
               </div>
             )}
             {sheetsSyncStatus === 'not_configured' && (
