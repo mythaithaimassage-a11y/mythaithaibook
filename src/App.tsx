@@ -339,17 +339,21 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
       therapistName: bookingData.therapist?.name || 'Any Available',
       date: bookingData.date,
       time: bookingData.time,
+      durationMinutes: bookingData.service.duration,
+      branchAddress: `${bookingData.branch.address}, ${bookingData.branch.city}`,
+      intakeNotes: [
+        `Pressure: ${bookingData.intake.pressure}`,
+        bookingData.intake.focusAreas ? `Focus areas: ${bookingData.intake.focusAreas}` : '',
+        bookingData.intake.injuries ? `Injuries: ${bookingData.intake.injuries}` : '',
+      ].filter(Boolean).join('; '),
       paymentOption: bookingData.paymentOption,
       paidAmount: financials.deposit.toFixed(2),
       totalAmount: financials.total.toFixed(2)
     };
 
-    // Attempt sync to Google Sheets via Google Apps Script Webhook
-    let syncSuccess = false;
-    if (sheetsWebhookUrl) {
-      const syncResult = await sendBookingToGoogleSheets(sheetsWebhookUrl, payloadForSheets);
-      syncSuccess = syncResult.success;
-    }
+    // Use the Vercel route by default; retain support for a configured webhook.
+    const syncResult = await sendBookingToGoogleSheets(sheetsWebhookUrl, payloadForSheets);
+    const syncSuccess = syncResult.success;
 
     const newRecord = {
       id: code,
@@ -371,7 +375,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
 
     onNewBooking(newRecord);
     setBookingData(prev => ({ ...prev, confirmationCode: code }));
-    setSheetsSyncStatus(syncSuccess ? 'success' : sheetsWebhookUrl ? 'failed' : 'not_configured');
+    setSheetsSyncStatus(syncSuccess ? 'success' : 'failed');
     setIsSubmitting(false);
     setStep(5);
   };
