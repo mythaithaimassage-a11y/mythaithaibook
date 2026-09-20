@@ -96,9 +96,9 @@ commit the JSON key or paste its private key into source control.
 
 The booking form includes the health-history fields from the clinic's paper
 form. Each completed form is appended to the `PatientHistory` tab in
-`PATIENT_HISTORY_SPREADSHEET_ID` and is linked to the booking ID. Create a tab
-named `PatientHistory` in that spreadsheet before accepting bookings. The
-service account must have Editor access to this spreadsheet.
+`PATIENT_HISTORY_SPREADSHEET_ID` and is linked to the booking ID. The API
+creates the `PatientHistory` tab automatically if it is missing. The service
+account must have Editor access to this spreadsheet.
 
 Create this header row in `PatientHistory`:
 

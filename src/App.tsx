@@ -172,7 +172,9 @@ async function sendBookingToGoogleSheets(apiUrl, bookingPayload) {
         success: true,
         data: result,
         emailSent: result.emailSent !== false,
-        emailReason: result.emailError || ''
+        emailReason: result.emailError || '',
+        patientHistorySaved: result.patientHistorySaved !== false,
+        patientHistoryReason: result.patientHistoryError || ''
       };
     } else {
       const errData = await response.json().catch(() => ({}));
@@ -470,8 +472,8 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
     // Use the Vercel route by default; retain support for a configured webhook.
     const syncResult = await sendBookingToGoogleSheets(sheetsWebhookUrl, payloadForSheets);
     const syncSuccess = syncResult.success;
-    if (!syncSuccess || syncResult.emailSent === false) {
-      setSheetsSyncReason(syncResult.reason || syncResult.emailReason || 'The Google Sheets and Calendar sync failed.');
+    if (!syncSuccess || syncResult.emailSent === false || syncResult.patientHistorySaved === false) {
+      setSheetsSyncReason(syncResult.reason || syncResult.emailReason || syncResult.patientHistoryReason || 'The booking sync failed.');
     }
 
     const newRecord = {
@@ -494,7 +496,9 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
 
     onNewBooking(newRecord);
     setBookingData(prev => ({ ...prev, confirmationCode: code }));
-    setSheetsSyncStatus(syncSuccess ? (syncResult.emailSent === false ? 'email_failed' : 'success') : 'failed');
+    setSheetsSyncStatus(syncSuccess
+      ? (syncResult.emailSent === false ? 'email_failed' : (syncResult.patientHistorySaved === false ? 'patient_history_failed' : 'success'))
+      : 'failed');
     setIsSubmitting(false);
     setStep(5);
   };
@@ -1091,6 +1095,12 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
             {sheetsSyncStatus === 'email_failed' && (
               <div className="inline-flex flex-col items-center space-y-1 bg-amber-50 border border-amber-300 text-amber-900 px-4 py-2 rounded-xl text-xs">
                 <span className="font-semibold">Saved to Google Sheets and Calendar, but confirmation email failed.</span>
+                {sheetsSyncReason && <span>{sheetsSyncReason}</span>}
+              </div>
+            )}
+            {sheetsSyncStatus === 'patient_history_failed' && (
+              <div className="inline-flex flex-col items-center space-y-1 bg-amber-50 border border-amber-300 text-amber-900 px-4 py-2 rounded-xl text-xs">
+                <span className="font-semibold">Saved to the booking sheet and Calendar, but patient history could not be saved.</span>
                 {sheetsSyncReason && <span>{sheetsSyncReason}</span>}
               </div>
             )}

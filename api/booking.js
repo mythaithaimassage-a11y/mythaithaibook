@@ -71,6 +71,25 @@ function hasTimeOverlap(startA, endA, startB, endB) {
     new Date(endA).getTime() > new Date(startB).getTime();
 }
 
+async function ensurePatientHistorySheet(sheets) {
+  const spreadsheet = await sheets.spreadsheets.get({
+    spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+    fields: 'sheets.properties',
+  });
+  const hasPatientHistorySheet = spreadsheet.data.sheets?.some(
+    (sheet) => sheet.properties?.title === 'PatientHistory',
+  );
+
+  if (!hasPatientHistorySheet) {
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+      requestBody: {
+        requests: [{ addSheet: { properties: { title: 'PatientHistory' } } }],
+      },
+    });
+  }
+}
+
 async function sendConfirmationEmail(payload, calendarEvent) {
   if (!process.env.RESEND_API_KEY) {
     throw new Error('RESEND_API_KEY is not configured');
@@ -327,48 +346,57 @@ export default async function handler(req, res) {
       },
     });
 
-    const history = payload.patientHistory || {};
-    await sheets.spreadsheets.values.append({
-      spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
-      range: 'PatientHistory!A:AF',
-      valueInputOption: 'USER_ENTERED',
-      requestBody: {
-        values: [[
-          payload.id,
-          new Date().toISOString(),
-          payload.customerName,
-          history.dateOfBirth || '',
-          history.gender || '',
-          payload.phone,
-          payload.email,
-          history.address || '',
-          history.city || '',
-          history.postalCode || '',
-          history.heardAbout || '',
-          history.conditions?.heart || '',
-          history.conditions?.bloodPressure || '',
-          history.conditions?.diabetes || '',
-          history.conditions?.cancer || '',
-          history.conditions?.headaches || '',
-          history.conditions?.boneJoint || '',
-          history.conditions?.brokenBones || '',
-          history.conditions?.osteoporosis || '',
-          history.conditions?.allergies || '',
-          history.conditions?.surgeries || '',
-          history.conditions?.numbness || '',
-          history.conditions?.skinSensitivity || '',
-          history.conditions?.pregnant || '',
-          history.conditions?.medications || '',
-          history.details || '',
-          history.painAreas || '',
-          history.bodyAreas || '',
-          history.pressure || '',
-          history.consent ? 'Yes' : 'No',
-          history.signature || '',
-          history.signatureDate || '',
-        ]],
-      },
-    });
+    let patientHistorySaved = false;
+    let patientHistoryError = '';
+    try {
+      await ensurePatientHistorySheet(sheets);
+      const history = payload.patientHistory || {};
+      await sheets.spreadsheets.values.append({
+        spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+        range: 'PatientHistory!A:AF',
+        valueInputOption: 'USER_ENTERED',
+        requestBody: {
+          values: [[
+            payload.id,
+            new Date().toISOString(),
+            payload.customerName,
+            history.dateOfBirth || '',
+            history.gender || '',
+            payload.phone,
+            payload.email,
+            history.address || '',
+            history.city || '',
+            history.postalCode || '',
+            history.heardAbout || '',
+            history.conditions?.heart || '',
+            history.conditions?.bloodPressure || '',
+            history.conditions?.diabetes || '',
+            history.conditions?.cancer || '',
+            history.conditions?.headaches || '',
+            history.conditions?.boneJoint || '',
+            history.conditions?.brokenBones || '',
+            history.conditions?.osteoporosis || '',
+            history.conditions?.allergies || '',
+            history.conditions?.surgeries || '',
+            history.conditions?.numbness || '',
+            history.conditions?.skinSensitivity || '',
+            history.conditions?.pregnant || '',
+            history.conditions?.medications || '',
+            history.details || '',
+            history.painAreas || '',
+            history.bodyAreas || '',
+            history.pressure || '',
+            history.consent ? 'Yes' : 'No',
+            history.signature || '',
+            history.signatureDate || '',
+          ]],
+        },
+      });
+      patientHistorySaved = true;
+    } catch (error) {
+      patientHistoryError = error.message || 'Patient history could not be saved';
+      console.error('Patient history spreadsheet error:', error);
+    }
 
     let emailSent = false;
     let emailError = '';
@@ -387,7 +415,8 @@ export default async function handler(req, res) {
       emailSent,
       emailError,
       therapistName,
-      patientHistorySaved: true,
+      patientHistorySaved,
+      patientHistoryError,
     });
   } catch (error) {
     console.error('Google Sheets API Error:', error);
