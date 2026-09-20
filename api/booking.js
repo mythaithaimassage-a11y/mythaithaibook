@@ -74,7 +74,7 @@ function hasTimeOverlap(startA, endA, startB, endB) {
 async function findExistingPatientHistory(sheets, payload) {
   const result = await sheets.spreadsheets.values.get({
     spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
-    range: 'PatientHistory!A:AF',
+    range: 'PatientHistory!A:AH',
   });
   const rows = result.data.values || [];
   const email = String(payload.email || '').trim().toLowerCase();
@@ -206,7 +206,7 @@ export default async function handler(req, res) {
       if (req.query?.view === 'patient-history') {
         const result = await sheets.spreadsheets.values.get({
           spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
-          range: 'PatientHistory!A:AF',
+          range: 'PatientHistory!A:AH',
         });
         const rows = result.data.values || [];
         const dataRows = rows[0]?.[0] === 'Booking ID' ? rows.slice(1) : rows;
@@ -439,7 +439,7 @@ export default async function handler(req, res) {
       const history = patientHistory;
       await sheets.spreadsheets.values.append({
         spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
-        range: 'PatientHistory!A:AF',
+        range: 'PatientHistory!A:AH',
         valueInputOption: 'USER_ENTERED',
         requestBody: {
           values: [[
@@ -475,6 +475,8 @@ export default async function handler(req, res) {
             history.consent ? 'Yes' : 'No',
             history.signature || '',
             history.signatureDate || '',
+            history.preCollectionConsent ? 'Yes' : 'No',
+            history.consentTimestamp || '',
           ]],
         },
       });

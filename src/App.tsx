@@ -343,6 +343,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [sheetsSyncStatus, setSheetsSyncStatus] = useState(null);
   const [sheetsSyncReason, setSheetsSyncReason] = useState('');
+  const [showExistingPatientChoice, setShowExistingPatientChoice] = useState(false);
   
   const [bookingData, setBookingData] = useState({
     branch: branches[0],
@@ -374,6 +375,9 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
       signatureDate: new Date().toISOString().split('T')[0],
       consent: false,
       reuseExisting: false,
+      historyMode: 'new',
+      preCollectionConsent: false,
+      consentTimestamp: '',
     },
     paymentOption: 'deposit', // 'clinic', 'deposit', 'full'
     confirmationCode: ''
@@ -464,7 +468,9 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
         conditions: bookingData.intake.conditions,
         signatureDate: bookingData.intake.signatureDate || new Date().toISOString().split('T')[0],
         bodyAreas: bookingData.intake.bodyAreas.join(', '),
-        reuseExisting: bookingData.intake.reuseExisting,
+        reuseExisting: bookingData.intake.historyMode === 'reuse',
+        preCollectionConsent: bookingData.intake.preCollectionConsent,
+        consentTimestamp: bookingData.intake.consentTimestamp,
       },
       paymentOption: bookingData.paymentOption,
       paidAmount: financials.deposit.toFixed(2),
@@ -757,6 +763,36 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
         {/* STEP 3: Contact Details */}
         {step === 3 && (
           <div className="space-y-6">
+            {!bookingData.intake.preCollectionConsent && (
+              <div className="p-5 rounded-2xl bg-blue-50 border border-blue-200 space-y-4">
+                <h2 className="text-xl font-bold text-blue-950">Privacy and Health Information Consent</h2>
+                <p className="text-sm text-blue-900">
+                  Before we collect your contact details and health information, please confirm that you consent to
+                  MY THAI THAI Massage & Wellness collecting and securely using this information to schedule and safely
+                  provide your appointment.
+                </p>
+                <label className="flex items-start gap-2 text-xs text-blue-950">
+                  <input
+                    type="checkbox"
+                    checked={bookingData.intake.preCollectionConsent}
+                    onChange={(event) => updateIntake('preCollectionConsent', event.target.checked
+                      ? true
+                      : false)}
+                    className="mt-0.5"
+                  />
+                  <span>I consent to the collection and use of my information for appointment booking and treatment safety. I understand I may withdraw consent by contacting the clinic.</span>
+                </label>
+                <button
+                  type="button"
+                  disabled={!bookingData.intake.preCollectionConsent}
+                  onClick={() => updateIntake('consentTimestamp', new Date().toISOString())}
+                  className="px-5 py-2.5 bg-emerald-800 text-white rounded-xl text-sm font-bold disabled:opacity-40"
+                >
+                  Continue
+                </button>
+              </div>
+            )}
+            {bookingData.intake.preCollectionConsent && <>
             <div>
               <h2 className="text-xl font-bold text-stone-900 mb-1">Contact Information</h2>
               <p className="text-xs text-stone-500 mb-4">No registration or password required</p>
@@ -812,12 +848,15 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
             <div className="pt-4 border-t border-stone-200">
               <h2 className="text-xl font-bold text-stone-900 mb-1">Patient Health History</h2>
               <p className="text-xs text-stone-500 mb-4">Please complete this confidential form so we can provide treatment safely.</p>
-              <label className="flex items-start gap-2 p-3 rounded-xl bg-blue-50 border border-blue-200 text-xs text-blue-900">
-                <input type="checkbox" checked={bookingData.intake.reuseExisting} onChange={(e) => updateIntake('reuseExisting', e.target.checked)} className="mt-0.5" />
-                <span><strong>Returning patient:</strong> I have completed a patient history before. Use my existing profile matched by my email or phone number.</span>
-              </label>
+              <button
+                type="button"
+                onClick={() => setShowExistingPatientChoice(true)}
+                className="w-full text-left p-3 rounded-xl bg-blue-50 border border-blue-200 text-xs text-blue-900 hover:bg-blue-100"
+              >
+                <strong>Returning patient?</strong> Click here to choose whether to reuse your previous profile or review and update your medical information.
+              </button>
 
-              {!bookingData.intake.reuseExisting && <div className="space-y-4">
+              {bookingData.intake.historyMode !== 'reuse' && <div className="space-y-4">
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   <div>
                     <label className="block text-xs font-bold text-stone-700 mb-1">Date of Birth</label>
@@ -934,7 +973,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                   </div>
                 </div>
               </div>}
-              {bookingData.intake.reuseExisting && (
+              {bookingData.intake.historyMode === 'reuse' && (
                 <div className="mt-4 p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-900">
                   Your previous health history will be looked up securely when this booking is submitted. Make sure your email or phone number matches your previous profile.
                 </div>
@@ -951,13 +990,49 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
               </button>
               <button
                 type="button"
-                disabled={!bookingData.customer.firstName || !bookingData.customer.phone || (!bookingData.intake.reuseExisting && (!bookingData.intake.consent || !bookingData.intake.signature))}
+                disabled={!bookingData.customer.firstName || !bookingData.customer.phone || (!bookingData.intake.preCollectionConsent || (bookingData.intake.historyMode !== 'reuse' && (!bookingData.intake.consent || !bookingData.intake.signature)))}
                 onClick={() => setStep(4)}
                 className="px-6 py-2.5 bg-emerald-800 text-white font-semibold rounded-xl hover:bg-emerald-900 disabled:opacity-40 disabled:cursor-not-allowed transition shadow-sm flex items-center"
               >
                 Review Payment & Finalize <ChevronRight className="w-4 h-4 ml-1" />
               </button>
             </div>
+            </>}
+            {showExistingPatientChoice && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+                <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl space-y-4">
+                  <h3 className="text-lg font-bold text-stone-900">Returning patient options</h3>
+                  <p className="text-sm text-stone-600">Would you like to use your previous medical history, or review it and provide updates?</p>
+                  <div className="grid gap-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        updateIntake('historyMode', 'reuse');
+                        updateIntake('reuseExisting', true);
+                        setShowExistingPatientChoice(false);
+                      }}
+                      className="p-4 text-left rounded-xl border border-emerald-300 bg-emerald-50 hover:bg-emerald-100"
+                    >
+                      <strong className="block text-emerald-900">Use existing medical history</strong>
+                      <span className="text-xs text-emerald-800">We will match it using your email or phone number.</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        updateIntake('historyMode', 'update');
+                        updateIntake('reuseExisting', false);
+                        setShowExistingPatientChoice(false);
+                      }}
+                      className="p-4 text-left rounded-xl border border-amber-300 bg-amber-50 hover:bg-amber-100"
+                    >
+                      <strong className="block text-amber-900">Review and update medical history</strong>
+                      <span className="text-xs text-amber-800">The full form will remain available so you can report changes.</span>
+                    </button>
+                  </div>
+                  <button type="button" onClick={() => setShowExistingPatientChoice(false)} className="w-full py-2 text-sm text-stone-600 underline">Cancel</button>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
