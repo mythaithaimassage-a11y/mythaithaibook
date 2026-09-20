@@ -186,6 +186,63 @@ async function sendBookingToGoogleSheets(apiUrl, bookingPayload) {
   }
 }
 
+const BODY_AREA_OPTIONS = [
+  ['Head / face', 'Head'], ['Neck', 'Neck'], ['Shoulders', 'Shoulders'],
+  ['Upper back', 'Upper back'], ['Lower back', 'Lower back'], ['Chest / abdomen', 'Core'],
+  ['Arms / hands', 'Arms'], ['Hips / glutes', 'Hips'], ['Legs / knees', 'Legs'], ['Feet', 'Feet'],
+];
+
+function BodyAreaMap({ value = '', onChange, readOnly = false }) {
+  const selected = Array.isArray(value)
+    ? value
+    : String(value || '').split(',').map((area) => area.trim()).filter(Boolean);
+  const toggle = (area) => {
+    if (readOnly || !onChange) return;
+    onChange(selected.includes(area) ? selected.filter((item) => item !== area) : [...selected, area]);
+  };
+
+  return (
+    <div className="rounded-2xl border border-cyan-100 bg-gradient-to-br from-slate-50 via-white to-cyan-50 p-4">
+      <div className="flex items-center justify-between mb-3">
+        <div><div className="text-sm font-black text-slate-800">Body map</div><div className="text-[11px] text-slate-500">{readOnly ? 'Highlighted areas were reported by the patient' : 'Select every affected area'}</div></div>
+        <span className="rounded-full bg-cyan-100 px-2.5 py-1 text-[10px] font-bold text-cyan-800">{selected.length} marked</span>
+      </div>
+      <div className="grid grid-cols-2 gap-3 max-w-xl mx-auto">
+        {['Front view', 'Back view'].map((view) => (
+          <div key={view} className="rounded-xl border border-slate-200 bg-white p-3">
+            <div className="text-center text-[10px] font-bold uppercase tracking-wide text-slate-400 mb-2">{view}</div>
+            <div className="relative mx-auto h-44 w-24 rounded-[45%] border-2 border-slate-300 bg-slate-50">
+              <div className="absolute left-1/2 top-2 h-7 w-7 -translate-x-1/2 rounded-full border-2 border-slate-300 bg-white" />
+              <div className="absolute left-1/2 top-8 h-24 w-14 -translate-x-1/2 rounded-[40%] border-2 border-slate-300 bg-white" />
+              <div className="absolute left-1/2 bottom-2 h-16 w-5 -translate-x-[12px] rounded-b-full border-2 border-t-0 border-slate-300 bg-white" />
+              <div className="absolute left-1/2 bottom-2 h-16 w-5 translate-x-[2px] rounded-b-full border-2 border-t-0 border-slate-300 bg-white" />
+              {BODY_AREA_OPTIONS.map(([area, short], index) => {
+                const positions = [
+                  'left-1/2 top-10 -translate-x-1/2', 'left-1/2 top-16 -translate-x-1/2',
+                  'left-1/2 top-24 -translate-x-1/2', 'left-1/2 top-20 -translate-x-1/2',
+                  'left-1/2 top-32 -translate-x-1/2', 'left-1/2 top-28 -translate-x-1/2',
+                  'left-1 top-24', 'right-1 top-24', 'left-1/2 bottom-10 -translate-x-1/2', 'left-1/2 bottom-1 -translate-x-1/2',
+                ];
+                const marked = selected.includes(area);
+                return (
+                  <button key={`${view}-${area}`} type="button" title={area} onClick={() => toggle(area)} disabled={readOnly} className={`absolute ${positions[index]} z-10 h-4 w-4 rounded-full border-2 border-white shadow transition ${marked ? 'bg-cyan-500 ring-2 ring-cyan-200' : 'bg-slate-300/60 hover:bg-cyan-300'} ${readOnly ? 'cursor-default' : ''}`}>
+                    <span className="sr-only">{area}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="mt-3 flex flex-wrap gap-1.5">
+        {BODY_AREA_OPTIONS.map(([area]) => (
+          <button key={area} type="button" onClick={() => toggle(area)} disabled={readOnly} className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${selected.includes(area) ? 'border-cyan-400 bg-cyan-100 text-cyan-900' : 'border-slate-200 bg-white text-slate-500'} ${readOnly ? 'cursor-default' : ''}`}>{area}</button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [viewMode, setViewMode] = useState('customer'); // 'customer' or 'admin'
   const [adminLang, setAdminLang] = useState('en'); // 'en' or 'th'
@@ -511,9 +568,7 @@ function TherapistPortal() {
                   </div>
                   <div className="mt-5">
                     <h3 className="text-sm font-bold text-stone-800 mb-2">Affected body areas</h3>
-                    <div className="flex flex-wrap gap-2">
-                      {(selectedAppointment.bodyAreas || 'Not recorded').split(',').map((area) => <span key={area} className="px-3 py-1.5 rounded-full bg-cyan-50 border border-cyan-200 text-xs font-bold text-cyan-900">{area.trim()}</span>)}
-                    </div>
+                    <BodyAreaMap value={selectedAppointment.bodyAreas} readOnly />
                   </div>
                   {(selectedAppointment.painAreas || selectedAppointment.additionalDetails) && <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-3"><div className="rounded-xl bg-stone-50 p-4 text-xs"><div className="font-bold text-stone-700 mb-1">Pain / discomfort</div>{selectedAppointment.painAreas || 'None recorded'}</div><div className="rounded-xl bg-stone-50 p-4 text-xs"><div className="font-bold text-stone-700 mb-1">Safety details</div>{selectedAppointment.additionalDetails || 'None recorded'}</div></div>}
                   <div className="mt-5 p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900">Use this summary to prepare. Review the complete patient history only through the authorized clinical workflow.</div>
@@ -1254,21 +1309,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                   <textarea rows="2" value={bookingData.intake.painAreas} onChange={(e) => updateIntake('painAreas', e.target.value)} placeholder="Please describe the area(s)" className="w-full p-2.5 rounded-xl border border-stone-300 text-xs" />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-stone-700 mb-2">Mark affected body areas</label>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                    {['Head / face', 'Neck', 'Shoulders', 'Upper back', 'Lower back', 'Chest / abdomen', 'Arms / hands', 'Hips / glutes', 'Legs / knees', 'Feet'].map((area) => (
-                      <label key={area} className="flex items-center gap-2 text-xs text-stone-700">
-                        <input
-                          type="checkbox"
-                          checked={bookingData.intake.bodyAreas.includes(area)}
-                          onChange={(e) => updateIntake('bodyAreas', e.target.checked
-                            ? [...bookingData.intake.bodyAreas, area]
-                            : bookingData.intake.bodyAreas.filter((item) => item !== area))}
-                        />
-                        {area}
-                      </label>
-                    ))}
-                  </div>
+                  <BodyAreaMap value={bookingData.intake.bodyAreas} onChange={(areas) => updateIntake('bodyAreas', areas)} />
                 </div>
                 <div className="border-t border-stone-200 pt-4">
                   <label className="block text-xs font-bold text-stone-700 mb-2">Preferred Pressure Level</label>
@@ -2467,6 +2508,7 @@ export default async function handler(req, res) {
                       <div className="flex flex-wrap gap-2">{selectedConditionFlags.map(([key]) => <span key={key} className="px-2 py-1 rounded-lg bg-white border border-red-200 text-[11px] text-red-800">{key}</span>)}</div>
                     </div>
                   )}
+                  <BodyAreaMap value={selectedPatientHistory.bodyAreas} readOnly />
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
                     <div className="p-4 rounded-xl bg-stone-50 space-y-2">
                       <h4 className="font-bold text-stone-800">Contact</h4>
