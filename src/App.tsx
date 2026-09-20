@@ -764,12 +764,31 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
         {step === 3 && (
           <div className="space-y-6">
             {!bookingData.intake.preCollectionConsent && (
-              <div className="p-5 rounded-2xl bg-blue-50 border border-blue-200 space-y-4">
-                <h2 className="text-xl font-bold text-blue-950">Privacy and Health Information Consent</h2>
+              <div className="p-5 rounded-2xl bg-blue-50 border border-blue-200 space-y-4 max-h-[70vh] overflow-y-auto">
+                <h2 className="text-xl font-bold text-blue-950 text-center">Consent and Waiver Form</h2>
                 <p className="text-sm text-blue-900">
-                  Before we collect your contact details and health information, please confirm that you consent to
-                  MY THAI THAI Massage & Wellness collecting and securely using this information to schedule and safely
-                  provide your appointment.
+                  I confirm that I have fully disclosed all known physical and medical conditions, as well as any medications I am currently taking, to my Massage Therapist. I agree to keep my Massage Therapist informed of any future changes in my health history.
+                </p>
+                <p className="text-sm font-bold text-blue-950">I understand and acknowledge the following:</p>
+                <ul className="list-disc pl-5 space-y-2 text-xs text-blue-950">
+                  <li>A complete and accurate health history is required prior to receiving massage therapy.</li>
+                  <li>I may ask questions about the information being collected and the proposed therapy at any time.</li>
+                  <li>All client information is strictly confidential and will only be released to other health professionals with my written authorization or as required by law.</li>
+                  <li>I understand the general benefits of massage therapy as well as the potential contraindications and necessary precautions.</li>
+                  <li>I have been informed of the assessment, treatment techniques, and remedial exercises that may be used during my session.</li>
+                  <li>Draping will be used at all times to ensure modesty and expose only the areas being treated.</li>
+                  <li>I may withdraw or modify my consent to treatment at any time, without penalty.</li>
+                  <li>I have been informed of the duration and cost of my massage therapy treatment.</li>
+                  <li>I acknowledge that massage therapy is not a replacement for medical treatment or medication.</li>
+                  <li>I understand that I should consult my primary healthcare provider for any medical condition I may have.</li>
+                  <li>I understand that my Massage Therapist does not diagnose illness or disease and does not prescribe medications.</li>
+                  <li>I consent to treatment that may include massage of the following areas, if applicable: chest wall muscles, gluteal (buttocks) muscles, and inner upper thighs.</li>
+                </ul>
+                <p className="text-xs font-bold text-blue-950">
+                  Important Note: Deep tissue massage may cause temporary soreness or discomfort following the session. In rare cases, localized bruising may occur.
+                </p>
+                <p className="text-xs text-blue-900">
+                  My Thai Thai Massage is committed to providing professional, safe, and respectful care. Some sessions may exceed their scheduled time due to individual client needs. We appreciate your understanding and patience.
                 </p>
                 <label className="flex items-start gap-2 text-xs text-blue-950">
                   <input
@@ -780,7 +799,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                       : false)}
                     className="mt-0.5"
                   />
-                  <span>I consent to the collection and use of my information for appointment booking and treatment safety. I understand I may withdraw consent by contacting the clinic.</span>
+                  <span>I have read and understood this Consent and Waiver Form. I understand the nature of massage treatment and give my voluntary consent. I release the Massage Therapist from liability for complications that may arise from any undisclosed or inaccurate health information.</span>
                 </label>
                 <button
                   type="button"
