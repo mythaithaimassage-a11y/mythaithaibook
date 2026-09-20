@@ -387,9 +387,39 @@ export default async function handler(req, res) {
         }));
       const branchNames = [...new Set(therapistBookings.map((row) => row[4]).filter(Boolean))];
       const attendedHours = attended.reduce((total, appointment) => total + appointment.durationMinutes, 0) / 60;
+      const calendarDate = String(req.query.date || new Date().toISOString().slice(0, 10));
+      const calendarView = String(req.query.calendarView || 'agenda');
+      const calendarStart = calendarView === 'month'
+        ? `${calendarDate.slice(0, 7)}-01`
+        : calendarView === 'week'
+          ? shiftDate(calendarDate, -((new Date(`${calendarDate}T12:00:00Z`).getUTCDay() + 6) % 7))
+          : calendarDate;
+      const calendarEnd = calendarView === 'month'
+        ? `${shiftDate(calendarStart, 32).slice(0, 7)}-01`
+        : shiftDate(calendarStart, calendarView === 'week' ? 7 : 1);
+      const calendarResult = await calendarApi.events.list({
+        calendarId: PRIMARY_CALENDAR_ID,
+        timeMin: `${calendarStart}T00:00:00Z`,
+        timeMax: `${calendarEnd}T00:00:00Z`,
+        singleEvents: true,
+        orderBy: 'startTime',
+      });
+      const calendarEvents = (calendarResult.data.items || [])
+        .filter((event) => getTherapistFromDescription(event.description) === account.name)
+        .map((event) => ({
+          id: event.id,
+          title: event.summary || '',
+          start: event.start?.dateTime || event.start?.date || '',
+          end: event.end?.dateTime || event.end?.date || '',
+          location: event.location || '',
+          description: event.description || '',
+        }));
       return res.status(200).json({
         therapist: { name: account.name },
         appointments: upcoming,
+        calendarEvents,
+        calendarDate,
+        calendarView,
         profile: {
           branchNames,
           attendedHours,

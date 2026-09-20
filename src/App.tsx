@@ -303,13 +303,15 @@ function TherapistPortal() {
   const [summary, setSummary] = useState({ upcomingCount: 0, flaggedCount: 0 });
   const [therapistProfile, setTherapistProfile] = useState({ branchNames: [], attendedHours: 0, attendedClientCount: 0 });
   const [attendedClients, setAttendedClients] = useState([]);
-  const [analyticsRange, setAnalyticsRange] = useState('week');
+  const [calendarView, setCalendarView] = useState('agenda');
+  const [calendarDate, setCalendarDate] = useState(new Date().toISOString().slice(0, 10));
+  const [calendarEvents, setCalendarEvents] = useState([]);
   const [isSignup, setIsSignup] = useState(false);
   const [name, setName] = useState('');
   const [signupComplete, setSignupComplete] = useState('');
 
   const loadAppointments = async () => {
-    const response = await fetch('/api/booking?view=therapist-dashboard');
+    const response = await fetch(`/api/booking?view=therapist-dashboard&calendarView=${calendarView}&date=${encodeURIComponent(calendarDate)}`);
     const data = await response.json();
     if (!response.ok) throw new Error(data.message || 'Unable to load therapist appointments');
     setTherapist(data.therapist);
@@ -317,6 +319,7 @@ function TherapistPortal() {
     setSummary(data.summary || { upcomingCount: (data.appointments || []).length, flaggedCount: 0 });
     setTherapistProfile(data.profile || { branchNames: [], attendedHours: 0, attendedClientCount: 0 });
     setAttendedClients(data.attended || []);
+    setCalendarEvents(data.calendarEvents || []);
   };
 
   useEffect(() => {
@@ -325,7 +328,7 @@ function TherapistPortal() {
         if (response.ok) await loadAppointments();
       })
       .catch(() => {});
-  }, []);
+  }, [calendarView, calendarDate]);
 
   const signIn = async (event) => {
     event.preventDefault();
@@ -390,53 +393,6 @@ function TherapistPortal() {
     );
   }
 
-  const analyticsBuckets = (() => {
-    const today = new Date();
-    const getWeekKey = (date) => {
-      const monday = new Date(date);
-      monday.setDate(date.getDate() - ((date.getDay() + 6) % 7));
-      return `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, '0')}-${String(monday.getDate()).padStart(2, '0')}`;
-    };
-    const buckets = [];
-    const count = analyticsRange === 'day' ? 7 : analyticsRange === 'week' ? 8 : 6;
-    for (let index = count - 1; index >= 0; index -= 1) {
-      const start = new Date(today);
-      if (analyticsRange === 'day') start.setDate(today.getDate() - index);
-      if (analyticsRange === 'week') {
-        start.setDate(today.getDate() - ((today.getDay() + 6) % 7) - (index * 7));
-      }
-      if (analyticsRange === 'month') {
-        start.setMonth(today.getMonth() - index);
-        start.setDate(1);
-      }
-      const key = analyticsRange === 'day'
-        ? start.toISOString().slice(0, 10)
-        : analyticsRange === 'week'
-          ? getWeekKey(start)
-          : `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}`;
-      buckets.push({
-        key,
-        label: analyticsRange === 'day'
-          ? start.toLocaleDateString(undefined, { weekday: 'short' })
-          : analyticsRange === 'week'
-            ? start.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-            : start.toLocaleDateString(undefined, { month: 'short' }),
-        count: 0,
-      });
-    }
-    attendedClients.forEach((client) => {
-      const date = new Date(`${client.date}T12:00:00`);
-      const matching = buckets.find((bucket) => {
-        if (analyticsRange === 'day') return bucket.key === client.date;
-        if (analyticsRange === 'month') return bucket.key === `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-        return bucket.key === getWeekKey(date);
-      });
-      if (matching) matching.count += 1;
-    });
-    return buckets;
-  })();
-  const maxAnalyticsCount = Math.max(1, ...analyticsBuckets.map((bucket) => bucket.count));
-
   return (
     <div className="space-y-6">
       <div className="rounded-3xl bg-gradient-to-r from-blue-900 via-blue-800 to-emerald-800 p-6 sm:p-8 text-white shadow-lg">
@@ -469,23 +425,46 @@ function TherapistPortal() {
         </div>
       </div>
       <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-xs text-amber-900">Only the minimum information needed for treatment preparation is shown. Do not copy, download, or share patient information.</div>
-      <div className="bg-white rounded-2xl border border-stone-200 shadow-sm p-5">
-        <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
-          <div><h2 className="text-lg font-bold text-stone-900">Appointment activity</h2><p className="text-xs text-stone-500 mt-1">Historical appointments assigned to you</p></div>
-          <div className="flex rounded-xl bg-stone-100 p-1">
-            {['day', 'week', 'month'].map((range) => (
-              <button key={range} onClick={() => setAnalyticsRange(range)} className={`px-3 py-1.5 rounded-lg text-xs font-bold capitalize ${analyticsRange === range ? 'bg-blue-700 text-white' : 'text-stone-600'}`}>{range}</button>
-            ))}
+      <div className="bg-white rounded-2xl border border-stone-200 shadow-sm overflow-hidden">
+        <div className="bg-gradient-to-r from-slate-900 to-blue-900 px-5 py-4 text-white">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div><h2 className="text-lg font-bold">Google Calendar</h2><p className="text-xs text-blue-200 mt-1">Live schedule for {therapist.name}</p></div>
+            <div className="flex rounded-xl bg-white/10 p-1">
+              {['agenda', 'day', 'week', 'month'].map((mode) => (
+                <button key={mode} onClick={() => setCalendarView(mode)} className={`px-3 py-1.5 rounded-lg text-xs font-bold capitalize ${calendarView === mode ? 'bg-white text-blue-900' : 'text-white'}`}>{mode}</button>
+              ))}
+            </div>
+          </div>
+          <div className="flex items-center gap-3 mt-4">
+            <button onClick={() => { const date = new Date(`${calendarDate}T12:00:00`); date.setDate(date.getDate() - (calendarView === 'month' ? 30 : calendarView === 'week' ? 7 : 1)); setCalendarDate(date.toISOString().slice(0, 10)); }} className="px-3 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-sm">‹</button>
+            <input type="date" value={calendarDate} onChange={(event) => setCalendarDate(event.target.value)} className="rounded-lg px-2 py-1 text-xs text-stone-900" />
+            <button onClick={() => { const date = new Date(`${calendarDate}T12:00:00`); date.setDate(date.getDate() + (calendarView === 'month' ? 30 : calendarView === 'week' ? 7 : 1)); setCalendarDate(date.toISOString().slice(0, 10)); }} className="px-3 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-sm">›</button>
+            <button onClick={() => setCalendarDate(new Date().toISOString().slice(0, 10))} className="px-3 py-1 rounded-lg bg-emerald-400 text-emerald-950 text-xs font-bold">Today</button>
           </div>
         </div>
-        <div className="flex items-end gap-2 h-48 border-b border-stone-200 px-2">
-          {analyticsBuckets.map((bucket) => (
-            <div key={bucket.key} className="flex-1 h-full flex flex-col items-center justify-end gap-1">
-              <span className="text-[10px] font-bold text-blue-800">{bucket.count || ''}</span>
-              <div className="w-full max-w-12 rounded-t-lg bg-gradient-to-t from-blue-700 to-emerald-400 transition-all" style={{ height: `${Math.max(bucket.count ? 8 : 2, (bucket.count / maxAnalyticsCount) * 82)}%` }} />
-              <span className="text-[10px] text-stone-500">{bucket.label}</span>
+        <div className="p-5">
+          {calendarEvents.length === 0 ? (
+            <div className="py-12 text-center text-sm text-stone-500">No Google Calendar appointments in this view.</div>
+          ) : calendarView === 'agenda' || calendarView === 'day' ? (
+            <div className="space-y-3">
+              {calendarEvents.map((event) => (
+                <div key={event.id} className="grid grid-cols-[90px_1fr] gap-4 border-l-4 border-blue-600 bg-blue-50/60 rounded-r-xl p-4">
+                  <div className="text-xs font-bold text-blue-900">{event.start ? new Date(event.start).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '—'}<div className="text-[10px] text-stone-500 mt-1">{event.start ? new Date(event.start).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }) : ''}</div></div>
+                  <div><div className="font-bold text-stone-900">{event.title}</div><div className="text-xs text-stone-600 mt-1">{event.location || 'Clinic location not recorded'}</div></div>
+                </div>
+              ))}
             </div>
-          ))}
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2">
+              {calendarEvents.map((event) => (
+                <div key={event.id} className="min-h-28 rounded-xl bg-blue-50 border border-blue-100 p-3">
+                  <div className="text-[10px] font-bold text-blue-800">{event.start ? new Date(event.start).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' }) : ''}</div>
+                  <div className="text-xs font-bold text-stone-900 mt-2">{event.start ? new Date(event.start).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : ''}</div>
+                  <div className="text-xs text-stone-700 mt-1">{event.title}</div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
       {appointments.length === 0 && <div className="bg-white rounded-2xl p-8 text-center border border-stone-200 text-sm text-stone-500">No upcoming appointments assigned to you.</div>}
