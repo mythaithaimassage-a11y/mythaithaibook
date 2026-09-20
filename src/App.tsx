@@ -201,33 +201,49 @@ function BodyAreaMap({ value = '', onChange, readOnly = false }) {
     onChange(selected.includes(area) ? selected.filter((item) => item !== area) : [...selected, area]);
   };
 
+  const views = [
+    { id: 'left', label: 'Left side', areas: ['Head / face', 'Neck', 'Shoulders', 'Arms / hands', 'Hips / glutes', 'Legs / knees'] },
+    { id: 'back', label: 'Back', areas: ['Head / face', 'Neck', 'Shoulders', 'Upper back', 'Lower back', 'Arms / hands', 'Hips / glutes', 'Legs / knees'] },
+    { id: 'front', label: 'Front', areas: ['Head / face', 'Neck', 'Shoulders', 'Chest / abdomen', 'Arms / hands', 'Hips / glutes', 'Legs / knees', 'Feet'] },
+    { id: 'right', label: 'Right side', areas: ['Head / face', 'Neck', 'Shoulders', 'Arms / hands', 'Hips / glutes', 'Legs / knees'] },
+  ];
+  const positions = {
+    'Head / face': 'left-1/2 top-3 -translate-x-1/2',
+    Neck: 'left-1/2 top-11 -translate-x-1/2',
+    Shoulders: 'left-1/2 top-[4.5rem] -translate-x-1/2',
+    'Upper back': 'left-1/2 top-20 -translate-x-1/2',
+    'Lower back': 'left-1/2 top-28 -translate-x-1/2',
+    'Chest / abdomen': 'left-1/2 top-24 -translate-x-1/2',
+    'Arms / hands': 'left-2 top-24',
+    'Hips / glutes': 'left-1/2 top-36 -translate-x-1/2',
+    'Legs / knees': 'left-1/2 bottom-8 -translate-x-1/2',
+    Feet: 'left-1/2 bottom-0 -translate-x-1/2',
+  };
+
   return (
     <div className="rounded-2xl border border-cyan-100 bg-gradient-to-br from-slate-50 via-white to-cyan-50 p-4">
       <div className="flex items-center justify-between mb-3">
         <div><div className="text-sm font-black text-slate-800">Body map</div><div className="text-[11px] text-slate-500">{readOnly ? 'Highlighted areas were reported by the patient' : 'Select every affected area'}</div></div>
         <span className="rounded-full bg-cyan-100 px-2.5 py-1 text-[10px] font-bold text-cyan-800">{selected.length} marked</span>
       </div>
-      <div className="grid grid-cols-2 gap-3 max-w-xl mx-auto">
-        {['Front view', 'Back view'].map((view) => (
-          <div key={view} className="rounded-xl border border-slate-200 bg-white p-3">
-            <div className="text-center text-[10px] font-bold uppercase tracking-wide text-slate-400 mb-2">{view}</div>
-            <div className="relative mx-auto h-44 w-24 rounded-[45%] border-2 border-slate-300 bg-slate-50">
-              <div className="absolute left-1/2 top-2 h-7 w-7 -translate-x-1/2 rounded-full border-2 border-slate-300 bg-white" />
-              <div className="absolute left-1/2 top-8 h-24 w-14 -translate-x-1/2 rounded-[40%] border-2 border-slate-300 bg-white" />
-              <div className="absolute left-1/2 bottom-2 h-16 w-5 -translate-x-[12px] rounded-b-full border-2 border-t-0 border-slate-300 bg-white" />
-              <div className="absolute left-1/2 bottom-2 h-16 w-5 translate-x-[2px] rounded-b-full border-2 border-t-0 border-slate-300 bg-white" />
-              {BODY_AREA_OPTIONS.map(([area, short], index) => {
-                const positions = [
-                  'left-1/2 top-10 -translate-x-1/2', 'left-1/2 top-16 -translate-x-1/2',
-                  'left-1/2 top-24 -translate-x-1/2', 'left-1/2 top-20 -translate-x-1/2',
-                  'left-1/2 top-32 -translate-x-1/2', 'left-1/2 top-28 -translate-x-1/2',
-                  'left-1 top-24', 'right-1 top-24', 'left-1/2 bottom-10 -translate-x-1/2', 'left-1/2 bottom-1 -translate-x-1/2',
-                ];
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 max-w-4xl mx-auto">
+        {views.map((view) => (
+          <div key={view.id} className="rounded-xl border border-slate-200 bg-white p-3">
+            <div className="text-center text-[10px] font-bold uppercase tracking-wide text-slate-400 mb-2">{view.label}</div>
+            <div className={`relative mx-auto h-52 w-24 ${view.id === 'left' || view.id === 'right' ? 'scale-x-75' : ''}`}>
+              <div className="absolute left-1/2 top-1 h-8 w-8 -translate-x-1/2 rounded-full border-2 border-slate-400 bg-slate-50" />
+              <div className="absolute left-1/2 top-8 h-28 w-16 -translate-x-1/2 rounded-[42%] border-2 border-slate-400 bg-slate-50" />
+              <div className="absolute left-1/2 top-10 h-24 w-1 -translate-x-1/2 bg-slate-300/70" />
+              <div className="absolute left-1/2 bottom-3 h-20 w-5 -translate-x-[13px] rounded-b-full border-2 border-t-0 border-slate-400 bg-slate-50" />
+              <div className="absolute left-1/2 bottom-3 h-20 w-5 translate-x-[3px] rounded-b-full border-2 border-t-0 border-slate-400 bg-slate-50" />
+              <div className="absolute left-1 top-14 h-24 w-3 -rotate-6 rounded-full border-2 border-slate-400 bg-slate-50" />
+              <div className="absolute right-1 top-14 h-24 w-3 rotate-6 rounded-full border-2 border-slate-400 bg-slate-50" />
+              {view.areas.map((area) => {
                 const marked = selected.includes(area);
                 return (
-                  <button key={`${view}-${area}`} type="button" title={area} onClick={() => toggle(area)} disabled={readOnly} className={`absolute ${positions[index]} z-10 h-4 w-4 rounded-full border-2 border-white shadow transition ${marked ? 'bg-cyan-500 ring-2 ring-cyan-200' : 'bg-slate-300/60 hover:bg-cyan-300'} ${readOnly ? 'cursor-default' : ''}`}>
-                    <span className="sr-only">{area}</span>
-                  </button>
+                <button key={`${view.id}-${area}`} type="button" title={area} aria-label={`${area}${marked ? ' (selected)' : ''}`} onClick={() => toggle(area)} disabled={readOnly} className={`absolute ${positions[area]} z-10 flex h-7 w-7 items-center justify-center rounded-full border-2 border-white text-[11px] font-black shadow transition ${marked ? 'bg-cyan-500 text-white ring-2 ring-cyan-200' : 'bg-slate-200/80 text-slate-500 hover:bg-cyan-200'} ${readOnly ? 'cursor-default' : ''}`}>
+                  {marked ? selected.indexOf(area) + 1 : ''}
+                </button>
                 );
               })}
             </div>
