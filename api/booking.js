@@ -53,6 +53,11 @@ function verifyPassword(password, storedHash) {
   return actual.length === digest.length && crypto.timingSafeEqual(Buffer.from(actual), Buffer.from(digest));
 }
 
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  return `scrypt$${salt}$${crypto.scryptSync(password, salt, 64).toString('hex')}`;
+}
+
 function therapistCookie(value, maxAge) {
   return `mtt_therapist_session=${encodeURIComponent(value)}; Max-Age=${maxAge}; Path=/; HttpOnly; SameSite=Strict; Secure`;
 }
@@ -166,18 +171,20 @@ async function ensurePatientHistorySheet(sheets) {
     spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
     fields: 'sheets.properties',
   });
-  const hasPatientHistorySheet = spreadsheet.data.sheets?.some(
-    (sheet) => sheet.properties?.title === 'PatientHistory',
-  );
-
-  if (!hasPatientHistorySheet) {
-    await sheets.spreadsheets.batchUpdate({
-      spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
-      requestBody: {
-        requests: [{ addSheet: { properties: { title: 'PatientHistory' } } }],
-      },
-    });
+  const existingTitles = new Set((spreadsheet.data.sheets || []).map((sheet) => sheet.properties?.title));
+  const requests = [];
+  if (!existingTitles.has('PatientHistory')) {
+    requests.push({ addSheet: { properties: { title: 'PatientHistory' } } });
   }
+  if (!existingTitles.has('TherapistAccounts')) {
+    requests.push({ addSheet: { properties: { title: 'TherapistAccounts' } } });
+  }
+  if (!requests.length) return;
+
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+    requestBody: { requests },
+  });
 }
 
 async function sendConfirmationEmail(payload, calendarEvent) {
@@ -247,16 +254,6 @@ export default async function handler(req, res) {
       if (req.query.view === 'therapist-session') return res.status(200).json({ therapist: { id: account.id, name: account.name } });
     }
 
-    if (req.method === 'POST' && req.query?.view === 'therapist-login') {
-      if (!THERAPIST_SESSION_SECRET) return res.status(503).json({ message: 'Therapist authentication is not configured' });
-      const account = getTherapistAccounts().find((item) => item.username === req.body?.username);
-      if (!account || !verifyPassword(req.body?.password, account.passwordHash)) {
-        return res.status(401).json({ message: 'Invalid therapist username or password' });
-      }
-      res.setHeader('Set-Cookie', therapistCookie(signTherapistSession(account.id), 8 * 60 * 60));
-      return res.status(200).json({ therapist: { id: account.id, name: account.name } });
-    }
-
     if (req.method === 'POST' && req.query?.view === 'therapist-logout') {
       res.setHeader('Set-Cookie', therapistCookie('', 0));
       return res.status(200).json({ status: 'signed_out' });
@@ -275,6 +272,66 @@ export default async function handler(req, res) {
 
     const sheets = google.sheets({ version: 'v4', auth });
     const calendarApi = google.calendar({ version: 'v3', auth });
+
+    if (req.method === 'POST' && req.query?.view === 'therapist-signup') {
+      if (!THERAPIST_SESSION_SECRET) return res.status(503).json({ message: 'Therapist authentication is not configured' });
+      const name = String(req.body?.name || '').trim();
+      const username = String(req.body?.username || '').trim().toLowerCase();
+      const password = String(req.body?.password || '');
+      if (!name || !/^[a-z0-9._-]{3,32}$/.test(username) || password.length < 12) {
+        return res.status(400).json({ message: 'Enter a name, a username using 3-32 letters/numbers, and a password of at least 12 characters.' });
+      }
+      await ensurePatientHistorySheet(sheets);
+      const accountsResult = await sheets.spreadsheets.values.get({
+        spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+        range: 'TherapistAccounts!A:F',
+      }).catch((error) => {
+        if (error.code === 400) return { data: { values: [] } };
+        throw error;
+      });
+      const accounts = accountsResult.data.values || [];
+      const existing = accounts.slice(1).find((row) => String(row[1] || '').toLowerCase() === username);
+      if (existing) return res.status(409).json({ message: 'That username is already registered.' });
+      if (!accounts.length) {
+        await sheets.spreadsheets.values.append({
+          spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+          range: 'TherapistAccounts!A:F',
+          valueInputOption: 'RAW',
+          requestBody: { values: [['Therapist ID', 'Username', 'Name', 'Password Hash', 'Status', 'Created At']] },
+        });
+      }
+      await sheets.spreadsheets.values.append({
+        spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+        range: 'TherapistAccounts!A:F',
+        valueInputOption: 'USER_ENTERED',
+        requestBody: { values: [[crypto.randomUUID(), username, name, hashPassword(password), 'pending', new Date().toISOString()]] },
+      });
+      return res.status(201).json({ status: 'pending', message: 'Registration submitted. An administrator must approve your account before sign-in.' });
+    }
+
+    if (req.method === 'POST' && req.query?.view === 'therapist-login') {
+      if (!THERAPIST_SESSION_SECRET) return res.status(503).json({ message: 'Therapist authentication is not configured' });
+      const username = String(req.body?.username || '').trim().toLowerCase();
+      const accountsResult = await sheets.spreadsheets.values.get({
+        spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+        range: 'TherapistAccounts!A:F',
+      }).catch((error) => {
+        if (error.code === 400) return { data: { values: [] } };
+        throw error;
+      });
+      const sheetAccount = (accountsResult.data.values || []).slice(1)
+        .map((row) => ({ id: row[0], username: row[1], name: row[2], passwordHash: row[3], status: row[4] }))
+        .find((item) => item.username === username);
+      const account = sheetAccount || getTherapistAccounts().find((item) => item.username === username);
+      if (sheetAccount && sheetAccount.status !== 'approved') {
+        return res.status(403).json({ message: sheetAccount ? 'Your account is awaiting administrator approval.' : 'Invalid therapist username or password' });
+      }
+      if (!account || !verifyPassword(req.body?.password, account.passwordHash)) {
+        return res.status(401).json({ message: 'Invalid therapist username or password' });
+      }
+      res.setHeader('Set-Cookie', therapistCookie(signTherapistSession(account.id), 8 * 60 * 60));
+      return res.status(200).json({ therapist: { id: account.id, name: account.name } });
+    }
 
     if (req.query?.view === 'therapist-dashboard') {
       const [bookingResult, historyResult] = await Promise.all([

@@ -299,6 +299,9 @@ function TherapistPortal() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [isSignup, setIsSignup] = useState(false);
+  const [name, setName] = useState('');
+  const [signupComplete, setSignupComplete] = useState('');
 
   const loadAppointments = async () => {
     const response = await fetch('/api/booking?view=therapist-dashboard');
@@ -337,17 +340,44 @@ function TherapistPortal() {
     }
   };
 
+  const signUp = async (event) => {
+    event.preventDefault();
+    setLoading(true);
+    setError('');
+    setSignupComplete('');
+    try {
+      const response = await fetch('/api/booking?view=therapist-signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, username, password }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Registration failed');
+      setSignupComplete(data.message);
+      setPassword('');
+    } catch (signupError) {
+      setError(signupError.message || 'Registration failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   if (!therapist) {
     return (
       <div className="max-w-md mx-auto my-10 bg-white rounded-2xl border border-stone-200 shadow-sm p-6">
-        <h1 className="text-xl font-bold text-stone-900">Therapist sign in</h1>
-        <p className="text-sm text-stone-500 mt-1 mb-5">Sign in to view your upcoming appointments and limited patient safety notes.</p>
-        <form onSubmit={signIn} className="space-y-3">
+        <h1 className="text-xl font-bold text-stone-900">{isSignup ? 'Create therapist account' : 'Therapist sign in'}</h1>
+        <p className="text-sm text-stone-500 mt-1 mb-5">{isSignup ? 'Register once. An administrator must approve your account before access is enabled.' : 'Sign in to view your upcoming appointments and limited patient safety notes.'}</p>
+        <form onSubmit={isSignup ? signUp : signIn} className="space-y-3">
+          {isSignup && <input required value={name} onChange={(event) => setName(event.target.value)} placeholder="Full name (for example, Kanya S.)" className="w-full p-3 rounded-xl border border-stone-300" />}
           <input required value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" placeholder="Username" className="w-full p-3 rounded-xl border border-stone-300" />
-          <input required type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" placeholder="Password" className="w-full p-3 rounded-xl border border-stone-300" />
+          <input required minLength={12} type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={isSignup ? 'new-password' : 'current-password'} placeholder={isSignup ? 'Password (at least 12 characters)' : 'Password'} className="w-full p-3 rounded-xl border border-stone-300" />
           {error && <p className="text-xs text-red-700">{error}</p>}
-          <button disabled={loading} className="w-full py-3 bg-blue-700 text-white rounded-xl font-bold disabled:opacity-50">{loading ? 'Signing in...' : 'Sign in'}</button>
+          {signupComplete && <p className="text-xs text-emerald-700">{signupComplete}</p>}
+          <button disabled={loading} className="w-full py-3 bg-blue-700 text-white rounded-xl font-bold disabled:opacity-50">{loading ? (isSignup ? 'Registering...' : 'Signing in...') : (isSignup ? 'Register account' : 'Sign in')}</button>
         </form>
+        <button type="button" onClick={() => { setIsSignup((current) => !current); setError(''); setSignupComplete(''); }} className="w-full mt-4 text-sm text-blue-700 underline">
+          {isSignup ? 'Already registered? Sign in' : 'First time here? Create an account'}
+        </button>
       </div>
     );
   }

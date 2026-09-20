@@ -138,3 +138,10 @@ THERAPIST_ACCOUNTS=[{"id":"kanya-s","username":"kanya","name":"Kanya S.","passwo
 
 Use a separate account for each therapist, keep these values only in Vercel
 Environment Variables, and redeploy after changing them.
+
+Therapist self-registration is available from the **Therapist Login** screen.
+New registrations are written to the `TherapistAccounts` tab with status
+`pending` and cannot sign in until an administrator changes that row's status
+to `approved`. The API creates this tab automatically. After approval, the
+therapist can sign in with the username and password chosen during
+registration. Only authorized administrators should approve accounts.
