@@ -359,7 +359,8 @@ export default async function handler(req, res) {
         .map((row) => ({ id: row[0], name: row[2], status: row[4] }))
         .find((item) => item.id === session.therapistId && item.status === 'approved');
       const account = sheetAccount || getTherapistAccounts().find((item) => item.id === session.therapistId);
-      const upcoming = bookings.filter((row) => row[6] === account.name && row[7] >= new Date().toISOString().slice(0, 10))
+      const therapistBookings = bookings.filter((row) => row[6] === account.name);
+      const upcoming = therapistBookings.filter((row) => row[7] >= new Date().toISOString().slice(0, 10))
         .map((row) => {
           const history = histories.find((candidate) => candidate[0] === row[0]);
           const yesConditions = history ? [11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24].filter((index) => String(history[index] || '').toLowerCase() === 'yes').length : 0;
@@ -371,9 +372,30 @@ export default async function handler(req, res) {
             allergiesToOil: history?.[19] === 'Yes', additionalDetails: history?.[25] || '',
           };
         });
+      const attended = therapistBookings
+        .filter((row) => row[7] < new Date().toISOString().slice(0, 10))
+        .sort((a, b) => `${b[7]} ${b[8]}`.localeCompare(`${a[7]} ${a[8]}`))
+        .map((row) => ({
+          bookingId: row[0],
+          patientName: row[1],
+          date: row[7],
+          time: row[8],
+          serviceName: row[5],
+          branchName: row[4],
+          durationMinutes: Number(row[12]) || 0,
+          status: 'Completed',
+        }));
+      const branchNames = [...new Set(therapistBookings.map((row) => row[4]).filter(Boolean))];
+      const attendedHours = attended.reduce((total, appointment) => total + appointment.durationMinutes, 0) / 60;
       return res.status(200).json({
         therapist: { name: account.name },
         appointments: upcoming,
+        profile: {
+          branchNames,
+          attendedHours,
+          attendedClientCount: attended.length,
+        },
+        attended,
         summary: {
           upcomingCount: upcoming.length,
           flaggedCount: upcoming.filter((item) => item.hasReportedConditions || item.allergiesToOil).length,

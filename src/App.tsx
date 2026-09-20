@@ -301,6 +301,8 @@ function TherapistPortal() {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [summary, setSummary] = useState({ upcomingCount: 0, flaggedCount: 0 });
+  const [therapistProfile, setTherapistProfile] = useState({ branchNames: [], attendedHours: 0, attendedClientCount: 0 });
+  const [attendedClients, setAttendedClients] = useState([]);
   const [isSignup, setIsSignup] = useState(false);
   const [name, setName] = useState('');
   const [signupComplete, setSignupComplete] = useState('');
@@ -312,6 +314,8 @@ function TherapistPortal() {
     setTherapist(data.therapist);
     setAppointments(data.appointments || []);
     setSummary(data.summary || { upcomingCount: (data.appointments || []).length, flaggedCount: 0 });
+    setTherapistProfile(data.profile || { branchNames: [], attendedHours: 0, attendedClientCount: 0 });
+    setAttendedClients(data.attended || []);
   };
 
   useEffect(() => {
@@ -400,6 +404,22 @@ function TherapistPortal() {
         <div className="rounded-2xl bg-white border border-stone-200 p-5 shadow-sm"><div className="text-xs font-bold uppercase tracking-wide text-stone-500">Upcoming appointments</div><div className="text-3xl font-black text-blue-800 mt-2">{summary.upcomingCount}</div><div className="text-xs text-stone-500 mt-1">Synced from Google Sheets</div></div>
         <div className="rounded-2xl bg-white border border-stone-200 p-5 shadow-sm"><div className="text-xs font-bold uppercase tracking-wide text-stone-500">Safety flags</div><div className="text-3xl font-black text-amber-700 mt-2">{summary.flaggedCount}</div><div className="text-xs text-stone-500 mt-1">Conditions or oil allergies</div></div>
       </div>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="rounded-2xl bg-white border border-stone-200 p-5 shadow-sm">
+          <div className="text-xs font-bold uppercase tracking-wide text-stone-500">Branches served</div>
+          <div className="text-sm font-black text-emerald-800 mt-2">{therapistProfile.branchNames.length ? therapistProfile.branchNames.join(' · ') : 'No branch recorded'}</div>
+        </div>
+        <div className="rounded-2xl bg-white border border-stone-200 p-5 shadow-sm">
+          <div className="text-xs font-bold uppercase tracking-wide text-stone-500">Hours served</div>
+          <div className="text-3xl font-black text-blue-800 mt-2">{therapistProfile.attendedHours.toFixed(1)}</div>
+          <div className="text-xs text-stone-500 mt-1">Based on past appointments</div>
+        </div>
+        <div className="rounded-2xl bg-white border border-stone-200 p-5 shadow-sm">
+          <div className="text-xs font-bold uppercase tracking-wide text-stone-500">Clients attended</div>
+          <div className="text-3xl font-black text-purple-800 mt-2">{therapistProfile.attendedClientCount}</div>
+          <div className="text-xs text-stone-500 mt-1">Completed/past bookings</div>
+        </div>
+      </div>
       <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-xs text-amber-900">Only the minimum information needed for treatment preparation is shown. Do not copy, download, or share patient information.</div>
       {appointments.length === 0 && <div className="bg-white rounded-2xl p-8 text-center border border-stone-200 text-sm text-stone-500">No upcoming appointments assigned to you.</div>}
       <div className="grid gap-4">
@@ -415,6 +435,24 @@ function TherapistPortal() {
             {(appointment.painAreas || appointment.additionalDetails) && <div className="mt-4 p-3 rounded-xl bg-stone-50 text-xs space-y-1"><div><strong>Pain/discomfort:</strong> {appointment.painAreas || 'None recorded'}</div><div><strong>Additional safety details:</strong> {appointment.additionalDetails || 'None recorded'}</div></div>}
           </div>
         ))}
+      </div>
+      <div className="bg-white rounded-2xl border border-stone-200 shadow-sm overflow-hidden">
+        <div className="p-5 border-b border-stone-200">
+          <h2 className="text-lg font-bold text-stone-900">Client history</h2>
+          <p className="text-xs text-stone-500 mt-1">Past appointments assigned to you. Medical details are not shown in this list.</p>
+        </div>
+        {attendedClients.length === 0 ? (
+          <div className="p-6 text-sm text-stone-500">No attended client history is available yet.</div>
+        ) : (
+          <div className="divide-y divide-stone-100">
+            {attendedClients.map((client) => (
+              <div key={client.bookingId} className="p-4 flex flex-wrap items-center justify-between gap-3">
+                <div><div className="font-bold text-sm text-stone-900">{client.patientName}</div><div className="text-xs text-stone-500">{client.date} at {client.time} · {client.serviceName}</div></div>
+                <div className="flex items-center gap-3 text-xs"><span className="text-stone-500">{client.branchName}</span><span className="px-2 py-1 rounded-lg bg-emerald-50 text-emerald-800 font-bold">{(client.durationMinutes / 60).toFixed(1)} hr</span></div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
