@@ -373,6 +373,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
       signature: '',
       signatureDate: new Date().toISOString().split('T')[0],
       consent: false,
+      reuseExisting: false,
     },
     paymentOption: 'deposit', // 'clinic', 'deposit', 'full'
     confirmationCode: ''
@@ -463,6 +464,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
         conditions: bookingData.intake.conditions,
         signatureDate: bookingData.intake.signatureDate || new Date().toISOString().split('T')[0],
         bodyAreas: bookingData.intake.bodyAreas.join(', '),
+        reuseExisting: bookingData.intake.reuseExisting,
       },
       paymentOption: bookingData.paymentOption,
       paidAmount: financials.deposit.toFixed(2),
@@ -810,8 +812,12 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
             <div className="pt-4 border-t border-stone-200">
               <h2 className="text-xl font-bold text-stone-900 mb-1">Patient Health History</h2>
               <p className="text-xs text-stone-500 mb-4">Please complete this confidential form so we can provide treatment safely.</p>
+              <label className="flex items-start gap-2 p-3 rounded-xl bg-blue-50 border border-blue-200 text-xs text-blue-900">
+                <input type="checkbox" checked={bookingData.intake.reuseExisting} onChange={(e) => updateIntake('reuseExisting', e.target.checked)} className="mt-0.5" />
+                <span><strong>Returning patient:</strong> I have completed a patient history before. Use my existing profile matched by my email or phone number.</span>
+              </label>
 
-              <div className="space-y-4">
+              {!bookingData.intake.reuseExisting && <div className="space-y-4">
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   <div>
                     <label className="block text-xs font-bold text-stone-700 mb-1">Date of Birth</label>
@@ -927,7 +933,12 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                     <input required type="date" value={bookingData.intake.signatureDate} onChange={(e) => updateIntake('signatureDate', e.target.value)} className="w-full p-2.5 rounded-xl border border-stone-300 text-xs" />
                   </div>
                 </div>
-              </div>
+              </div>}
+              {bookingData.intake.reuseExisting && (
+                <div className="mt-4 p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-900">
+                  Your previous health history will be looked up securely when this booking is submitted. Make sure your email or phone number matches your previous profile.
+                </div>
+              )}
             </div>
 
             <div className="flex justify-between pt-4">
@@ -940,7 +951,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
               </button>
               <button
                 type="button"
-                disabled={!bookingData.customer.firstName || !bookingData.customer.phone || !bookingData.intake.consent || !bookingData.intake.signature}
+                disabled={!bookingData.customer.firstName || !bookingData.customer.phone || (!bookingData.intake.reuseExisting && (!bookingData.intake.consent || !bookingData.intake.signature))}
                 onClick={() => setStep(4)}
                 className="px-6 py-2.5 bg-emerald-800 text-white font-semibold rounded-xl hover:bg-emerald-900 disabled:opacity-40 disabled:cursor-not-allowed transition shadow-sm flex items-center"
               >
@@ -1143,7 +1154,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                         boneJoint: '', brokenBones: '', osteoporosis: '', allergies: '',
                         surgeries: '', numbness: '', skinSensitivity: '', pregnant: '', medications: '',
                       }, details: '', painAreas: '', bodyAreas: [], signature: '',
-                      signatureDate: new Date().toISOString().split('T')[0], consent: false,
+                      signatureDate: new Date().toISOString().split('T')[0], consent: false, reuseExisting: false,
                     },
                     paymentOption: 'deposit',
                     confirmationCode: ''
@@ -1430,7 +1441,7 @@ function AdminPortal({
           { id: 'calendar', label: 'Live Google Calendar', icon: CalendarIcon },
           { id: 'services', label: t.services, icon: Layers },
           { id: 'staff', label: t.staff, icon: Users },
-          { id: 'patient-history', label: 'Patient History', icon: FileText },
+          { id: 'patient-history', label: 'Patient Summary', icon: FileText },
           { id: 'financials', label: t.financials, icon: DollarSign }
         ].map(tab => {
           const Icon = tab.icon;

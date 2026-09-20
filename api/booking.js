@@ -71,6 +71,45 @@ function hasTimeOverlap(startA, endA, startB, endB) {
     new Date(endA).getTime() > new Date(startB).getTime();
 }
 
+async function findExistingPatientHistory(sheets, payload) {
+  const result = await sheets.spreadsheets.values.get({
+    spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+    range: 'PatientHistory!A:AF',
+  });
+  const rows = result.data.values || [];
+  const email = String(payload.email || '').trim().toLowerCase();
+  const phone = String(payload.phone || '').replace(/\D/g, '');
+  const row = rows.slice(1).reverse().find((candidate) => {
+    const rowEmail = String(candidate[6] || '').trim().toLowerCase();
+    const rowPhone = String(candidate[5] || '').replace(/\D/g, '');
+    return (email && rowEmail === email) || (phone && rowPhone === phone);
+  });
+  if (!row) return null;
+
+  return {
+    dateOfBirth: row[3] || '',
+    gender: row[4] || '',
+    address: row[7] || '',
+    city: row[8] || '',
+    postalCode: row[9] || '',
+    heardAbout: row[10] || '',
+    conditions: {
+      heart: row[11] || '', bloodPressure: row[12] || '', diabetes: row[13] || '',
+      cancer: row[14] || '', headaches: row[15] || '', boneJoint: row[16] || '',
+      brokenBones: row[17] || '', osteoporosis: row[18] || '', allergies: row[19] || '',
+      surgeries: row[20] || '', numbness: row[21] || '', skinSensitivity: row[22] || '',
+      pregnant: row[23] || '', medications: row[24] || '',
+    },
+    details: row[25] || '',
+    painAreas: row[26] || '',
+    bodyAreas: row[27] || '',
+    pressure: row[28] || '',
+    consent: true,
+    signature: row[30] || '',
+    signatureDate: row[31] || '',
+  };
+}
+
 async function ensurePatientHistorySheet(sheets) {
   const spreadsheet = await sheets.spreadsheets.get({
     spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
@@ -300,6 +339,15 @@ export default async function handler(req, res) {
     }
 
     const payload = req.body;
+    let patientHistory = payload.patientHistory || {};
+    if (patientHistory.reuseExisting) {
+      patientHistory = await findExistingPatientHistory(sheets, payload);
+      if (!patientHistory) {
+        return res.status(409).json({
+          message: 'No existing patient history was found for this email or phone number. Please complete the health history form.',
+        });
+      }
+    }
     const requestedTherapist = payload.therapistName || 'Any Available';
     const calendarId = PRIMARY_CALENDAR_ID;
     const startDateTime = parseBookingDateTime(payload.date, payload.time);
@@ -388,7 +436,7 @@ export default async function handler(req, res) {
     let patientHistoryError = '';
     try {
       await ensurePatientHistorySheet(sheets);
-      const history = payload.patientHistory || {};
+      const history = patientHistory;
       await sheets.spreadsheets.values.append({
         spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
         range: 'PatientHistory!A:AF',
