@@ -1190,6 +1190,11 @@ function AdminPortal({
   const [calendarLoadError, setCalendarLoadError] = useState('');
   const [calendarUrl, setCalendarUrl] = useState('');
   const [calendarWarnings, setCalendarWarnings] = useState([]);
+  const [patientHistory, setPatientHistory] = useState([]);
+  const [selectedPatientHistory, setSelectedPatientHistory] = useState(null);
+  const [isLoadingPatientHistory, setIsLoadingPatientHistory] = useState(false);
+  const [patientHistoryLoadError, setPatientHistoryLoadError] = useState('');
+  const [patientHistorySearch, setPatientHistorySearch] = useState('');
 
   // Staff management state
   const [showAddTherapistModal, setShowAddTherapistModal] = useState(false);
@@ -1270,6 +1275,36 @@ function AdminPortal({
   useEffect(() => {
     if (activeTab === 'calendar') loadCalendar();
   }, [activeTab, calendarDate, calendarBranch, calendarTherapist]);
+
+  const loadPatientHistory = async () => {
+    setIsLoadingPatientHistory(true);
+    setPatientHistoryLoadError('');
+    try {
+      const response = await fetch('/api/booking?view=patient-history');
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+      setPatientHistory(data.patientHistory || []);
+      setSelectedPatientHistory((current) => current || data.patientHistory?.[0] || null);
+    } catch (error) {
+      setPatientHistoryLoadError(error.message || 'Unable to load patient history');
+    } finally {
+      setIsLoadingPatientHistory(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'patient-history') loadPatientHistory();
+  }, [activeTab]);
+
+  const filteredPatientHistory = patientHistory.filter((profile) => {
+    const query = patientHistorySearch.trim().toLowerCase();
+    return !query || [profile.patientName, profile.bookingId, profile.email, profile.phone]
+      .some((value) => value.toLowerCase().includes(query));
+  });
+
+  const selectedConditionFlags = selectedPatientHistory
+    ? Object.entries(selectedPatientHistory.conditions).filter(([, value]) => value.toLowerCase() === 'yes')
+    : [];
 
   const handleSaveWebhook = (e) => {
     e.preventDefault();
@@ -1395,6 +1430,7 @@ function AdminPortal({
           { id: 'calendar', label: 'Live Google Calendar', icon: CalendarIcon },
           { id: 'services', label: t.services, icon: Layers },
           { id: 'staff', label: t.staff, icon: Users },
+          { id: 'patient-history', label: 'Patient History', icon: FileText },
           { id: 'financials', label: t.financials, icon: DollarSign }
         ].map(tab => {
           const Icon = tab.icon;
@@ -1956,6 +1992,94 @@ export default async function handler(req, res) {
       )}
 
       {/* TAB CONTENT: FINANCIAL REPORTS */}
+      {activeTab === 'patient-history' && (
+        <div className="bg-white rounded-2xl p-6 border border-stone-200 shadow-sm space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-bold text-stone-900">Patient History Profiles</h2>
+              <p className="text-xs text-stone-500 mt-1">Confidential health information. Access only for authorized clinic staff.</p>
+            </div>
+            <div className="flex gap-2">
+              <input
+                value={patientHistorySearch}
+                onChange={(event) => setPatientHistorySearch(event.target.value)}
+                placeholder="Search patient or booking..."
+                className="px-3 py-2 rounded-xl border border-stone-300 text-xs"
+              />
+              <button onClick={loadPatientHistory} disabled={isLoadingPatientHistory} className="px-3 py-2 rounded-xl bg-emerald-800 text-white text-xs font-bold disabled:opacity-50">
+                {isLoadingPatientHistory ? 'Loading...' : 'Refresh'}
+              </button>
+            </div>
+          </div>
+          {patientHistoryLoadError && <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-800 text-xs">{patientHistoryLoadError}</div>}
+          {!patientHistoryLoadError && patientHistory.length === 0 && !isLoadingPatientHistory && (
+            <div className="p-8 text-center rounded-xl bg-stone-50 text-stone-500 text-sm">No patient history profiles found.</div>
+          )}
+          {patientHistory.length > 0 && (
+            <div className="grid grid-cols-1 lg:grid-cols-[minmax(220px,0.8fr)_minmax(0,1.6fr)] gap-5">
+              <div className="space-y-2 max-h-[600px] overflow-y-auto pr-1">
+                <div className="text-xs font-bold text-stone-500">{filteredPatientHistory.length} profile(s)</div>
+                {filteredPatientHistory.map((profile) => (
+                  <button
+                    key={`${profile.bookingId}-${profile.createdAt}`}
+                    onClick={() => setSelectedPatientHistory(profile)}
+                    className={`w-full text-left p-3 rounded-xl border transition ${selectedPatientHistory === profile ? 'border-emerald-600 bg-emerald-50' : 'border-stone-200 hover:border-emerald-300'}`}
+                  >
+                    <div className="font-bold text-sm text-stone-900">{profile.patientName}</div>
+                    <div className="text-[11px] text-stone-500 mt-1">{profile.bookingId} · {profile.createdAt ? new Date(profile.createdAt).toLocaleDateString() : 'No date'}</div>
+                    <div className="text-[11px] text-stone-600 mt-1">{profile.email || profile.phone}</div>
+                  </button>
+                ))}
+              </div>
+              {selectedPatientHistory && (
+                <div className="space-y-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <h3 className="text-xl font-bold text-stone-900">{selectedPatientHistory.patientName}</h3>
+                      <p className="text-xs text-stone-500">{selectedPatientHistory.bookingId} · {selectedPatientHistory.dateOfBirth || 'DOB not provided'} · {selectedPatientHistory.gender || 'Gender not provided'}</p>
+                    </div>
+                    <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold"><ShieldCheck className="w-3.5 h-3.5" /> Consent: {selectedPatientHistory.consent || 'Not recorded'}</span>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    {[
+                      ['Conditions flagged', selectedConditionFlags.length, 'bg-red-50 text-red-800'],
+                      ['Pressure', selectedPatientHistory.pressure || 'Not set', 'bg-amber-50 text-amber-800'],
+                      ['Pain areas', selectedPatientHistory.painAreas ? 'Recorded' : 'None listed', 'bg-blue-50 text-blue-800'],
+                      ['Body areas', selectedPatientHistory.bodyAreas ? selectedPatientHistory.bodyAreas.split(',').length : 0, 'bg-purple-50 text-purple-800'],
+                    ].map(([label, value, style]) => <div key={label} className={`rounded-xl p-3 ${style}`}><div className="text-[10px] font-bold uppercase">{label}</div><div className="text-lg font-black mt-1">{value}</div></div>)}
+                  </div>
+                  {selectedConditionFlags.length > 0 && (
+                    <div className="p-4 rounded-xl bg-red-50 border border-red-200">
+                      <h4 className="text-xs font-bold text-red-900 mb-2">Reported health conditions</h4>
+                      <div className="flex flex-wrap gap-2">{selectedConditionFlags.map(([key]) => <span key={key} className="px-2 py-1 rounded-lg bg-white border border-red-200 text-[11px] text-red-800">{key}</span>)}</div>
+                    </div>
+                  )}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+                    <div className="p-4 rounded-xl bg-stone-50 space-y-2">
+                      <h4 className="font-bold text-stone-800">Contact</h4>
+                      <div>{selectedPatientHistory.email || 'No email'}</div><div>{selectedPatientHistory.phone || 'No phone'}</div>
+                      <div>{[selectedPatientHistory.address, selectedPatientHistory.city, selectedPatientHistory.postalCode].filter(Boolean).join(', ') || 'No address'}</div>
+                    </div>
+                    <div className="p-4 rounded-xl bg-stone-50 space-y-2">
+                      <h4 className="font-bold text-stone-800">Treatment notes</h4>
+                      <div><strong>Body areas:</strong> {selectedPatientHistory.bodyAreas || 'None listed'}</div>
+                      <div><strong>Pain/discomfort:</strong> {selectedPatientHistory.painAreas || 'None listed'}</div>
+                      <div><strong>Additional details:</strong> {selectedPatientHistory.details || 'None listed'}</div>
+                    </div>
+                  </div>
+                  <details className="border border-stone-200 rounded-xl p-4">
+                    <summary className="cursor-pointer text-xs font-bold text-stone-700">View full medical questionnaire</summary>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-3 text-xs">
+                      {Object.entries(selectedPatientHistory.conditions).map(([key, value]) => <div key={key} className="flex justify-between border-b border-stone-100 py-1"><span>{key}</span><strong>{value || 'Not answered'}</strong></div>)}
+                    </div>
+                  </details>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       {activeTab === 'financials' && (
         <div className="bg-white rounded-2xl p-6 border border-stone-200 shadow-sm space-y-4">
           <h2 className="text-lg font-bold text-stone-900">{t.financials}</h2>

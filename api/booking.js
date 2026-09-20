@@ -164,6 +164,44 @@ export default async function handler(req, res) {
     const calendarApi = google.calendar({ version: 'v3', auth });
 
     if (req.method === 'GET') {
+      if (req.query?.view === 'patient-history') {
+        const result = await sheets.spreadsheets.values.get({
+          spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+          range: 'PatientHistory!A:AF',
+        });
+        const rows = result.data.values || [];
+        const dataRows = rows[0]?.[0] === 'Booking ID' ? rows.slice(1) : rows;
+        return res.status(200).json({
+          patientHistory: dataRows.reverse().filter((row) => row[0]).map((row) => ({
+            bookingId: row[0] || '',
+            createdAt: row[1] || '',
+            patientName: row[2] || '',
+            dateOfBirth: row[3] || '',
+            gender: row[4] || '',
+            phone: row[5] || '',
+            email: row[6] || '',
+            address: row[7] || '',
+            city: row[8] || '',
+            postalCode: row[9] || '',
+            heardAbout: row[10] || '',
+            conditions: {
+              heart: row[11] || '', bloodPressure: row[12] || '', diabetes: row[13] || '',
+              cancer: row[14] || '', headaches: row[15] || '', boneJoint: row[16] || '',
+              brokenBones: row[17] || '', osteoporosis: row[18] || '', allergies: row[19] || '',
+              surgeries: row[20] || '', numbness: row[21] || '', skinSensitivity: row[22] || '',
+              pregnant: row[23] || '', medications: row[24] || '',
+            },
+            details: row[25] || '',
+            painAreas: row[26] || '',
+            bodyAreas: row[27] || '',
+            pressure: row[28] || '',
+            consent: row[29] || '',
+            signature: row[30] || '',
+            signatureDate: row[31] || '',
+          })),
+        });
+      }
+
       if (req.query?.view === 'calendar') {
         const date = req.query.date || new Date().toISOString().slice(0, 10);
         const branch = String(req.query.branch || '').toLowerCase();
