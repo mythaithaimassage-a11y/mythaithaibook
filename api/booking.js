@@ -246,14 +246,6 @@ export default async function handler(req, res) {
   }
 
   try {
-    if (req.query?.view === 'therapist-dashboard' || req.query?.view === 'therapist-session') {
-      const session = getTherapistSession(req);
-      if (!session) return res.status(401).json({ message: 'Therapist sign-in required' });
-      const account = getTherapistAccounts().find((item) => item.id === session.therapistId);
-      if (!account) return res.status(401).json({ message: 'Therapist account is not available' });
-      if (req.query.view === 'therapist-session') return res.status(200).json({ therapist: { id: account.id, name: account.name } });
-    }
-
     if (req.method === 'POST' && req.query?.view === 'therapist-logout') {
       res.setHeader('Set-Cookie', therapistCookie('', 0));
       return res.status(200).json({ status: 'signed_out' });
@@ -272,6 +264,24 @@ export default async function handler(req, res) {
 
     const sheets = google.sheets({ version: 'v4', auth });
     const calendarApi = google.calendar({ version: 'v3', auth });
+
+    if (req.query?.view === 'therapist-dashboard' || req.query?.view === 'therapist-session') {
+      const session = getTherapistSession(req);
+      if (!session) return res.status(401).json({ message: 'Therapist sign-in required' });
+      const accountsResult = await sheets.spreadsheets.values.get({
+        spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+        range: 'TherapistAccounts!A:F',
+      }).catch((error) => {
+        if (error.code === 400) return { data: { values: [] } };
+        throw error;
+      });
+      const sheetAccount = (accountsResult.data.values || []).slice(1)
+        .map((row) => ({ id: row[0], username: row[1], name: row[2], passwordHash: row[3], status: row[4] }))
+        .find((item) => item.id === session.therapistId && item.status === 'approved');
+      const account = sheetAccount || getTherapistAccounts().find((item) => item.id === session.therapistId);
+      if (!account) return res.status(401).json({ message: 'Therapist account is not available or is not approved' });
+      if (req.query.view === 'therapist-session') return res.status(200).json({ therapist: { id: account.id, name: account.name } });
+    }
 
     if (req.method === 'POST' && req.query?.view === 'therapist-signup') {
       if (!THERAPIST_SESSION_SECRET) return res.status(503).json({ message: 'Therapist authentication is not configured' });
@@ -338,9 +348,17 @@ export default async function handler(req, res) {
         sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'Sheet1!A:R' }),
         sheets.spreadsheets.values.get({ spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID, range: 'PatientHistory!A:AH' }),
       ]);
-      const bookings = (bookingResult.data.values || []).slice(1).filter((row) => row[0]);
-      const histories = (historyResult.data.values || []).slice(1).filter((row) => row[0]);
-      const account = getTherapistAccounts().find((item) => item.id === getTherapistSession(req).therapistId);
+      const bookings = (bookingResult.data.values || []).filter((row) => row[0] && row[0] !== 'Booking ID');
+      const histories = (historyResult.data.values || []).filter((row) => row[0] && row[0] !== 'Booking ID');
+      const session = getTherapistSession(req);
+      const accountsResult = await sheets.spreadsheets.values.get({
+        spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+        range: 'TherapistAccounts!A:F',
+      }).catch(() => ({ data: { values: [] } }));
+      const sheetAccount = (accountsResult.data.values || []).slice(1)
+        .map((row) => ({ id: row[0], name: row[2], status: row[4] }))
+        .find((item) => item.id === session.therapistId && item.status === 'approved');
+      const account = sheetAccount || getTherapistAccounts().find((item) => item.id === session.therapistId);
       const upcoming = bookings.filter((row) => row[6] === account.name && row[7] >= new Date().toISOString().slice(0, 10))
         .map((row) => {
           const history = histories.find((candidate) => candidate[0] === row[0]);
@@ -353,7 +371,14 @@ export default async function handler(req, res) {
             allergiesToOil: history?.[19] === 'Yes', additionalDetails: history?.[25] || '',
           };
         });
-      return res.status(200).json({ therapist: { name: account.name }, appointments: upcoming });
+      return res.status(200).json({
+        therapist: { name: account.name },
+        appointments: upcoming,
+        summary: {
+          upcomingCount: upcoming.length,
+          flaggedCount: upcoming.filter((item) => item.hasReportedConditions || item.allergiesToOil).length,
+        },
+      });
     }
 
     if (req.method === 'GET') {

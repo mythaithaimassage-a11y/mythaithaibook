@@ -299,6 +299,8 @@ function TherapistPortal() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [summary, setSummary] = useState({ upcomingCount: 0, flaggedCount: 0 });
   const [isSignup, setIsSignup] = useState(false);
   const [name, setName] = useState('');
   const [signupComplete, setSignupComplete] = useState('');
@@ -309,6 +311,7 @@ function TherapistPortal() {
     if (!response.ok) throw new Error(data.message || 'Unable to load therapist appointments');
     setTherapist(data.therapist);
     setAppointments(data.appointments || []);
+    setSummary(data.summary || { upcomingCount: (data.appointments || []).length, flaggedCount: 0 });
   };
 
   useEffect(() => {
@@ -383,16 +386,25 @@ function TherapistPortal() {
   }
 
   return (
-    <div className="space-y-5">
-      <div className="bg-white rounded-2xl p-6 border border-stone-200 shadow-sm flex items-center justify-between">
-        <div><h1 className="text-2xl font-bold text-stone-900">Welcome, {therapist.name}</h1><p className="text-xs text-stone-500 mt-1">Upcoming appointments and patient safety glimpse</p></div>
-        <button onClick={async () => { await fetch('/api/booking?view=therapist-logout', { method: 'POST' }); setTherapist(null); setAppointments([]); }} className="text-xs text-stone-500 underline">Sign out</button>
+    <div className="space-y-6">
+      <div className="rounded-3xl bg-gradient-to-r from-blue-900 via-blue-800 to-emerald-800 p-6 sm:p-8 text-white shadow-lg">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div><p className="text-xs uppercase tracking-[0.2em] text-blue-200">Therapist workspace</p><h1 className="text-2xl sm:text-3xl font-black mt-1">Welcome, {therapist.name}</h1><p className="text-sm text-blue-100 mt-2">Your upcoming schedule and treatment-safety preparation</p></div>
+          <div className="flex gap-2">
+            <button onClick={async () => { setRefreshing(true); try { await loadAppointments(); } finally { setRefreshing(false); } }} disabled={refreshing} className="px-3 py-2 rounded-xl bg-white/15 hover:bg-white/25 text-xs font-bold disabled:opacity-50">{refreshing ? 'Syncing...' : 'Refresh data'}</button>
+            <button onClick={async () => { await fetch('/api/booking?view=therapist-logout', { method: 'POST' }); setTherapist(null); setAppointments([]); }} className="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-xs">Sign out</button>
+          </div>
+        </div>
       </div>
-      <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900">Only the minimum information needed for treatment preparation is shown. Do not copy, download, or share patient information.</div>
+      <div className="grid grid-cols-2 gap-4">
+        <div className="rounded-2xl bg-white border border-stone-200 p-5 shadow-sm"><div className="text-xs font-bold uppercase tracking-wide text-stone-500">Upcoming appointments</div><div className="text-3xl font-black text-blue-800 mt-2">{summary.upcomingCount}</div><div className="text-xs text-stone-500 mt-1">Synced from Google Sheets</div></div>
+        <div className="rounded-2xl bg-white border border-stone-200 p-5 shadow-sm"><div className="text-xs font-bold uppercase tracking-wide text-stone-500">Safety flags</div><div className="text-3xl font-black text-amber-700 mt-2">{summary.flaggedCount}</div><div className="text-xs text-stone-500 mt-1">Conditions or oil allergies</div></div>
+      </div>
+      <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-xs text-amber-900">Only the minimum information needed for treatment preparation is shown. Do not copy, download, or share patient information.</div>
       {appointments.length === 0 && <div className="bg-white rounded-2xl p-8 text-center border border-stone-200 text-sm text-stone-500">No upcoming appointments assigned to you.</div>}
       <div className="grid gap-4">
         {appointments.map((appointment) => (
-          <div key={appointment.bookingId} className="bg-white rounded-2xl p-5 border border-stone-200 shadow-sm">
+          <div key={appointment.bookingId} className="bg-white rounded-2xl p-5 border border-stone-200 shadow-sm hover:shadow-md transition">
             <div className="flex flex-wrap justify-between gap-2"><div><h2 className="text-lg font-bold text-stone-900">{appointment.patientName}</h2><p className="text-xs text-stone-500">{appointment.date} at {appointment.time} · {appointment.serviceName}</p></div><span className="px-2 py-1 rounded-lg bg-blue-50 text-blue-800 text-xs font-bold">{appointment.branchName}</span></div>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4">
               <div className="p-3 rounded-xl bg-amber-50"><div className="text-[10px] font-bold uppercase text-amber-800">Pressure</div><div className="text-sm font-bold">{appointment.pressure || 'Not recorded'}</div></div>
