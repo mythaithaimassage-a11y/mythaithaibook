@@ -240,6 +240,14 @@ export default function App() {
           >
             Admin / Practice Dashboard
           </button>
+          <button
+            onClick={() => setViewMode('therapist')}
+            className={`px-3 py-1.5 rounded-md font-medium transition-all ${
+              viewMode === 'therapist' ? 'bg-blue-600 text-white shadow-sm' : 'bg-stone-800 text-stone-400 hover:text-stone-200'
+            }`}
+          >
+            Therapist Login
+          </button>
         </div>
       </header>
 
@@ -253,7 +261,7 @@ export default function App() {
             sheetsWebhookUrl={sheetsWebhookUrl}
             onNewBooking={(newBkg) => setExistingBookings(prev => [newBkg, ...prev])}
           />
-        ) : (
+        ) : viewMode === 'admin' ? (
           <AdminGate>
             <AdminPortal
               branches={MOCK_BRANCHES}
@@ -271,6 +279,8 @@ export default function App() {
               onUpdateWebhookUrl={handleUpdateWebhookUrl}
             />
           </AdminGate>
+        ) : (
+          <TherapistPortal />
         )}
       </main>
 
@@ -278,6 +288,92 @@ export default function App() {
       <footer className="bg-stone-900 text-stone-400 text-xs py-4 px-6 text-center border-t border-stone-800">
         <p>© 2026 MY THAI THAI MASSAGE AND WELLNESS INC. All rights reserved. • Toronto & Mississauga, Ontario</p>
       </footer>
+    </div>
+  );
+}
+
+function TherapistPortal() {
+  const [therapist, setTherapist] = useState(null);
+  const [appointments, setAppointments] = useState([]);
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  const loadAppointments = async () => {
+    const response = await fetch('/api/booking?view=therapist-dashboard');
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.message || 'Unable to load therapist appointments');
+    setTherapist(data.therapist);
+    setAppointments(data.appointments || []);
+  };
+
+  useEffect(() => {
+    fetch('/api/booking?view=therapist-session')
+      .then(async (response) => {
+        if (response.ok) await loadAppointments();
+      })
+      .catch(() => {});
+  }, []);
+
+  const signIn = async (event) => {
+    event.preventDefault();
+    setLoading(true);
+    setError('');
+    try {
+      const response = await fetch('/api/booking?view=therapist-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Sign-in failed');
+      setTherapist(data.therapist);
+      await loadAppointments();
+    } catch (signInError) {
+      setError(signInError.message || 'Sign-in failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!therapist) {
+    return (
+      <div className="max-w-md mx-auto my-10 bg-white rounded-2xl border border-stone-200 shadow-sm p-6">
+        <h1 className="text-xl font-bold text-stone-900">Therapist sign in</h1>
+        <p className="text-sm text-stone-500 mt-1 mb-5">Sign in to view your upcoming appointments and limited patient safety notes.</p>
+        <form onSubmit={signIn} className="space-y-3">
+          <input required value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" placeholder="Username" className="w-full p-3 rounded-xl border border-stone-300" />
+          <input required type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" placeholder="Password" className="w-full p-3 rounded-xl border border-stone-300" />
+          {error && <p className="text-xs text-red-700">{error}</p>}
+          <button disabled={loading} className="w-full py-3 bg-blue-700 text-white rounded-xl font-bold disabled:opacity-50">{loading ? 'Signing in...' : 'Sign in'}</button>
+        </form>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="bg-white rounded-2xl p-6 border border-stone-200 shadow-sm flex items-center justify-between">
+        <div><h1 className="text-2xl font-bold text-stone-900">Welcome, {therapist.name}</h1><p className="text-xs text-stone-500 mt-1">Upcoming appointments and patient safety glimpse</p></div>
+        <button onClick={async () => { await fetch('/api/booking?view=therapist-logout', { method: 'POST' }); setTherapist(null); setAppointments([]); }} className="text-xs text-stone-500 underline">Sign out</button>
+      </div>
+      <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900">Only the minimum information needed for treatment preparation is shown. Do not copy, download, or share patient information.</div>
+      {appointments.length === 0 && <div className="bg-white rounded-2xl p-8 text-center border border-stone-200 text-sm text-stone-500">No upcoming appointments assigned to you.</div>}
+      <div className="grid gap-4">
+        {appointments.map((appointment) => (
+          <div key={appointment.bookingId} className="bg-white rounded-2xl p-5 border border-stone-200 shadow-sm">
+            <div className="flex flex-wrap justify-between gap-2"><div><h2 className="text-lg font-bold text-stone-900">{appointment.patientName}</h2><p className="text-xs text-stone-500">{appointment.date} at {appointment.time} · {appointment.serviceName}</p></div><span className="px-2 py-1 rounded-lg bg-blue-50 text-blue-800 text-xs font-bold">{appointment.branchName}</span></div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4">
+              <div className="p-3 rounded-xl bg-amber-50"><div className="text-[10px] font-bold uppercase text-amber-800">Pressure</div><div className="text-sm font-bold">{appointment.pressure || 'Not recorded'}</div></div>
+              <div className="p-3 rounded-xl bg-red-50"><div className="text-[10px] font-bold uppercase text-red-800">Conditions</div><div className="text-sm font-bold">{appointment.hasReportedConditions ? `${appointment.reportedConditionCount} reported` : 'None flagged'}</div></div>
+              <div className="p-3 rounded-xl bg-purple-50"><div className="text-[10px] font-bold uppercase text-purple-800">Oil allergy</div><div className="text-sm font-bold">{appointment.allergiesToOil ? 'Yes' : 'No'}</div></div>
+              <div className="p-3 rounded-xl bg-blue-50"><div className="text-[10px] font-bold uppercase text-blue-800">Body areas</div><div className="text-xs font-bold">{appointment.bodyAreas || 'Not recorded'}</div></div>
+            </div>
+            {(appointment.painAreas || appointment.additionalDetails) && <div className="mt-4 p-3 rounded-xl bg-stone-50 text-xs space-y-1"><div><strong>Pain/discomfort:</strong> {appointment.painAreas || 'None recorded'}</div><div><strong>Additional safety details:</strong> {appointment.additionalDetails || 'None recorded'}</div></div>}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

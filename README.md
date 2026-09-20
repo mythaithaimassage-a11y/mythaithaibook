@@ -35,6 +35,10 @@ Configure these Vercel environment variables before using it:
 - `RESEND_FROM_EMAIL` (defaults to `bookings@mythaithaimassage.com`)
 - `PATIENT_HISTORY_SPREADSHEET_ID` (defaults to the dedicated patient-history
   spreadsheet configured for this project)
+- `THERAPIST_SESSION_SECRET` (long random secret used to sign HTTP-only
+  therapist sessions)
+- `THERAPIST_ACCOUNTS` (JSON array of therapist accounts with scrypt password
+  hashes; see below)
 
 Share the Google Sheet with the service account email as an Editor. Enable the
 Google Sheets API and Google Calendar API in the Google Cloud project. The
@@ -109,3 +113,28 @@ Booking ID,Created At,Patient Name,Date of Birth,Gender,Phone,Email,Address,City
 Patient health information is sensitive. Restrict spreadsheet access to
 authorized clinic staff, enable strong account security, and follow applicable
 privacy and health-information retention requirements.
+
+### Therapist access
+
+Therapists sign in through the **Therapist Login** portal. The server creates
+an HTTP-only, eight-hour signed session and only returns appointments assigned
+to the signed-in therapist. The therapist view shows a limited safety glimpse
+such as pressure, affected body areas, allergies, reported-condition count,
+pain areas, and additional safety details; it does not expose the full patient
+history, contact details, or signature.
+
+Generate a password hash locally with:
+
+```bash
+node -e "const c=require('crypto');const p=process.argv[1],s=c.randomBytes(16).toString('hex');console.log('scrypt$'+s+'$'+c.scryptSync(p,s,64).toString('hex'))" "replace-with-a-strong-password"
+```
+
+Set Vercel environment variables similar to:
+
+```text
+THERAPIST_SESSION_SECRET=<at least 32 random characters>
+THERAPIST_ACCOUNTS=[{"id":"kanya-s","username":"kanya","name":"Kanya S.","passwordHash":"scrypt$..."}]
+```
+
+Use a separate account for each therapist, keep these values only in Vercel
+Environment Variables, and redeploy after changing them.

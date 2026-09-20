@@ -1,10 +1,61 @@
 import { google } from 'googleapis';
+import crypto from 'node:crypto';
 
 const CALENDAR_TIME_ZONE = process.env.GOOGLE_CALENDAR_TIME_ZONE || 'America/Toronto';
 const CALENDAR_OWNER_EMAIL = process.env.GOOGLE_CALENDAR_OWNER_EMAIL || 'mythaithaimassage@gmail.com';
 const PRIMARY_CALENDAR_ID = process.env.GOOGLE_PRIMARY_CALENDAR_ID || CALENDAR_OWNER_EMAIL;
 const RESEND_FROM_EMAIL = process.env.RESEND_FROM_EMAIL || 'bookings@mythaithaimassage.com';
 const PATIENT_HISTORY_SPREADSHEET_ID = process.env.PATIENT_HISTORY_SPREADSHEET_ID || '1tNrhigAWrvAc6DiLi-W_NwG04bPiTZZEs6KwfYDUclA';
+const THERAPIST_SESSION_SECRET = process.env.THERAPIST_SESSION_SECRET || '';
+const THERAPIST_ACCOUNTS = process.env.THERAPIST_ACCOUNTS || '[]';
+
+function parseCookies(req) {
+  return Object.fromEntries((req.headers.cookie || '').split(';').filter(Boolean).map((part) => {
+    const index = part.indexOf('=');
+    return [part.slice(0, index).trim(), decodeURIComponent(part.slice(index + 1))];
+  }));
+}
+
+function signTherapistSession(therapistId) {
+  const payload = Buffer.from(JSON.stringify({ therapistId, expiresAt: Date.now() + 8 * 60 * 60 * 1000 })).toString('base64url');
+  const signature = crypto.createHmac('sha256', THERAPIST_SESSION_SECRET).update(payload).digest('base64url');
+  return `${payload}.${signature}`;
+}
+
+function getTherapistSession(req) {
+  if (!THERAPIST_SESSION_SECRET) return null;
+  const value = parseCookies(req).mtt_therapist_session || '';
+  const [payload, signature] = value.split('.');
+  if (!payload || !signature) return null;
+  const expected = crypto.createHmac('sha256', THERAPIST_SESSION_SECRET).update(payload).digest('base64url');
+  if (signature.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return null;
+  try {
+    const session = JSON.parse(Buffer.from(payload, 'base64url').toString());
+    return session.expiresAt > Date.now() ? session : null;
+  } catch {
+    return null;
+  }
+}
+
+function getTherapistAccounts() {
+  try {
+    const accounts = JSON.parse(THERAPIST_ACCOUNTS);
+    return Array.isArray(accounts) ? accounts : [];
+  } catch {
+    throw new Error('THERAPIST_ACCOUNTS must be valid JSON');
+  }
+}
+
+function verifyPassword(password, storedHash) {
+  const [algorithm, salt, digest] = String(storedHash || '').split('$');
+  if (algorithm !== 'scrypt' || !salt || !digest) return false;
+  const actual = crypto.scryptSync(password, salt, 64).toString('hex');
+  return actual.length === digest.length && crypto.timingSafeEqual(Buffer.from(actual), Buffer.from(digest));
+}
+
+function therapistCookie(value, maxAge) {
+  return `mtt_therapist_session=${encodeURIComponent(value)}; Max-Age=${maxAge}; Path=/; HttpOnly; SameSite=Strict; Secure`;
+}
 
 function parseBookingDateTime(date, time) {
   const match = /^(\d{1,2}):(\d{2})\s*(AM|PM)$/i.exec(time || '');
@@ -188,6 +239,29 @@ export default async function handler(req, res) {
   }
 
   try {
+    if (req.query?.view === 'therapist-dashboard' || req.query?.view === 'therapist-session') {
+      const session = getTherapistSession(req);
+      if (!session) return res.status(401).json({ message: 'Therapist sign-in required' });
+      const account = getTherapistAccounts().find((item) => item.id === session.therapistId);
+      if (!account) return res.status(401).json({ message: 'Therapist account is not available' });
+      if (req.query.view === 'therapist-session') return res.status(200).json({ therapist: { id: account.id, name: account.name } });
+    }
+
+    if (req.method === 'POST' && req.query?.view === 'therapist-login') {
+      if (!THERAPIST_SESSION_SECRET) return res.status(503).json({ message: 'Therapist authentication is not configured' });
+      const account = getTherapistAccounts().find((item) => item.username === req.body?.username);
+      if (!account || !verifyPassword(req.body?.password, account.passwordHash)) {
+        return res.status(401).json({ message: 'Invalid therapist username or password' });
+      }
+      res.setHeader('Set-Cookie', therapistCookie(signTherapistSession(account.id), 8 * 60 * 60));
+      return res.status(200).json({ therapist: { id: account.id, name: account.name } });
+    }
+
+    if (req.method === 'POST' && req.query?.view === 'therapist-logout') {
+      res.setHeader('Set-Cookie', therapistCookie('', 0));
+      return res.status(200).json({ status: 'signed_out' });
+    }
+
     const auth = new google.auth.GoogleAuth({
       credentials: {
         client_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
@@ -201,6 +275,29 @@ export default async function handler(req, res) {
 
     const sheets = google.sheets({ version: 'v4', auth });
     const calendarApi = google.calendar({ version: 'v3', auth });
+
+    if (req.query?.view === 'therapist-dashboard') {
+      const [bookingResult, historyResult] = await Promise.all([
+        sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'Sheet1!A:R' }),
+        sheets.spreadsheets.values.get({ spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID, range: 'PatientHistory!A:AH' }),
+      ]);
+      const bookings = (bookingResult.data.values || []).slice(1).filter((row) => row[0]);
+      const histories = (historyResult.data.values || []).slice(1).filter((row) => row[0]);
+      const account = getTherapistAccounts().find((item) => item.id === getTherapistSession(req).therapistId);
+      const upcoming = bookings.filter((row) => row[6] === account.name && row[7] >= new Date().toISOString().slice(0, 10))
+        .map((row) => {
+          const history = histories.find((candidate) => candidate[0] === row[0]);
+          const yesConditions = history ? [11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24].filter((index) => String(history[index] || '').toLowerCase() === 'yes').length : 0;
+          return {
+            bookingId: row[0], patientName: row[1], date: row[7], time: row[8],
+            serviceName: row[5], branchName: row[4], pressure: history?.[28] || '',
+            painAreas: history?.[26] || '', bodyAreas: history?.[27] || '',
+            hasReportedConditions: yesConditions > 0, reportedConditionCount: yesConditions,
+            allergiesToOil: history?.[19] === 'Yes', additionalDetails: history?.[25] || '',
+          };
+        });
+      return res.status(200).json({ therapist: { name: account.name }, appointments: upcoming });
+    }
 
     if (req.method === 'GET') {
       if (req.query?.view === 'patient-history') {
