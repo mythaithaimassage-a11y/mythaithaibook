@@ -32,7 +32,9 @@ Configure these Vercel environment variables before using it:
 - `GOOGLE_PRIMARY_CALENDAR_ID` (defaults to `mythaithaimassage@gmail.com`)
 - `GOOGLE_CALENDAR_TIME_ZONE` (defaults to `America/Toronto`)
 - `RESEND_API_KEY`
-- `RESEND_FROM_EMAIL`
+- `RESEND_FROM_EMAIL` (defaults to `bookings@mythaithaimassage.com`)
+- `PATIENT_HISTORY_SPREADSHEET_ID` (defaults to the dedicated patient-history
+  spreadsheet configured for this project)
 
 Share the Google Sheet with the service account email as an Editor. Enable the
 Google Sheets API and Google Calendar API in the Google Cloud project. The
@@ -40,8 +42,24 @@ service account creates calendars named `<Therapist> - MY THAI THAI` and shares
 the primary calendar with `GOOGLE_PRIMARY_CALENDAR_ID`.
 
 Confirmation emails are sent through Resend. Create a Resend API key and
-verify the sender address or domain in Resend. Set `RESEND_FROM_EMAIL` to the
-verified sender address. The Calendar event does not invite attendees because
+verify the sending domain in Resend before using a `mythaithaimassage.com`
+sender:
+
+1. In Resend, open **Domains**, add `mythaithaimassage.com`, and copy the DNS
+   records Resend provides.
+2. Add those records at the DNS provider for `mythaithaimassage.com`. Keep the
+   exact hostnames and values shown by Resend; do not substitute records from
+   another domain.
+3. Wait for Resend to show the domain as **Verified**.
+4. Set `RESEND_FROM_EMAIL` to an address on that verified domain, for example
+   `bookings@mythaithaimassage.com`, in the Vercel environment used by the
+   deployed site, then redeploy.
+
+The `from` domain must be verified in the same Resend account as
+`RESEND_API_KEY`. A `403` response saying that
+`mythaithaimassage.com` is not verified means the booking can still be saved
+to Google Sheets and Calendar, but Resend will reject the confirmation email
+until the DNS verification is complete. The Calendar event does not invite attendees because
 standard Google service accounts cannot invite external attendees without
 Google Workspace Domain-Wide Delegation.
 
@@ -73,3 +91,21 @@ cannot be written to the primary calendar.
 
 Store the service-account values only in Vercel Environment Variables. Do not
 commit the JSON key or paste its private key into source control.
+
+### Patient history
+
+The booking form includes the health-history fields from the clinic's paper
+form. Each completed form is appended to the `PatientHistory` tab in
+`PATIENT_HISTORY_SPREADSHEET_ID` and is linked to the booking ID. Create a tab
+named `PatientHistory` in that spreadsheet before accepting bookings. The
+service account must have Editor access to this spreadsheet.
+
+Create this header row in `PatientHistory`:
+
+```text
+Booking ID,Created At,Patient Name,Date of Birth,Gender,Phone,Email,Address,City,Postal Code,How Heard About Us,Heart Condition,Blood Pressure,Diabetes,Cancer,Headaches or Migraines,Bone or Joint Disorder,Broken Bones or Implants,Osteoporosis or Arthritis,Allergies to Oil,Surgeries,Numbness or Loss of Sensation,Skin Sensitivity or Easy Bruising,Pregnant or Recently Gave Birth,Medications or Supplements,Additional Health Details,Pain or Discomfort Areas,Body Areas,Preferred Pressure,Consent,Typed Signature,Signature Date
+```
+
+Patient health information is sensitive. Restrict spreadsheet access to
+authorized clinic staff, enable strong account security, and follow applicable
+privacy and health-information retention requirements.

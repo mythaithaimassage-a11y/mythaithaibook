@@ -3,7 +3,8 @@ import { google } from 'googleapis';
 const CALENDAR_TIME_ZONE = process.env.GOOGLE_CALENDAR_TIME_ZONE || 'America/Toronto';
 const CALENDAR_OWNER_EMAIL = process.env.GOOGLE_CALENDAR_OWNER_EMAIL || 'mythaithaimassage@gmail.com';
 const PRIMARY_CALENDAR_ID = process.env.GOOGLE_PRIMARY_CALENDAR_ID || CALENDAR_OWNER_EMAIL;
-const RESEND_FROM_EMAIL = process.env.RESEND_FROM_EMAIL || 'mythaithaimassage@gmail.com';
+const RESEND_FROM_EMAIL = process.env.RESEND_FROM_EMAIL || 'bookings@mythaithaimassage.com';
+const PATIENT_HISTORY_SPREADSHEET_ID = process.env.PATIENT_HISTORY_SPREADSHEET_ID || '1tNrhigAWrvAc6DiLi-W_NwG04bPiTZZEs6KwfYDUclA';
 
 function parseBookingDateTime(date, time) {
   const match = /^(\d{1,2}):(\d{2})\s*(AM|PM)$/i.exec(time || '');
@@ -77,6 +78,9 @@ async function sendConfirmationEmail(payload, calendarEvent) {
   if (!payload.email) {
     throw new Error('Customer email is required for confirmation email');
   }
+  if (!RESEND_FROM_EMAIL.includes('@')) {
+    throw new Error('RESEND_FROM_EMAIL must be a valid email address');
+  }
 
   const response = await fetch('https://api.resend.com/emails', {
     method: 'POST',
@@ -108,6 +112,14 @@ async function sendConfirmationEmail(payload, calendarEvent) {
 
   if (!response.ok) {
     const details = await response.text();
+    if (
+      response.status === 403 &&
+      details.toLowerCase().includes('domain is not verified')
+    ) {
+      throw new Error(
+        `Resend sender domain is not verified. Add and verify the domain used by RESEND_FROM_EMAIL in the Resend account for RESEND_API_KEY, then redeploy the app. Details: ${details}`,
+      );
+    }
     throw new Error(`Resend email failed (${response.status}): ${details}`);
   }
 }
@@ -315,6 +327,49 @@ export default async function handler(req, res) {
       },
     });
 
+    const history = payload.patientHistory || {};
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+      range: 'PatientHistory!A:AF',
+      valueInputOption: 'USER_ENTERED',
+      requestBody: {
+        values: [[
+          payload.id,
+          new Date().toISOString(),
+          payload.customerName,
+          history.dateOfBirth || '',
+          history.gender || '',
+          payload.phone,
+          payload.email,
+          history.address || '',
+          history.city || '',
+          history.postalCode || '',
+          history.heardAbout || '',
+          history.conditions?.heart || '',
+          history.conditions?.bloodPressure || '',
+          history.conditions?.diabetes || '',
+          history.conditions?.cancer || '',
+          history.conditions?.headaches || '',
+          history.conditions?.boneJoint || '',
+          history.conditions?.brokenBones || '',
+          history.conditions?.osteoporosis || '',
+          history.conditions?.allergies || '',
+          history.conditions?.surgeries || '',
+          history.conditions?.numbness || '',
+          history.conditions?.skinSensitivity || '',
+          history.conditions?.pregnant || '',
+          history.conditions?.medications || '',
+          history.details || '',
+          history.painAreas || '',
+          history.bodyAreas || '',
+          history.pressure || '',
+          history.consent ? 'Yes' : 'No',
+          history.signature || '',
+          history.signatureDate || '',
+        ]],
+      },
+    });
+
     let emailSent = false;
     let emailError = '';
     try {
@@ -332,6 +387,7 @@ export default async function handler(req, res) {
       emailSent,
       emailError,
       therapistName,
+      patientHistorySaved: true,
     });
   } catch (error) {
     console.error('Google Sheets API Error:', error);

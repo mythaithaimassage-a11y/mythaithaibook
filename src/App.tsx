@@ -349,7 +349,29 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
     date: new Date().toISOString().split('T')[0],
     time: null,
     customer: { firstName: '', lastName: '', email: '', phone: '' },
-    intake: { pressure: 'Medium', focusAreas: '', injuries: '', agreeTerms: false },
+    intake: {
+      pressure: 'Medium',
+      focusAreas: '',
+      injuries: '',
+      agreeTerms: false,
+      dateOfBirth: '',
+      gender: '',
+      address: '',
+      city: '',
+      postalCode: '',
+      heardAbout: '',
+      conditions: {
+        heart: '', bloodPressure: '', diabetes: '', cancer: '', headaches: '',
+        boneJoint: '', brokenBones: '', osteoporosis: '', allergies: '',
+        surgeries: '', numbness: '', skinSensitivity: '', pregnant: '', medications: '',
+      },
+      details: '',
+      painAreas: '',
+      bodyAreas: [],
+      signature: '',
+      signatureDate: new Date().toISOString().split('T')[0],
+      consent: false,
+    },
     paymentOption: 'deposit', // 'clinic', 'deposit', 'full'
     confirmationCode: ''
   });
@@ -376,6 +398,13 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
     setBookingData(prev => ({
       ...prev,
       intake: { ...prev.intake, [field]: val }
+    }));
+  };
+
+  const updateCondition = (field, val) => {
+    setBookingData(prev => ({
+      ...prev,
+      intake: { ...prev.intake, conditions: { ...prev.intake.conditions, [field]: val } }
     }));
   };
 
@@ -427,6 +456,12 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
         bookingData.intake.focusAreas ? `Focus areas: ${bookingData.intake.focusAreas}` : '',
         bookingData.intake.injuries ? `Injuries: ${bookingData.intake.injuries}` : '',
       ].filter(Boolean).join('; '),
+      patientHistory: {
+        ...bookingData.intake,
+        conditions: bookingData.intake.conditions,
+        signatureDate: bookingData.intake.signatureDate || new Date().toISOString().split('T')[0],
+        bodyAreas: bookingData.intake.bodyAreas.join(', '),
+      },
       paymentOption: bookingData.paymentOption,
       paidAmount: financials.deposit.toFixed(2),
       totalAmount: financials.total.toFixed(2)
@@ -769,11 +804,97 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
             </div>
 
             <div className="pt-4 border-t border-stone-200">
-              <h2 className="text-xl font-bold text-stone-900 mb-1">Health & Massage Preferences</h2>
-              <p className="text-xs text-stone-500 mb-4">Help us tailor your treatment safely</p>
+              <h2 className="text-xl font-bold text-stone-900 mb-1">Patient Health History</h2>
+              <p className="text-xs text-stone-500 mb-4">Please complete this confidential form so we can provide treatment safely.</p>
 
               <div className="space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-stone-700 mb-1">Date of Birth</label>
+                    <input type="date" value={bookingData.intake.dateOfBirth} onChange={(e) => updateIntake('dateOfBirth', e.target.value)} className="w-full p-2.5 rounded-xl border border-stone-300 text-xs" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-stone-700 mb-1">Gender</label>
+                    <select value={bookingData.intake.gender} onChange={(e) => updateIntake('gender', e.target.value)} className="w-full p-2.5 rounded-xl border border-stone-300 text-xs">
+                      <option value="">Select</option><option>Female</option><option>Male</option><option>Other</option><option>Prefer not to say</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-stone-700 mb-1">How did you hear about us?</label>
+                    <input value={bookingData.intake.heardAbout} onChange={(e) => updateIntake('heardAbout', e.target.value)} className="w-full p-2.5 rounded-xl border border-stone-300 text-xs" />
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div className="sm:col-span-1">
+                    <label className="block text-xs font-bold text-stone-700 mb-1">Address</label>
+                    <input value={bookingData.intake.address} onChange={(e) => updateIntake('address', e.target.value)} className="w-full p-2.5 rounded-xl border border-stone-300 text-xs" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-stone-700 mb-1">City</label>
+                    <input value={bookingData.intake.city} onChange={(e) => updateIntake('city', e.target.value)} className="w-full p-2.5 rounded-xl border border-stone-300 text-xs" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-stone-700 mb-1">Postal Code</label>
+                    <input value={bookingData.intake.postalCode} onChange={(e) => updateIntake('postalCode', e.target.value)} className="w-full p-2.5 rounded-xl border border-stone-300 text-xs" />
+                  </div>
+                </div>
+                <div className="border border-stone-200 rounded-xl overflow-hidden">
+                  <div className="bg-stone-100 px-3 py-2 text-xs font-bold text-stone-700">Please indicate whether any of these apply</div>
+                  {[
+                    ['heart', 'Heart condition / heart disease / stroke'],
+                    ['bloodPressure', 'High or low blood pressure'],
+                    ['diabetes', 'Diabetes'],
+                    ['cancer', 'History of cancer / precancerous lesions'],
+                    ['headaches', 'Headaches / migraines / dizziness'],
+                    ['boneJoint', 'Bone or joint disorder / spinal injury / herniated disc'],
+                    ['brokenBones', 'Broken bones / metal implants / plates / pins'],
+                    ['osteoporosis', 'Osteoporosis / arthritis / rheumatoid arthritis'],
+                    ['allergies', 'Allergies to oil'],
+                    ['surgeries', 'Past surgeries or recent surgeries'],
+                    ['numbness', 'Numbness or loss of sensation'],
+                    ['skinSensitivity', 'Skin sensitivity / easy bruising'],
+                    ['pregnant', 'Pregnant or recently gave birth'],
+                    ['medications', 'Taking medication, blood thinners, painkillers, or supplements'],
+                  ].map(([field, label]) => (
+                    <div key={field} className="grid grid-cols-[1fr_auto] gap-2 items-center px-3 py-2 border-t border-stone-200 text-xs">
+                      <span>{label}</span>
+                      <div className="flex gap-3">
+                        {['Yes', 'No'].map((answer) => (
+                          <label key={answer} className="flex items-center gap-1">
+                            <input type="radio" name={`condition-${field}`} value={answer} checked={bookingData.intake.conditions[field] === answer} onChange={() => updateCondition(field, answer)} />
+                            {answer}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
                 <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">If yes, please specify</label>
+                  <textarea rows="2" value={bookingData.intake.details} onChange={(e) => updateIntake('details', e.target.value)} className="w-full p-2.5 rounded-xl border border-stone-300 text-xs" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">Areas of pain, discomfort, swelling, or numbness</label>
+                  <textarea rows="2" value={bookingData.intake.painAreas} onChange={(e) => updateIntake('painAreas', e.target.value)} placeholder="Please describe the area(s)" className="w-full p-2.5 rounded-xl border border-stone-300 text-xs" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-2">Mark affected body areas</label>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    {['Head / face', 'Neck', 'Shoulders', 'Upper back', 'Lower back', 'Chest / abdomen', 'Arms / hands', 'Hips / glutes', 'Legs / knees', 'Feet'].map((area) => (
+                      <label key={area} className="flex items-center gap-2 text-xs text-stone-700">
+                        <input
+                          type="checkbox"
+                          checked={bookingData.intake.bodyAreas.includes(area)}
+                          onChange={(e) => updateIntake('bodyAreas', e.target.checked
+                            ? [...bookingData.intake.bodyAreas, area]
+                            : bookingData.intake.bodyAreas.filter((item) => item !== area))}
+                        />
+                        {area}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                <div className="border-t border-stone-200 pt-4">
                   <label className="block text-xs font-bold text-stone-700 mb-2">Preferred Pressure Level</label>
                   <div className="grid grid-cols-4 gap-2">
                     {['Light', 'Medium', 'Firm', 'Extra Firm'].map(p => (
@@ -782,26 +903,25 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                         type="button"
                         onClick={() => updateIntake('pressure', p)}
                         className={`py-2 text-xs font-semibold rounded-lg border transition ${
-                          bookingData.intake.pressure === p 
-                            ? 'bg-amber-100 border-amber-600 text-amber-900 font-bold' 
-                            : 'bg-stone-50 border-stone-200 text-stone-600'
+                          bookingData.intake.pressure === p ? 'bg-amber-100 border-amber-600 text-amber-900 font-bold' : 'bg-stone-50 border-stone-200 text-stone-600'
                         }`}
-                      >
-                        {p}
-                      </button>
+                      >{p}</button>
                     ))}
                   </div>
                 </div>
-
                 <div>
                   <label className="block text-xs font-bold text-stone-700 mb-1">Target / Focus Areas (Optional)</label>
-                  <input 
-                    type="text" 
-                    placeholder="e.g. Lower back stiffness, shoulders, neck tension"
-                    value={bookingData.intake.focusAreas}
-                    onChange={(e) => updateIntake('focusAreas', e.target.value)}
-                    className="w-full p-2.5 rounded-xl border border-stone-300 focus:ring-2 focus:ring-emerald-600 focus:outline-none text-xs"
-                  />
+                  <input type="text" placeholder="e.g. Lower back stiffness, shoulders, neck tension" value={bookingData.intake.focusAreas} onChange={(e) => updateIntake('focusAreas', e.target.value)} className="w-full p-2.5 rounded-xl border border-stone-300 text-xs" />
+                </div>
+                <div className="border-t border-stone-200 pt-4">
+                  <label className="flex items-start gap-2 text-xs text-stone-700">
+                    <input type="checkbox" required checked={bookingData.intake.consent} onChange={(e) => updateIntake('consent', e.target.checked)} className="mt-0.5" />
+                    <span>I confirm that I have answered these questions truthfully and consent to massage treatment. I understand I may withdraw consent at any time.</span>
+                  </label>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-3">
+                    <input required placeholder="Typed signature" value={bookingData.intake.signature} onChange={(e) => updateIntake('signature', e.target.value)} className="w-full p-2.5 rounded-xl border border-stone-300 text-xs" />
+                    <input required type="date" value={bookingData.intake.signatureDate} onChange={(e) => updateIntake('signatureDate', e.target.value)} className="w-full p-2.5 rounded-xl border border-stone-300 text-xs" />
+                  </div>
                 </div>
               </div>
             </div>
@@ -816,7 +936,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
               </button>
               <button
                 type="button"
-                disabled={!bookingData.customer.firstName || !bookingData.customer.phone}
+                disabled={!bookingData.customer.firstName || !bookingData.customer.phone || !bookingData.intake.consent || !bookingData.intake.signature}
                 onClick={() => setStep(4)}
                 className="px-6 py-2.5 bg-emerald-800 text-white font-semibold rounded-xl hover:bg-emerald-900 disabled:opacity-40 disabled:cursor-not-allowed transition shadow-sm flex items-center"
               >
@@ -1005,7 +1125,16 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                     date: new Date().toISOString().split('T')[0],
                     time: null,
                     customer: { firstName: '', lastName: '', email: '', phone: '' },
-                    intake: { pressure: 'Medium', focusAreas: '', injuries: '', agreeTerms: false },
+                    intake: {
+                      pressure: 'Medium', focusAreas: '', injuries: '', agreeTerms: false,
+                      dateOfBirth: '', gender: '', address: '', city: '', postalCode: '',
+                      heardAbout: '', conditions: {
+                        heart: '', bloodPressure: '', diabetes: '', cancer: '', headaches: '',
+                        boneJoint: '', brokenBones: '', osteoporosis: '', allergies: '',
+                        surgeries: '', numbness: '', skinSensitivity: '', pregnant: '', medications: '',
+                      }, details: '', painAreas: '', bodyAreas: [], signature: '',
+                      signatureDate: new Date().toISOString().split('T')[0], consent: false,
+                    },
                     paymentOption: 'deposit',
                     confirmationCode: ''
                   });
