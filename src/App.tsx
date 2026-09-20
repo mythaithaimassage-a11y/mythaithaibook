@@ -303,6 +303,7 @@ function TherapistPortal() {
   const [summary, setSummary] = useState({ upcomingCount: 0, flaggedCount: 0 });
   const [therapistProfile, setTherapistProfile] = useState({ branchNames: [], attendedHours: 0, attendedClientCount: 0 });
   const [attendedClients, setAttendedClients] = useState([]);
+  const [analyticsRange, setAnalyticsRange] = useState('week');
   const [isSignup, setIsSignup] = useState(false);
   const [name, setName] = useState('');
   const [signupComplete, setSignupComplete] = useState('');
@@ -389,6 +390,53 @@ function TherapistPortal() {
     );
   }
 
+  const analyticsBuckets = (() => {
+    const today = new Date();
+    const getWeekKey = (date) => {
+      const monday = new Date(date);
+      monday.setDate(date.getDate() - ((date.getDay() + 6) % 7));
+      return `${monday.getFullYear()}-${String(monday.getMonth() + 1).padStart(2, '0')}-${String(monday.getDate()).padStart(2, '0')}`;
+    };
+    const buckets = [];
+    const count = analyticsRange === 'day' ? 7 : analyticsRange === 'week' ? 8 : 6;
+    for (let index = count - 1; index >= 0; index -= 1) {
+      const start = new Date(today);
+      if (analyticsRange === 'day') start.setDate(today.getDate() - index);
+      if (analyticsRange === 'week') {
+        start.setDate(today.getDate() - ((today.getDay() + 6) % 7) - (index * 7));
+      }
+      if (analyticsRange === 'month') {
+        start.setMonth(today.getMonth() - index);
+        start.setDate(1);
+      }
+      const key = analyticsRange === 'day'
+        ? start.toISOString().slice(0, 10)
+        : analyticsRange === 'week'
+          ? getWeekKey(start)
+          : `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}`;
+      buckets.push({
+        key,
+        label: analyticsRange === 'day'
+          ? start.toLocaleDateString(undefined, { weekday: 'short' })
+          : analyticsRange === 'week'
+            ? start.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+            : start.toLocaleDateString(undefined, { month: 'short' }),
+        count: 0,
+      });
+    }
+    attendedClients.forEach((client) => {
+      const date = new Date(`${client.date}T12:00:00`);
+      const matching = buckets.find((bucket) => {
+        if (analyticsRange === 'day') return bucket.key === client.date;
+        if (analyticsRange === 'month') return bucket.key === `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+        return bucket.key === getWeekKey(date);
+      });
+      if (matching) matching.count += 1;
+    });
+    return buckets;
+  })();
+  const maxAnalyticsCount = Math.max(1, ...analyticsBuckets.map((bucket) => bucket.count));
+
   return (
     <div className="space-y-6">
       <div className="rounded-3xl bg-gradient-to-r from-blue-900 via-blue-800 to-emerald-800 p-6 sm:p-8 text-white shadow-lg">
@@ -421,6 +469,25 @@ function TherapistPortal() {
         </div>
       </div>
       <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-xs text-amber-900">Only the minimum information needed for treatment preparation is shown. Do not copy, download, or share patient information.</div>
+      <div className="bg-white rounded-2xl border border-stone-200 shadow-sm p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
+          <div><h2 className="text-lg font-bold text-stone-900">Appointment activity</h2><p className="text-xs text-stone-500 mt-1">Historical appointments assigned to you</p></div>
+          <div className="flex rounded-xl bg-stone-100 p-1">
+            {['day', 'week', 'month'].map((range) => (
+              <button key={range} onClick={() => setAnalyticsRange(range)} className={`px-3 py-1.5 rounded-lg text-xs font-bold capitalize ${analyticsRange === range ? 'bg-blue-700 text-white' : 'text-stone-600'}`}>{range}</button>
+            ))}
+          </div>
+        </div>
+        <div className="flex items-end gap-2 h-48 border-b border-stone-200 px-2">
+          {analyticsBuckets.map((bucket) => (
+            <div key={bucket.key} className="flex-1 h-full flex flex-col items-center justify-end gap-1">
+              <span className="text-[10px] font-bold text-blue-800">{bucket.count || ''}</span>
+              <div className="w-full max-w-12 rounded-t-lg bg-gradient-to-t from-blue-700 to-emerald-400 transition-all" style={{ height: `${Math.max(bucket.count ? 8 : 2, (bucket.count / maxAnalyticsCount) * 82)}%` }} />
+              <span className="text-[10px] text-stone-500">{bucket.label}</span>
+            </div>
+          ))}
+        </div>
+      </div>
       {appointments.length === 0 && <div className="bg-white rounded-2xl p-8 text-center border border-stone-200 text-sm text-stone-500">No upcoming appointments assigned to you.</div>}
       <div className="grid gap-4">
         {appointments.map((appointment) => (
@@ -453,6 +520,32 @@ function TherapistPortal() {
             ))}
           </div>
         )}
+      </div>
+      <div className="bg-white rounded-2xl border border-stone-200 shadow-sm overflow-hidden">
+        <div className="p-5 border-b border-stone-200">
+          <h2 className="text-lg font-bold text-stone-900">Historical bookings</h2>
+          <p className="text-xs text-stone-500 mt-1">All past bookings assigned to you, including service duration and branch.</p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead className="bg-stone-50 text-stone-500 uppercase tracking-wide">
+              <tr><th className="px-5 py-3">Date</th><th className="px-5 py-3">Client</th><th className="px-5 py-3">Service</th><th className="px-5 py-3">Branch</th><th className="px-5 py-3">Duration</th><th className="px-5 py-3">Booking ID</th></tr>
+            </thead>
+            <tbody className="divide-y divide-stone-100">
+              {attendedClients.map((client) => (
+                <tr key={`table-${client.bookingId}`} className="hover:bg-stone-50">
+                  <td className="px-5 py-3 whitespace-nowrap">{client.date} {client.time}</td>
+                  <td className="px-5 py-3 font-bold text-stone-800">{client.patientName}</td>
+                  <td className="px-5 py-3">{client.serviceName}</td>
+                  <td className="px-5 py-3">{client.branchName}</td>
+                  <td className="px-5 py-3">{client.durationMinutes} min</td>
+                  <td className="px-5 py-3 font-mono">{client.bookingId}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {attendedClients.length === 0 && <div className="p-6 text-sm text-stone-500">No historical bookings are available.</div>}
+        </div>
       </div>
     </div>
   );
