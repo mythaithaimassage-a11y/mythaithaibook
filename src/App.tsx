@@ -306,6 +306,8 @@ function TherapistPortal() {
   const [calendarView, setCalendarView] = useState('agenda');
   const [calendarDate, setCalendarDate] = useState(new Date().toISOString().slice(0, 10));
   const [calendarEvents, setCalendarEvents] = useState([]);
+  const [selectedAppointment, setSelectedAppointment] = useState(null);
+  const [therapistPanel, setTherapistPanel] = useState('schedule');
   const [isSignup, setIsSignup] = useState(false);
   const [name, setName] = useState('');
   const [signupComplete, setSignupComplete] = useState('');
@@ -316,6 +318,7 @@ function TherapistPortal() {
     if (!response.ok) throw new Error(data.message || 'Unable to load therapist appointments');
     setTherapist(data.therapist);
     setAppointments(data.appointments || []);
+    setSelectedAppointment((current) => current || data.appointments?.[0] || null);
     setSummary(data.summary || { upcomingCount: (data.appointments || []).length, flaggedCount: 0 });
     setTherapistProfile(data.profile || { branchNames: [], attendedHours: 0, attendedClientCount: 0 });
     setAttendedClients(data.attended || []);
@@ -468,6 +471,63 @@ function TherapistPortal() {
         </div>
       </div>
       {appointments.length === 0 && <div className="bg-white rounded-2xl p-8 text-center border border-stone-200 text-sm text-stone-500">No upcoming appointments assigned to you.</div>}
+      {appointments.length > 0 && (
+        <div className="bg-white rounded-2xl border border-stone-200 shadow-sm overflow-hidden">
+          <div className="flex items-center gap-1 border-b border-stone-200 px-4 pt-3">
+            {[
+              ['schedule', 'Patient preparation'],
+              ['patients', 'My patients'],
+            ].map(([panel, label]) => (
+              <button key={panel} onClick={() => setTherapistPanel(panel)} className={`px-4 py-2.5 text-xs font-bold border-b-2 ${therapistPanel === panel ? 'border-blue-700 text-blue-800' : 'border-transparent text-stone-500'}`}>
+                {label}
+              </button>
+            ))}
+          </div>
+          {therapistPanel === 'schedule' && (
+            <div className="grid grid-cols-1 lg:grid-cols-[260px_1fr] min-h-[360px]">
+              <div className="border-r border-stone-200 bg-stone-50">
+                <div className="p-4 text-xs font-bold uppercase tracking-wide text-stone-500">Upcoming patients</div>
+                <div className="divide-y divide-stone-200">
+                  {appointments.map((appointment) => (
+                    <button key={`patient-${appointment.bookingId}`} onClick={() => setSelectedAppointment(appointment)} className={`w-full text-left p-4 hover:bg-blue-50 ${selectedAppointment?.bookingId === appointment.bookingId ? 'bg-blue-100 border-l-4 border-blue-700' : ''}`}>
+                      <div className="font-bold text-sm text-stone-900">{appointment.patientName}</div>
+                      <div className="text-[11px] text-stone-500 mt-1">{appointment.date} · {appointment.time}</div>
+                      <div className="text-[11px] text-blue-700 mt-1">{appointment.serviceName}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {selectedAppointment && (
+                <div className="p-5 sm:p-7">
+                  <div className="flex flex-wrap items-start justify-between gap-3 border-b border-stone-200 pb-4">
+                    <div><div className="text-xs uppercase tracking-wide text-stone-500">Patient preparation</div><h2 className="text-2xl font-black text-stone-900 mt-1">{selectedAppointment.patientName}</h2><p className="text-sm text-stone-500 mt-1">{selectedAppointment.date} at {selectedAppointment.time} · {selectedAppointment.serviceName}</p></div>
+                    <span className="px-3 py-1.5 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold">{selectedAppointment.branchName}</span>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-5">
+                    <div className="rounded-xl bg-amber-50 p-3"><div className="text-[10px] uppercase font-bold text-amber-800">Pressure</div><div className="font-black mt-1">{selectedAppointment.pressure || 'Not recorded'}</div></div>
+                    <div className="rounded-xl bg-red-50 p-3"><div className="text-[10px] uppercase font-bold text-red-800">Conditions</div><div className="font-black mt-1">{selectedAppointment.hasReportedConditions ? `${selectedAppointment.reportedConditionCount} flagged` : 'None flagged'}</div></div>
+                    <div className="rounded-xl bg-purple-50 p-3"><div className="text-[10px] uppercase font-bold text-purple-800">Oil allergy</div><div className="font-black mt-1">{selectedAppointment.allergiesToOil ? 'Yes' : 'No'}</div></div>
+                    <div className="rounded-xl bg-blue-50 p-3"><div className="text-[10px] uppercase font-bold text-blue-800">Duration</div><div className="font-black mt-1">{selectedAppointment.durationMinutes || '—'} min</div></div>
+                  </div>
+                  <div className="mt-5">
+                    <h3 className="text-sm font-bold text-stone-800 mb-2">Affected body areas</h3>
+                    <div className="flex flex-wrap gap-2">
+                      {(selectedAppointment.bodyAreas || 'Not recorded').split(',').map((area) => <span key={area} className="px-3 py-1.5 rounded-full bg-cyan-50 border border-cyan-200 text-xs font-bold text-cyan-900">{area.trim()}</span>)}
+                    </div>
+                  </div>
+                  {(selectedAppointment.painAreas || selectedAppointment.additionalDetails) && <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-3"><div className="rounded-xl bg-stone-50 p-4 text-xs"><div className="font-bold text-stone-700 mb-1">Pain / discomfort</div>{selectedAppointment.painAreas || 'None recorded'}</div><div className="rounded-xl bg-stone-50 p-4 text-xs"><div className="font-bold text-stone-700 mb-1">Safety details</div>{selectedAppointment.additionalDetails || 'None recorded'}</div></div>}
+                  <div className="mt-5 p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900">Use this summary to prepare. Review the complete patient history only through the authorized clinical workflow.</div>
+                </div>
+              )}
+            </div>
+          )}
+          {therapistPanel === 'patients' && (
+            <div className="p-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {appointments.map((appointment) => <button key={`card-${appointment.bookingId}`} onClick={() => { setSelectedAppointment(appointment); setTherapistPanel('schedule'); }} className="text-left rounded-xl border border-stone-200 p-4 hover:border-blue-400 hover:shadow-sm"><div className="font-bold text-stone-900">{appointment.patientName}</div><div className="text-xs text-stone-500 mt-1">{appointment.date} · {appointment.time}</div><div className="text-xs text-blue-700 mt-2">{appointment.branchName}</div></button>)}
+            </div>
+          )}
+        </div>
+      )}
       <div className="grid gap-4">
         {appointments.map((appointment) => (
           <div key={appointment.bookingId} className="bg-white rounded-2xl p-5 border border-stone-200 shadow-sm hover:shadow-md transition">

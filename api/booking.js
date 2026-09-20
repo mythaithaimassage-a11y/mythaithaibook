@@ -366,7 +366,7 @@ export default async function handler(req, res) {
           const yesConditions = history ? [11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24].filter((index) => String(history[index] || '').toLowerCase() === 'yes').length : 0;
           return {
             bookingId: row[0], patientName: row[1], date: row[7], time: row[8],
-            serviceName: row[5], branchName: row[4], pressure: history?.[28] || '',
+            serviceName: row[5], branchName: row[4], durationMinutes: Number(row[12]) || 0, pressure: history?.[28] || '',
             painAreas: history?.[26] || '', bodyAreas: history?.[27] || '',
             hasReportedConditions: yesConditions > 0, reportedConditionCount: yesConditions,
             allergiesToOil: history?.[19] === 'Yes', additionalDetails: history?.[25] || '',
