@@ -10,6 +10,7 @@ const GOOGLE_GMAIL_SENDER_EMAIL = process.env.GOOGLE_GMAIL_SENDER_EMAIL || '';
 const GOOGLE_OAUTH_CLIENT_ID = process.env.GOOGLE_OAUTH_CLIENT_ID || '';
 const GOOGLE_OAUTH_CLIENT_SECRET = process.env.GOOGLE_OAUTH_CLIENT_SECRET || '';
 const GOOGLE_OAUTH_REFRESH_TOKEN = process.env.GOOGLE_OAUTH_REFRESH_TOKEN || '';
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const PATIENT_HISTORY_SPREADSHEET_ID = process.env.PATIENT_HISTORY_SPREADSHEET_ID || '1tNrhigAWrvAc6DiLi-W_NwG04bPiTZZEs6KwfYDUclA';
 const THERAPIST_SESSION_SECRET = process.env.THERAPIST_SESSION_SECRET || '';
 const THERAPIST_ACCOUNTS = process.env.THERAPIST_ACCOUNTS || '[]';
@@ -605,6 +606,72 @@ function getCampaignSendBlockReason(businessProfile) {
   return '';
 }
 
+async function generateCampaignCopy(goal, audienceDescription, audienceCount) {
+  if (!GEMINI_API_KEY) {
+    throw new Error('Campaign writing assistant is not configured. Add GEMINI_API_KEY to Vercel Environment Variables and redeploy.');
+  }
+  const cleanGoal = String(goal || '').trim();
+  if (!cleanGoal || cleanGoal.length > 500) {
+    throw new Error('Describe the campaign goal in 1-500 characters.');
+  }
+  const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-goog-api-key': GEMINI_API_KEY,
+    },
+    body: JSON.stringify({
+      systemInstruction: {
+        parts: [{
+          text: 'You write warm, concise, professional promotional emails for a Thai massage and wellness clinic in Ontario, Canada. Return only a JSON object with string keys subject, preview, and message. Subject must be at most 100 characters, preview at most 140 characters, and message at most 2500 characters. Use plain text in message, no HTML. Never invent prices, discounts, offers, availability, medical outcomes, or facts. Do not give medical advice or imply a guaranteed health benefit. Do not include customer names, email addresses, or other personal data. Make the email relevant to the aggregate audience description while avoiding language that reveals sensitive health information. Mention the booking website only when a website is supplied in the business context.',
+        }],
+      },
+      contents: [{
+        role: 'user',
+        parts: [{
+          text: JSON.stringify({
+            campaignGoal: cleanGoal,
+            audience: String(audienceDescription || '').slice(0, 300),
+            optedInRecipientCount: Number(audienceCount) || 0,
+          }),
+        }],
+      }],
+      generationConfig: {
+        responseMimeType: 'application/json',
+        maxOutputTokens: 1000,
+        temperature: 0.7,
+      },
+    }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const providerMessage = data.error?.message || `Gemini returned status ${response.status}`;
+    console.error('Campaign copy generation failed:', providerMessage);
+    throw new Error('The campaign writing assistant could not generate copy. Check the Gemini API key and quota, then try again.');
+  }
+  const text = data.candidates?.[0]?.content?.parts?.map((part) => part.text || '').join('').trim();
+  if (!text) {
+    throw new Error('Gemini returned an empty campaign draft. Please try again.');
+  }
+  let draft;
+  try {
+    draft = JSON.parse(text);
+  } catch {
+    throw new Error('The campaign writing assistant returned an invalid draft. Please try again.');
+  }
+  const subject = String(draft.subject || '').trim();
+  const preview = String(draft.preview || '').trim();
+  const message = String(draft.message || '').trim();
+  if (
+    !subject || subject.length > 180 || /[\r\n]/.test(subject) ||
+    preview.length > 200 ||
+    !message || message.length > 5000
+  ) {
+    throw new Error('The generated campaign draft did not meet the required format. Please try again.');
+  }
+  return { subject, preview, message };
+}
+
 async function sendMarketingEmail(gmail, campaign, recipient, businessProfile, unsubscribeUrl) {
   const sender = GOOGLE_GMAIL_SENDER_EMAIL;
   if (sender.trim().toLowerCase() !== MARKETING_SENDER_EMAIL) {
@@ -927,12 +994,12 @@ export default async function handler(req, res) {
     }
     const ownerOnlyRequest =
       (req.method === 'GET' && ['', 'calendar', 'patient-history', 'business-profile'].includes(view)) ||
-      ['business-profile', 'mark-paid', 'issue-receipt', 'campaign-audience', 'campaign-send'].includes(view);
+      ['business-profile', 'mark-paid', 'issue-receipt', 'campaign-audience', 'campaign-generate', 'campaign-send'].includes(view);
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
     if (ownerOnlyRequest && !getOwnerSession(req)) {
       return res.status(401).json({ message: 'Owner sign-in required' });
     }
-    if (['business-profile', 'mark-paid', 'issue-receipt', 'campaign-audience', 'campaign-send'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
+    if (['business-profile', 'mark-paid', 'issue-receipt', 'campaign-audience', 'campaign-generate', 'campaign-send'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
       return res.status(403).json({ message: 'Profile update origin is not allowed' });
     }
 
@@ -1004,8 +1071,27 @@ export default async function handler(req, res) {
         subscriberCount: audience.subscriberCount,
         sampleNames: audience.recipients.slice(0, 3).map((recipient) => recipient.name || 'Subscriber'),
         senderEmail: MARKETING_SENDER_EMAIL,
+        copyAssistantReady: Boolean(GEMINI_API_KEY),
+        copyAssistantBlockReason: GEMINI_API_KEY
+          ? ''
+          : 'Add GEMINI_API_KEY to Vercel Environment Variables and redeploy to enable AI campaign writing.',
         sendReady: !sendBlockReason,
         sendBlockReason,
+      });
+    }
+
+    if (req.method === 'POST' && view === 'campaign-generate') {
+      const query = String(req.body?.query || '');
+      const audience = await resolveMarketingAudience(sheets, query);
+      const draft = await generateCampaignCopy(
+        req.body?.goal,
+        audience.criteria.description,
+        audience.recipients.length,
+      );
+      return res.status(200).json({
+        draft,
+        audienceDescription: audience.criteria.description,
+        audienceCount: audience.recipients.length,
       });
     }
 

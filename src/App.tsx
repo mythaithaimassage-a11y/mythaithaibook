@@ -1743,12 +1743,14 @@ function AdminPortal({
   const [campaignSubject, setCampaignSubject] = useState('');
   const [campaignPreview, setCampaignPreview] = useState('');
   const [campaignMessage, setCampaignMessage] = useState('');
+  const [campaignGoal, setCampaignGoal] = useState('');
   const [campaignChatInput, setCampaignChatInput] = useState('');
   const [campaignConversation, setCampaignConversation] = useState([
     { role: 'assistant', text: 'Describe the customers you want to reach. I can find opted-in customers by visit weekday, recent booking, branch, service, or most recent activity.' },
   ]);
   const [campaignAudience, setCampaignAudience] = useState(null);
   const [isBuildingCampaignAudience, setIsBuildingCampaignAudience] = useState(false);
+  const [isGeneratingCampaignCopy, setIsGeneratingCampaignCopy] = useState(false);
   const [isSendingCampaign, setIsSendingCampaign] = useState(false);
   const [campaignDrafts, setCampaignDrafts] = useState(() => {
     try {
@@ -1997,6 +1999,37 @@ function AdminPortal({
       }]);
     } finally {
       setIsBuildingCampaignAudience(false);
+    }
+  };
+
+  const generateCampaignCopy = async () => {
+    if (!campaignAudience || isGeneratingCampaignCopy || isBuildingCampaignAudience || isSendingCampaign) return;
+    if (!campaignGoal.trim()) {
+      setCampaignError('Describe what this campaign should communicate before generating a draft.');
+      return;
+    }
+    setCampaignError('');
+    setCampaignNotice('');
+    setIsGeneratingCampaignCopy(true);
+    try {
+      const response = await fetch('/api/booking?view=campaign-generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query: campaignAudience.query,
+          goal: campaignGoal,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+      setCampaignSubject(data.draft.subject);
+      setCampaignPreview(data.draft.preview);
+      setCampaignMessage(data.draft.message);
+      setCampaignNotice(`AI drafted a message for ${data.audienceCount} matching opted-in recipients. Review and edit it before saving or sending.`);
+    } catch (error) {
+      setCampaignError(error.message || 'Unable to generate a campaign draft');
+    } finally {
+      setIsGeneratingCampaignCopy(false);
     }
   };
 
@@ -2767,7 +2800,15 @@ function AdminPortal({
           </section>
           <div className="grid gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(300px,0.8fr)]">
             <form onSubmit={saveCampaignDraft} className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-              <div><h3 className="font-bold text-slate-900">Campaign message</h3><p className="mt-1 text-xs text-slate-500">Save drafts in this browser or send to the audience above.</p></div>
+              <div><h3 className="font-bold text-slate-900">Campaign message</h3><p className="mt-1 text-xs text-slate-500">Use the writing assistant to create an editable draft, then review, save, or send it.</p></div>
+              <div className="rounded-xl border border-violet-100 bg-violet-50/60 p-4">
+                <label className="block"><span className="mb-1.5 block text-xs font-semibold text-slate-700">What should this campaign say?</span><textarea rows={2} maxLength={500} value={campaignGoal} onChange={(event) => setCampaignGoal(event.target.value)} disabled={isGeneratingCampaignCopy || isSendingCampaign} placeholder="e.g. Write a friendly note inviting this audience to take time for self-care. Do not include an offer." className="w-full resize-y rounded-xl border border-slate-200 bg-white px-3.5 py-3 text-sm leading-5 outline-none focus:border-violet-500 focus:ring-4 focus:ring-violet-100 disabled:bg-slate-50" /></label>
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+                  <p className="max-w-lg text-[10px] leading-4 text-slate-500">Gemini receives only your campaign goal and the aggregate audience description—not customer names, emails, or booking rows. The generated copy is not sent until you review and confirm.</p>
+                  <button type="button" onClick={generateCampaignCopy} disabled={!campaignAudience || !campaignAudience.copyAssistantReady || !campaignGoal.trim() || isGeneratingCampaignCopy || isSendingCampaign || isBuildingCampaignAudience} className="inline-flex shrink-0 items-center gap-2 rounded-xl bg-violet-800 px-4 py-2.5 text-xs font-bold text-white hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-45"><Sparkles className="h-4 w-4" />{isGeneratingCampaignCopy ? 'Generating…' : 'Generate campaign'}</button>
+                </div>
+                {campaignAudience && !campaignAudience.copyAssistantReady && <p className="mt-2 text-xs font-semibold text-amber-800">{campaignAudience.copyAssistantBlockReason}</p>}
+              </div>
               <label className="block"><span className="mb-1.5 block text-xs font-semibold text-slate-700">Subject line</span><input maxLength={180} required value={campaignSubject} onChange={(event) => setCampaignSubject(event.target.value)} placeholder="A little time for yourself…" className="w-full rounded-xl border border-slate-200 px-3.5 py-3 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" /></label>
               <label className="block"><span className="mb-1.5 block text-xs font-semibold text-slate-700">Preview text</span><input maxLength={200} value={campaignPreview} onChange={(event) => setCampaignPreview(event.target.value)} placeholder="A short summary shown in the inbox" className="w-full rounded-xl border border-slate-200 px-3.5 py-3 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" /></label>
               <label className="block"><span className="mb-1.5 block text-xs font-semibold text-slate-700">Message</span><textarea required rows={8} maxLength={5000} value={campaignMessage} onChange={(event) => setCampaignMessage(event.target.value)} placeholder="Write a helpful, considerate message for your subscribers…" className="w-full resize-y rounded-xl border border-slate-200 px-3.5 py-3 text-sm leading-6 outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" /></label>

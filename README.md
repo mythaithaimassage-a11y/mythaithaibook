@@ -106,14 +106,24 @@ appointments, tax estimates, and top services for a selectable date range.
 previews, browser-local drafts, and Gmail campaign delivery to a maximum of 50
 active, opted-in contacts per send. The Vercel function allows up to 60 seconds
 for a campaign batch. The assistant matches historical booking
-dates, branches, and services; it does not use an external AI service and
-historical bookings do not prove attendance. Customers are added only after
-checking the separate optional marketing consent box in the booking form.
+dates, branches, and services; audience matching itself does not use an AI
+service and historical bookings do not prove attendance. An optional Gemini
+writing assistant can generate an editable subject, preview, and message from
+the owner's campaign goal and aggregate audience description. It never receives
+customer names, email addresses, or booking rows, and it never sends generated
+copy automatically. Customers are added only after checking the separate
+optional marketing consent box in the booking form.
 Existing booking or treatment-consent records are not imported as marketing
 consent. Campaigns include the business mailing address and unsubscribe links;
 unsubscribed contacts are excluded from future sends. Configure the Gmail OAuth
 sender as `mythaithaimassage@gmail.com` with the existing `gmail.send` scope,
 and enter the full business mailing address in Business profile before sending.
+To enable AI copy generation, create a Gemini API key in
+[Google AI Studio](https://aistudio.google.com/app/apikey), add it to Vercel as
+the server-side environment variable `GEMINI_API_KEY` for the production
+environment, and redeploy. Keep this key private; do not put it in frontend
+code or commit it to the repository. Google AI Studio/Gemini API usage may be
+subject to Google's quotas, terms, and charges.
 The API creates a `MarketingContacts` tab in `GOOGLE_SPREADSHEET_ID` for consent
 status and unsubscribe tokens. Restrict access to this tab to authorized staff.
 For example, ask for customers with at least two past Wednesday bookings at a
