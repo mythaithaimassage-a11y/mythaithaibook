@@ -6,8 +6,9 @@ import {
   Calendar as CalendarIcon, Clock, User, MapPin, CreditCard, CheckCircle2, Globe, Settings, 
   Plus, Edit, Trash2, Building, FileText, Phone, Mail, Search, Filter, 
   TrendingUp, ChevronRight, AlertCircle, Sparkles, ShieldCheck, Check, X,
-  DollarSign, Users, Award, Briefcase, RefreshCw, Layers, CheckSquare, Stethoscope, Link2, Send, Database,
-  Menu, Home, CalendarDays, UserRound, BarChart3, CreditCard as CardIcon, ChevronRight as ChevronRightIcon
+  DollarSign, Users, Award, Briefcase, RefreshCw, Layers, CheckSquare, Stethoscope, Database,
+  Menu, Home, CalendarDays, UserRound, BarChart3, ChevronRight as ChevronRightIcon,
+  Megaphone, ReceiptText, Download, Eye
 } from 'lucide-react';
 
 const MOCK_BRANCHES = [
@@ -68,11 +69,13 @@ const THERAPIST_CALENDAR_COLORS = [
 
 const DEFAULT_BUSINESS_PROFILE = {
   businessName: 'MY THAI THAI',
+  legalName: '',
   tagline: 'Traditional Thai massage & wellness',
   email: 'mythaithaimassage@gmail.com',
   phone: '+1 437 898 7424',
   website: 'https://mythaithaimassage.com',
   address: 'Ontario, Canada',
+  taxRegistrationNumber: '',
 };
 
 function getTherapistCalendarColor(therapistName, therapists) {
@@ -277,7 +280,7 @@ export default function App() {
   const [selectedBranchId, setSelectedBranchId] = useState(1);
   
   // Google Sheets API Webhook URL state
-  const [sheetsWebhookUrl, setSheetsWebhookUrl] = useState(() => {
+  const [sheetsWebhookUrl] = useState(() => {
     return localStorage.getItem('mtt_sheets_webhook_url') || '';
   });
 
@@ -286,11 +289,6 @@ export default function App() {
     { id: 'MTT-1002', customerName: 'Sarah Jenkins', phone: '905-555-0143', email: 's.jenkins@yahoo.ca', serviceId: 11, serviceName: 'Thai Combo Swedish + Hot Stone (60 min)', branchId: 1, therapistId: 2, therapistName: 'Michael T., RMT', date: '2026-09-19', time: '01:00 PM', status: 'Completed', paidAmount: 118.65, total: 118.65, syncedToSheets: true },
     { id: 'MTT-1003', customerName: 'Amanda Wong', phone: '647-555-0821', email: 'amanda.wong@outlook.com', serviceId: 18, serviceName: 'Registered Massage Therapy (RMT 60 min)', branchId: 2, therapistId: 4, therapistName: 'Somchai R., RMT', date: '2026-09-19', time: '02:30 PM', status: 'Confirmed', paidAmount: 30, total: 120.00, syncedToSheets: true }
   ]);
-
-  const handleUpdateWebhookUrl = (url) => {
-    setSheetsWebhookUrl(url);
-    localStorage.setItem('mtt_sheets_webhook_url', url);
-  };
 
   return (
     <div className="min-h-screen bg-stone-100 font-sans text-stone-800 flex flex-col justify-between">
@@ -356,8 +354,6 @@ export default function App() {
               setSelectedBranchId={setSelectedBranchId}
               lang={adminLang}
               setLang={setAdminLang}
-              sheetsWebhookUrl={sheetsWebhookUrl}
-              onUpdateWebhookUrl={handleUpdateWebhookUrl}
             />
           </AdminGate>
         ) : (
@@ -1702,9 +1698,7 @@ function AdminPortal({
   selectedBranchId, 
   setSelectedBranchId,
   lang,
-  setLang,
-  sheetsWebhookUrl,
-  onUpdateWebhookUrl
+  setLang
 }) {
   const [activeTab, setActiveTab] = useState('schedule');
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -1714,9 +1708,29 @@ function AdminPortal({
   const [isSavingBusinessProfile, setIsSavingBusinessProfile] = useState(false);
   const [businessProfileError, setBusinessProfileError] = useState('');
   const [businessProfileMessage, setBusinessProfileMessage] = useState('');
-  const [inputUrl, setInputUrl] = useState(sheetsWebhookUrl);
-  const [testResult, setTestResult] = useState(null);
-  const [isTesting, setIsTesting] = useState(false);
+  const [selectedCalendarEvent, setSelectedCalendarEvent] = useState(null);
+  const [issuedReceipt, setIssuedReceipt] = useState(null);
+  const [isIssuingReceipt, setIsIssuingReceipt] = useState(false);
+  const [receiptError, setReceiptError] = useState('');
+  const [receiptNotice, setReceiptNotice] = useState('');
+  const [reportStartDate, setReportStartDate] = useState(() => {
+    const date = new Date();
+    date.setDate(date.getDate() - 29);
+    return date.toISOString().slice(0, 10);
+  });
+  const [reportEndDate, setReportEndDate] = useState(new Date().toISOString().slice(0, 10));
+  const [campaignSubject, setCampaignSubject] = useState('');
+  const [campaignPreview, setCampaignPreview] = useState('');
+  const [campaignMessage, setCampaignMessage] = useState('');
+  const [campaignDrafts, setCampaignDrafts] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('medbook_email_campaign_drafts') || '[]');
+    } catch {
+      return [];
+    }
+  });
+  const [campaignError, setCampaignError] = useState('');
+  const [campaignNotice, setCampaignNotice] = useState('');
   const [isLoadingBookings, setIsLoadingBookings] = useState(false);
   const [bookingLoadError, setBookingLoadError] = useState('');
   const [calendarDate, setCalendarDate] = useState(new Date().toISOString().split('T')[0]);
@@ -1834,8 +1848,80 @@ function AdminPortal({
   };
 
   useEffect(() => {
-    if (activeTab === 'schedule') loadBookingsFromBackend();
+    if (['schedule', 'reports'].includes(activeTab)) loadBookingsFromBackend();
   }, [activeTab]);
+
+  const issueReceipt = async (bookingId) => {
+    setIsIssuingReceipt(true);
+    setReceiptError('');
+    setReceiptNotice('');
+    try {
+      const response = await fetch('/api/booking?view=issue-receipt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bookingId }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+      setIssuedReceipt(data);
+      setReceiptNotice(data.alreadyIssued ? `Receipt ${data.receipt.number} was already emailed.` : `Receipt ${data.receipt.number} was emailed to ${data.booking.email}.`);
+      await loadCalendar();
+    } catch (error) {
+      setReceiptError(error.message || 'Unable to issue receipt');
+    } finally {
+      setIsIssuingReceipt(false);
+    }
+  };
+
+  const saveCampaignDraft = (event) => {
+    event.preventDefault();
+    setCampaignError('');
+    setCampaignNotice('');
+    if (!campaignSubject.trim() || !campaignMessage.trim()) {
+      setCampaignError('Add a subject and message before saving the campaign draft.');
+      return;
+    }
+    const draft = {
+      id: crypto.randomUUID(),
+      subject: campaignSubject.trim(),
+      preview: campaignPreview.trim(),
+      message: campaignMessage.trim(),
+      updatedAt: new Date().toISOString(),
+    };
+    const nextDrafts = [draft, ...campaignDrafts];
+    try {
+      localStorage.setItem('medbook_email_campaign_drafts', JSON.stringify(nextDrafts));
+      setCampaignDrafts(nextDrafts);
+      setCampaignNotice('Campaign saved as a draft on this device. It has not been sent.');
+    } catch {
+      setCampaignError('Could not save the draft in this browser. Check available browser storage and try again.');
+    }
+  };
+
+  const removeCampaignDraft = (draftId) => {
+    const nextDrafts = campaignDrafts.filter((draft) => draft.id !== draftId);
+    try {
+      localStorage.setItem('medbook_email_campaign_drafts', JSON.stringify(nextDrafts));
+      setCampaignDrafts(nextDrafts);
+    } catch {
+      setCampaignError('Could not update saved drafts in this browser.');
+    }
+  };
+
+  const printIssuedReceipt = (data) => {
+    const popup = window.open('', '_blank', 'width=800,height=900');
+    if (!popup) {
+      setReceiptError('Allow pop-ups to print the receipt.');
+      return;
+    }
+    const safe = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[char]));
+    const { receipt, booking, businessProfile: profile } = data;
+    popup.document.write(`<!doctype html><html><head><title>Receipt ${safe(receipt.number)}</title><meta charset="utf-8"><style>body{font:15px Arial,sans-serif;color:#17231e;max-width:760px;margin:48px auto;padding:32px}header{display:flex;justify-content:space-between;border-bottom:3px solid #087765;padding-bottom:20px}h1{font-size:28px;margin:0}small,.muted{color:#65716b}.row{display:flex;justify-content:space-between;padding:12px 0;border-bottom:1px solid #e5ebe7}.total{font-size:20px;font-weight:bold;border-top:2px solid #087765;margin-top:18px;padding-top:18px}button{margin:24px 0;padding:10px 18px;background:#073d32;color:white;border:0;border-radius:8px}@media print{button{display:none}body{margin:0 auto}}</style></head><body><header><div><h1>${safe(profile.businessName)}</h1><p class="muted">${safe(profile.legalName)}</p><p class="muted">${safe(profile.address)}</p><p class="muted">${safe(profile.phone)} · ${safe(profile.email)}</p>${profile.taxRegistrationNumber ? `<p class="muted">GST/HST No.: ${safe(profile.taxRegistrationNumber)}</p>` : ''}</div><h1>RECEIPT</h1></header><p><strong>Receipt No.</strong> ${safe(receipt.number)}<br><strong>Issued</strong> ${safe(receipt.issuedAt.slice(0, 10))}</p><p><strong>Client</strong> ${safe(booking.customerName)}<br>${safe(booking.email)}<br>${safe(booking.phone)}</p><p><strong>Service date</strong> ${safe(booking.date)}<br><strong>Payment method</strong> ${safe(booking.paymentOption)}</p><div class="row"><strong>${safe(booking.serviceName)}</strong><span>$${receipt.subtotal.toFixed(2)}</span></div><div class="row"><span>${safe(receipt.taxLabel)}</span><span>$${receipt.tax.toFixed(2)}</span></div><div class="row total"><span>Total paid</span><span>$${receipt.total.toFixed(2)}</span></div><p class="muted" style="text-align:center;margin-top:64px">Thank you for choosing ${safe(profile.businessName)}.</p><button onclick="window.print()">Print receipt</button></body></html>`);
+    popup.document.close();
+    popup.focus();
+  };
 
   const loadCalendar = async () => {
     setIsLoadingCalendar(true);
@@ -1890,66 +1976,27 @@ function AdminPortal({
     ? Object.entries(selectedPatientHistory.conditions).filter(([, value]) => value.toLowerCase() === 'yes')
     : [];
 
-  const handleSaveWebhook = (e) => {
-    e.preventDefault();
-    onUpdateWebhookUrl(inputUrl);
-    setTestResult({ type: 'success', msg: 'Google Apps Script Webhook URL saved successfully!' });
-  };
-
-  const handleTestPing = async () => {
-    if (!inputUrl) {
-      setTestResult({ type: 'error', msg: 'Please enter a valid Google Apps Script URL first.' });
-      return;
-    }
-    setIsTesting(true);
-    setTestResult(null);
-
-    const testPayload = {
-      id: "TEST-PING-" + Math.floor(Math.random() * 8999 + 1000),
-      customerName: "TEST CUSTOMER",
-      phone: "+1 437 898 7424",
-      email: "mythaithaimassage@gmail.com",
-      branchName: "Mississauga Central",
-      serviceName: "Thai Traditional Massage (60 min)",
-      therapistName: "Kanya S.",
-      date: new Date().toISOString().split('T')[0],
-      time: "12:00 PM",
-      paymentOption: "deposit",
-      paidAmount: "20.00",
-      totalAmount: "107.35"
-    };
-
-    const res = await sendBookingToGoogleSheets(inputUrl, testPayload);
-    setIsTesting(false);
-    if (res.success) {
-      setTestResult({ type: 'success', msg: 'Test payload sent to Google Apps Script successfully! Check your Master Google Sheet.' });
-    } else {
-      setTestResult({ type: 'error', msg: `Connection failed: ${res.reason}` });
-    }
-  };
-
   const adminNavigation = [
     { id: 'schedule', label: 'Home', icon: Home, section: 'Workspace' },
     { id: 'calendar', label: 'Booking Calendar', icon: CalendarDays, section: 'Workspace' },
     { id: 'schedule', label: 'Events & bookings', icon: CalendarIcon, section: 'Workspace' },
-    { id: 'financials', label: 'Getting paid', icon: CardIcon, section: 'Workspace' },
-    { id: 'financials', label: 'Sales & reports', icon: BarChart3, section: 'Workspace' },
+    { id: 'reports', label: 'Sales & reports', icon: BarChart3, section: 'Workspace' },
     { id: 'services', label: 'Service catalogue', icon: Layers, section: 'Manage' },
     { id: 'staff', label: 'Staff', icon: Users, section: 'Manage' },
     { id: 'patient-history', label: 'Patients', icon: UserRound, section: 'Manage' },
     { id: 'business-profile', label: 'Business profile', icon: Building, section: 'Manage' },
-    { id: 'sheets', label: 'Integrations', icon: Database, section: 'Manage' },
-    { id: 'business-profile', label: 'Settings', icon: Settings, section: 'Manage' },
+    { id: 'marketing', label: 'Email marketing', icon: Megaphone, section: 'Grow' },
   ];
+  const navigationSections = ['Workspace', 'Manage', 'Grow'];
   const pageTitle = {
     schedule: t.schedule,
     calendar: 'Booking Calendar',
-    financials: t.financials,
+    reports: 'Sales & reports',
+    marketing: 'Email marketing',
     services: t.services,
     staff: t.staff,
     'patient-history': 'Patient Summary',
     'business-profile': 'Business profile',
-    sheets: 'Integrations',
   }[activeTab] || 'Owner dashboard';
 
   return (
@@ -1966,7 +2013,7 @@ function AdminPortal({
           <div className="rounded-lg border border-white/10 bg-white/[0.06] px-3 py-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Quick actions <ChevronRightIcon className="float-right h-3.5 w-3.5 rotate-90" /></div>
         </div>
         <nav aria-label="Owner dashboard navigation" className="flex-1 overflow-y-auto px-3 pb-4">
-          {['Workspace', 'Manage'].map((section) => (
+          {navigationSections.map((section) => (
             <div key={section} className="mb-5">
               <p className="px-3 pb-2 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">{section}</p>
               <div className="space-y-1">
@@ -2241,10 +2288,10 @@ function AdminPortal({
                     <div className="p-2 text-[11px] text-stone-400 text-right border-r border-stone-100">{hourLabel}</div>
                     <div className="p-1.5 space-y-1">
                       {hourEvents.map((event) => (
-                        <div key={event.id} className={`rounded-lg border-l-4 px-3 py-2 text-xs ${getTherapistCalendarColor(event.therapistName, therapists).event}`}>
+                        <button key={event.id} type="button" onClick={() => { setSelectedCalendarEvent(event); setIssuedReceipt(null); setReceiptError(''); setReceiptNotice(''); }} className={`block w-full rounded-lg border-l-4 px-3 py-2 text-left text-xs transition hover:brightness-95 ${getTherapistCalendarColor(event.therapistName, therapists).event}`}>
                           <div className={`font-bold ${getTherapistCalendarColor(event.therapistName, therapists).text}`}>{event.summary}</div>
-                            <div className={getTherapistCalendarColor(event.therapistName, therapists).text}>{event.localTime} · {event.therapistName || event.calendarName.replace(' - MY THAI THAI', '')}</div>
-                        </div>
+                          <div className={getTherapistCalendarColor(event.therapistName, therapists).text}>{event.localTime} · {event.therapistName || event.calendarName.replace(' - MY THAI THAI', '')}</div>
+                        </button>
                       ))}
                     </div>
                   </div>
@@ -2279,109 +2326,20 @@ function AdminPortal({
             <div className="space-y-3">
               {calendarEvents.map((event) => (
                 <div key={event.id} className={`p-4 rounded-xl border border-stone-200 ${getTherapistCalendarColor(event.therapistName, therapists).event}`}>
-                  <div className="flex flex-wrap justify-between gap-2">
-                    <span className="font-bold text-stone-900">{event.summary}</span>
-                    <span className="text-sm font-semibold text-emerald-800">{event.localTime}</span>
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <button type="button" onClick={() => { setSelectedCalendarEvent(event); setIssuedReceipt(null); setReceiptError(''); setReceiptNotice(''); }} className="min-w-0 text-left">
+                      <span className="font-bold text-stone-900">{event.summary}</span>
+                      <span className="mt-1 block text-xs text-stone-500">{event.therapistName || event.calendarName} · {event.location}</span>
+                    </button>
+                    <div className="flex shrink-0 flex-col items-end gap-2">
+                      <span className="text-sm font-semibold text-emerald-800">{event.localTime}</span>
+                      <button type="button" onClick={() => { setSelectedCalendarEvent(event); setIssuedReceipt(null); setReceiptError(''); setReceiptNotice(''); }} className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-white px-2.5 py-1.5 text-[11px] font-bold text-emerald-900 transition hover:bg-emerald-50"><ReceiptText className="h-3.5 w-3.5" />Open appointment</button>
+                    </div>
                   </div>
-                  <div className="text-xs text-stone-500 mt-1">{event.therapistName || event.calendarName} · {event.location}</div>
-                  <p className="text-xs text-stone-600 mt-2 whitespace-pre-line">{event.description}</p>
                 </div>
               ))}
             </div>
           )}
-        </div>
-      )}
-
-      {/* TAB CONTENT: GOOGLE SHEETS API CONFIGURATION */}
-      {activeTab === 'sheets' && (
-        <div className="bg-white rounded-2xl p-6 border border-stone-200 shadow-sm space-y-6">
-          <div>
-            <h2 className="text-lg font-bold text-stone-900 flex items-center">
-              <Database className="w-5 h-5 mr-2 text-emerald-800" />
-              Google Sheets API v4 Integration Settings
-            </h2>
-            <p className="text-xs text-stone-500 mt-1">
-              Direct connection to Google Sheets inside <span className="font-semibold text-stone-800">mythaithaimassage@gmail.com</span> using Google Cloud Console Service Account & Sheets API v4.
-            </p>
-          </div>
-
-          <form onSubmit={handleSaveWebhook} className="space-y-4 bg-stone-50 p-4 sm:p-5 rounded-2xl border border-stone-200">
-            <div>
-              <label className="block text-xs font-bold text-stone-800 mb-1">
-                Backend Google Sheets API Route / Proxy Endpoint
-              </label>
-              <div className="flex flex-col sm:flex-row gap-2">
-                <input
-                  type="text"
-                  placeholder="/api/booking or https://mythaithaimassage.com/api/booking"
-                  value={inputUrl}
-                  onChange={(e) => setInputUrl(e.target.value)}
-                  className="flex-1 p-2.5 rounded-xl border border-stone-300 text-xs focus:ring-2 focus:ring-emerald-600 focus:outline-none font-mono"
-                />
-                <button
-                  type="submit"
-                  className="px-5 py-2.5 bg-emerald-800 text-white font-bold rounded-xl text-xs hover:bg-emerald-900 transition shrink-0"
-                >
-                  Save Route URL
-                </button>
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-stone-200">
-              <span className="text-xs text-stone-500">
-                Integration Status: {sheetsWebhookUrl ? <strong className="text-emerald-700">Custom Route Active ({sheetsWebhookUrl})</strong> : <strong className="text-emerald-700 font-bold">Standard Route (/api/booking) Active</strong>}
-              </span>
-              <button
-                type="button"
-                onClick={handleTestPing}
-                disabled={isTesting}
-                className="px-4 py-2 bg-stone-800 text-white text-xs font-semibold rounded-lg hover:bg-stone-900 transition flex items-center disabled:opacity-50"
-              >
-                {isTesting ? <RefreshCw className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Send className="w-3.5 h-3.5 mr-1.5" />}
-                Send Test Sheets API Payload
-              </button>
-            </div>
-
-            {testResult && (
-              <div className={`p-3 rounded-xl text-xs font-medium ${testResult.type === 'success' ? 'bg-emerald-100 text-emerald-900 border border-emerald-300' : 'bg-red-100 text-red-900 border border-red-300'}`}>
-                {testResult.msg}
-              </div>
-            )}
-          </form>
-
-          {/* Reference Google Sheets API Code Box */}
-          <div className="space-y-2">
-            <h3 className="text-sm font-bold text-stone-900">Backend API Route (`/api/booking.js`) - Official Google Sheets API v4</h3>
-            <pre className="bg-stone-900 text-stone-200 p-4 rounded-xl text-xs overflow-x-auto font-mono">
-{`// api/booking.js - Node.js Serverless Function using 'googleapis'
-import { google } from 'googleapis';
-
-export default async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).end();
-
-  const auth = new google.auth.GoogleAuth({
-    credentials: {
-      client_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
-      private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\\\n/g, '\\n'),
-    },
-    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
-  });
-
-  const sheets = google.sheets({ version: 'v4', auth });
-
-  await sheets.spreadsheets.values.append({
-    spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-    range: 'Sheet1!A:M',
-    valueInputOption: 'USER_ENTERED',
-    requestBody: {
-      values: [Object.values(req.body)]
-    }
-  });
-
-  return res.status(200).json({ status: 'success' });
-}`}
-            </pre>
-          </div>
         </div>
       )}
 
@@ -2630,6 +2588,50 @@ export default async function handler(req, res) {
         </div>
       )}
 
+      {activeTab === 'marketing' && (
+        <div className="space-y-5">
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+            <div className="flex items-start gap-4">
+              <span className="rounded-xl bg-violet-50 p-3 text-violet-800"><Megaphone className="h-5 w-5" /></span>
+              <div>
+                <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-violet-800">Grow your practice</p>
+                <h2 className="mt-1 text-xl font-bold text-slate-950">Email marketing</h2>
+                <p className="mt-1 max-w-2xl text-sm text-slate-500">Create and save campaign drafts for future patient outreach.</p>
+              </div>
+            </div>
+            <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-950">
+              Campaign sending is not enabled. Before marketing emails can be sent, configure a consent-based subscriber list and unsubscribe handling. Appointment receipts remain separate transactional emails.
+            </div>
+          </section>
+          {campaignError && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{campaignError}</div>}
+          {campaignNotice && <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">{campaignNotice}</div>}
+          <div className="grid gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(300px,0.8fr)]">
+            <form onSubmit={saveCampaignDraft} className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+              <div><h3 className="font-bold text-slate-900">Campaign draft</h3><p className="mt-1 text-xs text-slate-500">Drafts are saved in this browser only. Nothing is sent.</p></div>
+              <label className="block"><span className="mb-1.5 block text-xs font-semibold text-slate-700">Subject line</span><input maxLength={180} required value={campaignSubject} onChange={(event) => setCampaignSubject(event.target.value)} placeholder="A little time for yourself…" className="w-full rounded-xl border border-slate-200 px-3.5 py-3 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" /></label>
+              <label className="block"><span className="mb-1.5 block text-xs font-semibold text-slate-700">Preview text</span><input maxLength={200} value={campaignPreview} onChange={(event) => setCampaignPreview(event.target.value)} placeholder="A short summary shown in the inbox" className="w-full rounded-xl border border-slate-200 px-3.5 py-3 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" /></label>
+              <label className="block"><span className="mb-1.5 block text-xs font-semibold text-slate-700">Message</span><textarea required rows={8} maxLength={5000} value={campaignMessage} onChange={(event) => setCampaignMessage(event.target.value)} placeholder="Write a helpful, considerate message for your subscribers…" className="w-full resize-y rounded-xl border border-slate-200 px-3.5 py-3 text-sm leading-6 outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" /></label>
+              <div className="flex flex-wrap justify-between gap-3 border-t border-slate-100 pt-4">
+                <span className="self-center text-[11px] text-slate-400">{campaignMessage.length}/5000 characters</span>
+                <button type="submit" className="inline-flex items-center gap-2 rounded-xl bg-emerald-950 px-4 py-2.5 text-xs font-bold text-white transition hover:bg-emerald-800"><Check className="h-4 w-4" />Save draft</button>
+              </div>
+            </form>
+            <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+              <div className="mb-4 flex items-center gap-2"><Eye className="h-4 w-4 text-slate-500" /><h3 className="font-bold text-slate-900">Email preview</h3></div>
+              <div className="overflow-hidden rounded-xl border border-slate-200">
+                <div className="border-b border-slate-100 bg-slate-50 px-4 py-3"><p className="text-[10px] text-slate-400">MY THAI THAI · to your subscribers</p><p className="mt-1 text-xs font-bold text-slate-800">{campaignSubject || 'Your campaign subject'}</p><p className="mt-1 truncate text-[11px] text-slate-500">{campaignPreview || 'Preview text appears here'}</p></div>
+                <div className="min-h-48 whitespace-pre-wrap px-5 py-5 text-sm leading-6 text-slate-700">{campaignMessage || 'Your message preview will appear here as you write.'}</div>
+              </div>
+              <p className="mt-3 text-[11px] leading-5 text-slate-500">Sending is intentionally unavailable until a compliant, opt-in contact list and unsubscribe process are configured.</p>
+            </section>
+          </div>
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="mb-4 flex items-center justify-between"><div><h3 className="font-bold text-slate-900">Saved drafts</h3><p className="mt-1 text-xs text-slate-500">Stored only on this device</p></div><span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600">{campaignDrafts.length}</span></div>
+            {campaignDrafts.length ? <div className="space-y-2">{campaignDrafts.map((draft) => <div key={draft.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-100 p-3"><button type="button" onClick={() => { setCampaignSubject(draft.subject); setCampaignPreview(draft.preview); setCampaignMessage(draft.message); setCampaignNotice('Draft loaded for editing.'); setCampaignError(''); }} className="min-w-0 flex-1 text-left"><span className="block truncate text-sm font-semibold text-slate-800">{draft.subject}</span><span className="text-[10px] text-slate-400">Updated {new Date(draft.updatedAt).toLocaleString()}</span></button><button type="button" onClick={() => removeCampaignDraft(draft.id)} className="rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-500 hover:bg-rose-50 hover:text-rose-700">Delete</button></div>)}</div> : <p className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">No campaign drafts saved yet.</p>}
+          </section>
+        </div>
+      )}
+
       {activeTab === 'business-profile' && (
         <section className="overflow-hidden rounded-3xl border border-slate-200/80 bg-white shadow-sm">
           <div className="border-b border-slate-100 bg-gradient-to-r from-white to-emerald-50/60 px-5 py-5 sm:px-8">
@@ -2661,12 +2663,14 @@ export default async function handler(req, res) {
               <form onSubmit={saveBusinessProfile} className="space-y-5">
                 <div className="grid gap-5 sm:grid-cols-2">
                   {[
-                    { key: 'businessName', label: 'Business name', type: 'text', required: true, placeholder: 'MY THAI THAI' },
+                    { key: 'businessName', label: 'Business name / display name', type: 'text', required: true, placeholder: 'MY THAI THAI' },
+                    { key: 'legalName', label: 'Legal business name', type: 'text', placeholder: 'Legal name for receipts' },
                     { key: 'tagline', label: 'Short description', type: 'text', placeholder: 'Traditional Thai massage & wellness' },
                     { key: 'email', label: 'Business email', type: 'email', placeholder: 'hello@example.com' },
                     { key: 'phone', label: 'Phone number', type: 'tel', placeholder: '+1 437 898 7424' },
                     { key: 'website', label: 'Website', type: 'url', placeholder: 'https://example.com' },
                     { key: 'address', label: 'Business location', type: 'text', placeholder: 'City, Province' },
+                    { key: 'taxRegistrationNumber', label: 'GST/HST registration number', type: 'text', placeholder: 'Optional — enter only your registered number' },
                   ].map((field) => (
                     <label key={field.key} className={`block ${field.key === 'businessName' || field.key === 'tagline' ? 'sm:col-span-2' : ''}`}>
                       <span className="mb-1.5 block text-xs font-semibold text-slate-700">{field.label}{field.required && <span className="ml-1 text-rose-600">*</span>}</span>
@@ -2700,12 +2704,14 @@ export default async function handler(req, res) {
                   {(businessProfile.businessName || 'MT').split(/\s+/).filter(Boolean).slice(0, 2).map((word) => word[0]).join('').toUpperCase()}
                 </div>
                 <h3 className="mt-4 text-lg font-bold text-slate-900">{businessProfile.businessName || 'Your business name'}</h3>
+                {businessProfile.legalName && <p className="mt-0.5 text-xs text-slate-500">{businessProfile.legalName}</p>}
                 <p className="mt-1 text-sm leading-5 text-slate-500">{businessProfile.tagline || 'Add a short introduction to your practice.'}</p>
                 <div className="mt-5 space-y-3 border-t border-slate-200 pt-4 text-sm text-slate-600">
                   {businessProfile.email && <div className="flex items-start gap-2.5"><Mail className="mt-0.5 h-4 w-4 shrink-0 text-emerald-800" /><span className="break-all">{businessProfile.email}</span></div>}
                   {businessProfile.phone && <div className="flex items-start gap-2.5"><Phone className="mt-0.5 h-4 w-4 shrink-0 text-emerald-800" /><span>{businessProfile.phone}</span></div>}
                   {businessProfile.website && <div className="flex items-start gap-2.5"><Globe className="mt-0.5 h-4 w-4 shrink-0 text-emerald-800" /><span className="break-all">{businessProfile.website}</span></div>}
                   {businessProfile.address && <div className="flex items-start gap-2.5"><MapPin className="mt-0.5 h-4 w-4 shrink-0 text-emerald-800" /><span>{businessProfile.address}</span></div>}
+                  {businessProfile.taxRegistrationNumber && <div className="text-xs text-slate-500">GST/HST No. {businessProfile.taxRegistrationNumber}</div>}
                 </div>
               </aside>
             </div>
@@ -2803,23 +2809,136 @@ export default async function handler(req, res) {
         </div>
       )}
 
-      {activeTab === 'financials' && (
-        <div className="bg-white rounded-2xl p-6 border border-stone-200 shadow-sm space-y-4">
-          <h2 className="text-lg font-bold text-stone-900">{t.financials}</h2>
-          <div className="p-4 bg-emerald-50 rounded-xl border border-emerald-200 space-y-2 text-xs sm:text-sm">
-            <div className="flex justify-between font-bold text-emerald-900">
-              <span>Gross Booking Volume:</span>
-              <span>${totalRevenue.toFixed(2)} CAD</span>
+      {activeTab === 'reports' && (
+        <div className="space-y-5">
+          <div className="flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-emerald-800">Business intelligence</p>
+              <h2 className="mt-1 text-xl font-bold text-slate-950">Sales & reports</h2>
+              <p className="mt-1 text-sm text-slate-500">Track sales, collections, and appointment trends.</p>
             </div>
-            <div className="flex justify-between text-emerald-800">
-              <span>Estimated HST Collected (Ontario 13%):</span>
-              <span>${hstCollected.toFixed(2)} CAD</span>
-            </div>
-            <div className="flex justify-between text-emerald-800">
-              <span>Net Spa Revenue:</span>
-              <span>${(totalRevenue - hstCollected).toFixed(2)} CAD</span>
+            <div className="flex flex-wrap items-end gap-3">
+              <label className="text-[11px] font-semibold text-slate-500">From<input type="date" value={reportStartDate} max={reportEndDate} onChange={(event) => setReportStartDate(event.target.value)} className="mt-1 block rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-800" /></label>
+              <label className="text-[11px] font-semibold text-slate-500">To<input type="date" value={reportEndDate} min={reportStartDate} onChange={(event) => setReportEndDate(event.target.value)} className="mt-1 block rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-800" /></label>
+              <button onClick={loadBookingsFromBackend} disabled={isLoadingBookings} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">{isLoadingBookings ? 'Refreshing…' : 'Refresh data'}</button>
             </div>
           </div>
+          {bookingLoadError && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{bookingLoadError}</div>}
+          {(() => {
+            const branchName = selectedBranchId === 'all' ? '' : branches.find((branch) => String(branch.id) === String(selectedBranchId))?.name || '';
+            const rows = bookings.filter((booking) => booking.date >= reportStartDate && booking.date <= reportEndDate && (!branchName || booking.branchName === branchName));
+            const bookedSales = rows.reduce((sum, booking) => sum + (Number(booking.total) || 0), 0);
+            const collected = rows.reduce((sum, booking) => sum + (Number(booking.paidAmount) || 0), 0);
+            const outstanding = Math.max(0, bookedSales - collected);
+            const taxCollected = rows.reduce((sum, booking) => {
+              const total = Number(booking.total) || 0;
+              return sum + (/registered massage therapy|\brmt\b|acupuncture/i.test(booking.serviceName || '') ? 0 : total - total / 1.13);
+            }, 0);
+            const trend = Array.from({ length: 7 }, (_, index) => {
+              const day = new Date(`${reportEndDate}T12:00:00`);
+              day.setDate(day.getDate() - (6 - index));
+              const key = day.toISOString().slice(0, 10);
+              return { key, label: day.toLocaleDateString('en-CA', { month: 'short', day: 'numeric' }), value: rows.filter((booking) => booking.date === key).reduce((sum, booking) => sum + (Number(booking.paidAmount) || 0), 0) };
+            });
+            const maxTrend = Math.max(1, ...trend.map((item) => item.value));
+            const serviceTotals = Object.values(rows.reduce((totals, booking) => {
+              const key = booking.serviceName || 'Other';
+              totals[key] ||= { name: key, count: 0, revenue: 0 };
+              totals[key].count += 1;
+              totals[key].revenue += Number(booking.total) || 0;
+              return totals;
+            }, {})).sort((a, b) => b.revenue - a.revenue).slice(0, 5);
+            const stats = [
+              ['Gross sales', bookedSales, 'bg-emerald-50 text-emerald-800', TrendingUp],
+              ['Payments collected', collected, 'bg-blue-50 text-blue-800', CreditCard],
+              ['Balance outstanding', outstanding, 'bg-amber-50 text-amber-800', AlertCircle],
+              ['Appointments', rows.length, 'bg-violet-50 text-violet-800', CalendarIcon],
+            ];
+            return (
+              <>
+                <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                  {stats.map(([label, value, style, Icon]) => <div key={label} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="flex items-center justify-between text-xs font-semibold text-slate-500">{label}<span className={`rounded-xl p-2 ${style}`}><Icon className="h-4 w-4" /></span></div><div className="mt-3 text-2xl font-bold tracking-tight text-slate-950">{label === 'Appointments' ? value : `$${Number(value).toFixed(2)}`}</div><p className="mt-1 text-[11px] text-slate-400">Selected reporting period</p></div>)}
+                </div>
+                <div className="grid gap-5 xl:grid-cols-[minmax(0,1.4fr)_minmax(300px,0.8fr)]">
+                  <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                    <div className="flex items-start justify-between"><div><h3 className="font-bold text-slate-900">Payments collected</h3><p className="mt-1 text-xs text-slate-500">Daily totals · last 7 days in this period</p></div><span className="text-xs font-bold text-emerald-800">${collected.toFixed(2)}</span></div>
+                    <div className="mt-7 flex h-48 items-end gap-3 border-b border-slate-100 px-1">
+                      {trend.map((item) => <div key={item.key} className="flex h-full flex-1 flex-col items-center justify-end gap-2"><div className="flex w-full flex-1 items-end"><div title={`$${item.value.toFixed(2)}`} className="w-full rounded-t-md bg-gradient-to-t from-emerald-800 to-emerald-500 transition hover:from-emerald-700" style={{ height: `${Math.max(item.value ? 8 : 2, (item.value / maxTrend) * 100)}%` }} /></div><span className="pb-2 text-[10px] text-slate-400">{item.label}</span></div>)}
+                    </div>
+                    <p className="mt-4 text-xs text-slate-500">Estimated HST collected: <strong className="text-slate-800">${taxCollected.toFixed(2)}</strong></p>
+                  </section>
+                  <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                    <h3 className="font-bold text-slate-900">Top services</h3><p className="mt-1 text-xs text-slate-500">By gross sales in selected period</p>
+                    <div className="mt-5 space-y-4">
+                      {serviceTotals.length ? serviceTotals.map((service) => <div key={service.name}><div className="mb-1.5 flex justify-between gap-3 text-xs"><span className="truncate font-semibold text-slate-700">{service.name}</span><span className="shrink-0 font-bold text-slate-900">${service.revenue.toFixed(2)}</span></div><div className="h-1.5 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-emerald-700" style={{ width: `${Math.max(5, (service.revenue / Math.max(1, serviceTotals[0].revenue)) * 100)}%` }} /></div><p className="mt-1 text-[10px] text-slate-400">{service.count} appointment{service.count === 1 ? '' : 's'}</p></div>) : <p className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">No sales recorded for this date range.</p>}
+                    </div>
+                  </section>
+                </div>
+                <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <div className="mb-4 flex items-center justify-between"><div><h3 className="font-bold text-slate-900">Recent sales</h3><p className="mt-1 text-xs text-slate-500">Appointment totals and payments received</p></div><span className="rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold text-slate-600">{rows.length} records</span></div>
+                  <div className="overflow-x-auto"><table className="w-full min-w-[700px] text-left text-xs"><thead><tr className="border-b border-slate-100 text-[10px] uppercase tracking-wider text-slate-400"><th className="py-3 pr-4">Date / receipt</th><th className="py-3 pr-4">Patient</th><th className="py-3 pr-4">Service</th><th className="py-3 pr-4">Location</th><th className="py-3 pr-4 text-right">Paid</th><th className="py-3 text-right">Total</th></tr></thead><tbody>{rows.slice().sort((a, b) => `${b.date} ${b.time}`.localeCompare(`${a.date} ${a.time}`)).slice(0, 12).map((booking) => <tr key={booking.id} className="border-b border-slate-50 text-slate-600"><td className="py-3 pr-4"><span className="font-semibold text-slate-800">{booking.date}</span><span className="block font-mono text-[10px] text-slate-400">{booking.id}</span></td><td className="py-3 pr-4">{booking.customerName}</td><td className="py-3 pr-4">{booking.serviceName}</td><td className="py-3 pr-4">{booking.branchName}</td><td className="py-3 pr-4 text-right font-semibold">${(Number(booking.paidAmount) || 0).toFixed(2)}</td><td className="py-3 text-right font-bold text-slate-900">${(Number(booking.total) || 0).toFixed(2)}</td></tr>)}</tbody></table>{rows.length === 0 && <p className="py-8 text-center text-sm text-slate-500">No bookings in this reporting period.</p>}</div>
+                </section>
+              </>
+            );
+          })()}
+        </div>
+      )}
+
+      {selectedCalendarEvent && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center overflow-y-auto bg-slate-950/55 p-4 backdrop-blur-sm" onClick={(event) => { if (event.target === event.currentTarget) setSelectedCalendarEvent(null); }}>
+          <section role="dialog" aria-modal="true" aria-labelledby="appointment-receipt-title" className="my-auto w-full max-w-xl overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-start justify-between gap-4 bg-gradient-to-r from-slate-950 to-emerald-900 px-5 py-5 text-white sm:px-6">
+              <div><p className="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-200">Appointment details</p><h2 id="appointment-receipt-title" className="mt-1 text-lg font-bold">{issuedReceipt?.booking?.customerName || selectedCalendarEvent.booking?.customerName || selectedCalendarEvent.summary}</h2><p className="mt-1 text-xs text-emerald-100/80">{selectedCalendarEvent.booking?.id || 'Calendar event'} · {selectedCalendarEvent.localTime}</p></div>
+              <button type="button" aria-label="Close appointment details" onClick={() => setSelectedCalendarEvent(null)} className="rounded-lg p-1.5 text-white/80 hover:bg-white/10 hover:text-white"><X className="h-5 w-5" /></button>
+            </div>
+            <div className="space-y-5 p-5 sm:p-6">
+              {receiptError && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-sm text-rose-800">{receiptError}</div>}
+              {receiptNotice && <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm text-emerald-900">{receiptNotice}</div>}
+              {(() => {
+                const booking = issuedReceipt?.booking || selectedCalendarEvent.booking;
+                const paidInFull = booking && Number(booking.total) > 0 && Number(booking.paidAmount) + 0.005 >= Number(booking.total);
+                return booking ? (
+                  <>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {[
+                        ['Patient', booking.customerName],
+                        ['Email', booking.email || 'No email on booking'],
+                        ['Phone', booking.phone || 'Not provided'],
+                        ['Booking reference', booking.id],
+                        ['Service', booking.serviceName],
+                        ['Service date', booking.date],
+                        ['Therapist', booking.therapistName || selectedCalendarEvent.therapistName],
+                        ['Payment method', booking.paymentOption || 'Not recorded'],
+                      ].map(([label, value]) => <div key={label} className="rounded-xl border border-slate-100 bg-slate-50 px-3.5 py-3"><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{label}</p><p className="mt-1 break-words text-sm font-semibold text-slate-800">{value || 'Not recorded'}</p></div>)}
+                    </div>
+                    <div className="rounded-xl border border-slate-200 px-4 py-3">
+                      <div className="flex justify-between text-sm text-slate-500"><span>Amount paid</span><span>${Number(booking.paidAmount || 0).toFixed(2)}</span></div>
+                      <div className="mt-2 flex justify-between text-sm font-bold text-slate-900"><span>Appointment total</span><span>${Number(booking.total || 0).toFixed(2)}</span></div>
+                    </div>
+                    {issuedReceipt && (
+                      <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-4">
+                        <div className="flex items-center justify-between"><div><p className="text-[10px] font-bold uppercase tracking-wider text-emerald-800">Receipt issued</p><p className="mt-1 font-mono text-sm font-bold text-slate-900">{issuedReceipt.receipt.number}</p></div><CheckCircle2 className="h-5 w-5 text-emerald-700" /></div>
+                        <div className="mt-3 flex justify-between border-t border-emerald-100 pt-3 text-sm"><span className="text-slate-600">{issuedReceipt.receipt.taxLabel}</span><span>${issuedReceipt.receipt.tax.toFixed(2)}</span></div>
+                        <div className="mt-2 flex justify-between text-sm font-bold"><span>Total paid</span><span>${issuedReceipt.receipt.total.toFixed(2)}</span></div>
+                        <p className="mt-3 text-xs text-emerald-900">Receipt email sent to {issuedReceipt.booking.email}.</p>
+                      </div>
+                    )}
+                    {!issuedReceipt && (
+                      <div className="flex flex-col-reverse gap-3 border-t border-slate-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
+                        <p className="text-xs leading-5 text-slate-500">{!paidInFull ? 'Receipts are available only after full payment is recorded.' : !booking.email ? 'Add a valid patient email to the booking before issuing a receipt.' : !booking.id ? 'This appointment is not linked to a booking record.' : 'A receipt will be emailed to the patient and recorded with this booking.'}</p>
+                        <button type="button" disabled={isIssuingReceipt || !paidInFull || !booking.email || !booking.id} onClick={() => issueReceipt(booking.id)} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-emerald-950 px-4 py-2.5 text-xs font-bold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"><ReceiptText className="h-4 w-4" />{isIssuingReceipt ? 'Issuing…' : 'Issue & email receipt'}</button>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-950">
+                    This calendar event is not linked to a booking record in Google Sheets. A patient email and verified payment amount are required to issue a receipt.
+                  </div>
+                );
+              })()}
+            </div>
+            {issuedReceipt && <div className="flex justify-end border-t border-slate-100 bg-slate-50 px-5 py-4"><button type="button" onClick={() => printIssuedReceipt(issuedReceipt)} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-xs font-bold text-slate-700 hover:bg-slate-100"><Download className="h-4 w-4" />Print / save PDF</button></div>}
+          </section>
         </div>
       )}
         </main>

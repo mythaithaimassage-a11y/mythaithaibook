@@ -13,15 +13,19 @@ const THERAPIST_SESSION_SECRET = process.env.THERAPIST_SESSION_SECRET || '';
 const THERAPIST_ACCOUNTS = process.env.THERAPIST_ACCOUNTS || '[]';
 const OWNER_ADMIN_PASSWORD = process.env.OWNER_ADMIN_PASSWORD || '';
 const OWNER_ADMIN_SESSION_SECRET = process.env.OWNER_ADMIN_SESSION_SECRET || '';
-const BUSINESS_PROFILE_FIELDS = ['businessName', 'tagline', 'email', 'phone', 'website', 'address'];
+const BUSINESS_PROFILE_FIELDS = ['businessName', 'legalName', 'tagline', 'email', 'phone', 'website', 'address', 'taxRegistrationNumber'];
+const LEGACY_BUSINESS_PROFILE_FIELDS = ['businessName', 'tagline', 'email', 'phone', 'website', 'address'];
 const DEFAULT_BUSINESS_PROFILE = {
   businessName: 'MY THAI THAI',
+  legalName: '',
   tagline: 'Traditional Thai massage & wellness',
   email: 'mythaithaimassage@gmail.com',
   phone: '+1 437 898 7424',
   website: 'https://mythaithaimassage.com',
   address: 'Ontario, Canada',
+  taxRegistrationNumber: '',
 };
+const RECEIPT_HEADERS = ['Receipt No.', 'Receipt Issued At', 'Receipt Email Status'];
 
 function parseCookies(req) {
   return Object.fromEntries((req.headers.cookie || '').split(';').filter(Boolean).map((part) => {
@@ -270,16 +274,120 @@ async function ensureBusinessProfileSheet(sheets) {
   }
   const header = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range: 'BusinessProfile!A1:F1',
+    range: 'BusinessProfile!A1:H1',
   });
   if (BUSINESS_PROFILE_FIELDS.some((field, index) => header.data.values?.[0]?.[index] !== field)) {
+    const isLegacyProfile = LEGACY_BUSINESS_PROFILE_FIELDS.every(
+      (field, index) => header.data.values?.[0]?.[index] === field,
+    );
+    let migratedProfile;
+    if (isLegacyProfile) {
+      const legacyValues = await sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: 'BusinessProfile!A2:F2',
+      });
+      const legacyRow = legacyValues.data.values?.[0] || [];
+      const legacyProfile = Object.fromEntries(LEGACY_BUSINESS_PROFILE_FIELDS.map((field, index) => [field, legacyRow[index] || '']));
+      migratedProfile = BUSINESS_PROFILE_FIELDS.map((field) => legacyProfile[field] || DEFAULT_BUSINESS_PROFILE[field] || '');
+    }
     await sheets.spreadsheets.values.update({
       spreadsheetId,
-      range: 'BusinessProfile!A1:F1',
+      range: 'BusinessProfile!A1:H1',
       valueInputOption: 'RAW',
       requestBody: { values: [BUSINESS_PROFILE_FIELDS] },
     });
+    if (migratedProfile) {
+      await sheets.spreadsheets.values.update({
+        spreadsheetId,
+        range: 'BusinessProfile!A2:H2',
+        valueInputOption: 'RAW',
+        requestBody: { values: [migratedProfile] },
+      });
+    }
   }
+}
+
+async function getBusinessProfile(sheets) {
+  await ensureBusinessProfileSheet(sheets);
+  const result = await sheets.spreadsheets.values.get({
+    spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+    range: 'BusinessProfile!A1:H2',
+  });
+  const row = result.data.values?.[1] || [];
+  return Object.fromEntries(BUSINESS_PROFILE_FIELDS.map((field, index) => [
+    field,
+    row[index] === undefined ? DEFAULT_BUSINESS_PROFILE[field] : row[index],
+  ]));
+}
+
+async function ensureReceiptHeaders(sheets) {
+  const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
+  const result = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: 'Sheet1!S1:U1',
+  });
+  if (RECEIPT_HEADERS.some((header, index) => result.data.values?.[0]?.[index] !== header)) {
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: 'Sheet1!S1:U1',
+      valueInputOption: 'RAW',
+      requestBody: { values: [RECEIPT_HEADERS] },
+    });
+  }
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+async function sendReceiptEmail(gmail, booking, receipt, businessProfile) {
+  const recipient = String(booking.email || '').trim();
+  if (!/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(recipient)) {
+    throw new Error('A valid patient email is required to email this receipt');
+  }
+  const subject = `Receipt ${receipt.number} - ${businessProfile.businessName}`;
+  const text = [
+    `Receipt ${receipt.number}`,
+    businessProfile.businessName,
+    '',
+    `Client: ${booking.customerName}`,
+    `Service: ${booking.serviceName}`,
+    `Service date: ${booking.date}`,
+    `Payment method: ${booking.paymentOption}`,
+    `Subtotal: $${receipt.subtotal.toFixed(2)}`,
+    `${receipt.taxLabel}: $${receipt.tax.toFixed(2)}`,
+    `Total paid: $${receipt.total.toFixed(2)}`,
+    '',
+    'Thank you for choosing us.',
+  ].join('\n');
+  const html = `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Receipt ${escapeHtml(receipt.number)}</title></head><body style="margin:0;background:#f3f5f4;padding:28px 12px;font-family:Arial,Helvetica,sans-serif;color:#18251f"><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td align="center"><table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width:600px;width:100%;background:#fff;border:1px solid #e2e9e5;border-radius:14px;overflow:hidden"><tr><td style="padding:28px 32px;background:#073d32;color:#fff"><p style="margin:0 0 8px;font-size:12px;letter-spacing:2px">${escapeHtml(businessProfile.businessName).toUpperCase()}</p><h1 style="margin:0;font-size:25px">Payment receipt</h1></td></tr><tr><td style="padding:26px 32px"><p style="margin:0 0 6px;font-weight:bold">${escapeHtml(businessProfile.legalName || businessProfile.businessName)}</p><p style="margin:0 0 4px;color:#66736d">${escapeHtml(businessProfile.address)}</p><p style="margin:0 0 4px;color:#66736d">${escapeHtml(businessProfile.phone)} · ${escapeHtml(businessProfile.email)}</p>${businessProfile.taxRegistrationNumber ? `<p style="margin:0 0 20px;color:#66736d">GST/HST No.: ${escapeHtml(businessProfile.taxRegistrationNumber)}</p>` : '<div style="height:20px"></div>'}<p style="margin:0 0 6px"><strong>Receipt No.</strong> ${escapeHtml(receipt.number)}</p><p style="margin:0 0 22px;color:#66736d">Issued ${escapeHtml(receipt.issuedAt.slice(0, 10))}</p><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse"><tr><td style="padding:10px 0;border-bottom:1px solid #e6ebe8;color:#64716b">Client</td><td align="right" style="padding:10px 0;border-bottom:1px solid #e6ebe8;font-weight:bold">${escapeHtml(booking.customerName)}</td></tr><tr><td style="padding:10px 0;border-bottom:1px solid #e6ebe8;color:#64716b">Email</td><td align="right" style="padding:10px 0;border-bottom:1px solid #e6ebe8">${escapeHtml(booking.email)}</td></tr><tr><td style="padding:10px 0;border-bottom:1px solid #e6ebe8;color:#64716b">Service</td><td align="right" style="padding:10px 0;border-bottom:1px solid #e6ebe8">${escapeHtml(booking.serviceName)}</td></tr><tr><td style="padding:10px 0;border-bottom:1px solid #e6ebe8;color:#64716b">Service date</td><td align="right" style="padding:10px 0;border-bottom:1px solid #e6ebe8">${escapeHtml(booking.date)}</td></tr><tr><td style="padding:10px 0;color:#64716b">Payment method</td><td align="right" style="padding:10px 0">${escapeHtml(booking.paymentOption)}</td></tr></table><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-top:24px;border-top:2px solid #087765"><tr><td style="padding:10px 0;color:#64716b">Subtotal</td><td align="right" style="padding:10px 0">$${receipt.subtotal.toFixed(2)}</td></tr><tr><td style="padding:8px 0;color:#64716b">${escapeHtml(receipt.taxLabel)}</td><td align="right" style="padding:8px 0">$${receipt.tax.toFixed(2)}</td></tr><tr><td style="padding:14px 0;border-top:1px solid #d8e2dc;font-size:18px;font-weight:bold">Total paid</td><td align="right" style="padding:14px 0;border-top:1px solid #d8e2dc;font-size:18px;font-weight:bold">$${receipt.total.toFixed(2)}</td></tr></table><p style="margin:24px 0 0;text-align:center;color:#64716b">Thank you for choosing ${escapeHtml(businessProfile.businessName)}.</p></td></tr></table></td></tr></table></body></html>`;
+  const boundary = `receipt_${crypto.randomBytes(12).toString('hex')}`;
+  const encode = (value) => Buffer.from(value).toString('base64').match(/.{1,76}/g).join('\r\n');
+  const message = [
+    `From: ${GOOGLE_GMAIL_SENDER_EMAIL}`,
+    `To: ${recipient}`,
+    `Subject: =?UTF-8?B?${Buffer.from(subject).toString('base64')}?=`,
+    'MIME-Version: 1.0',
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    '',
+    `--${boundary}`,
+    'Content-Type: text/plain; charset=UTF-8',
+    'Content-Transfer-Encoding: base64',
+    '',
+    encode(text),
+    `--${boundary}`,
+    'Content-Type: text/html; charset=UTF-8',
+    'Content-Transfer-Encoding: base64',
+    '',
+    encode(html),
+    `--${boundary}--`,
+  ].join('\r\n');
+  await gmail.users.messages.send({ userId: 'me', requestBody: { raw: Buffer.from(message).toString('base64url') } });
 }
 
 function validateBusinessProfile(input) {
@@ -494,13 +602,14 @@ export default async function handler(req, res) {
     if (req.method === 'GET' && !validGetViews.includes(view)) {
       return res.status(404).json({ message: 'Unknown booking view' });
     }
-    const ownerOnlyRequest = req.method === 'GET' && ['', 'calendar', 'patient-history', 'business-profile'].includes(view) ||
-      view === 'business-profile';
+    const ownerOnlyRequest =
+      (req.method === 'GET' && ['', 'calendar', 'patient-history', 'business-profile'].includes(view)) ||
+      ['business-profile', 'issue-receipt'].includes(view);
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
     if (ownerOnlyRequest && !getOwnerSession(req)) {
       return res.status(401).json({ message: 'Owner sign-in required' });
     }
-    if (view === 'business-profile' && req.method === 'POST' && !isSameOriginRequest(req)) {
+    if (['business-profile', 'issue-receipt'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
       return res.status(403).json({ message: 'Profile update origin is not allowed' });
     }
 
@@ -691,7 +800,7 @@ export default async function handler(req, res) {
         await ensureBusinessProfileSheet(sheets);
         const result = await sheets.spreadsheets.values.get({
           spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-          range: 'BusinessProfile!A1:F2',
+          range: 'BusinessProfile!A1:H2',
         });
         const row = result.data.values?.[1] || [];
         const profile = Object.fromEntries(BUSINESS_PROFILE_FIELDS.map((field, index) => [
@@ -745,11 +854,14 @@ export default async function handler(req, res) {
         const therapist = String(req.query.therapist || '').toLowerCase();
         const sheetResult = await sheets.spreadsheets.values.get({
           spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-          range: 'Sheet1!A:R',
+          range: 'Sheet1!A:U',
         });
         const sheetRows = sheetResult.data.values || [];
-        const dataRows = sheetRows[0]?.[0] === 'Booking ID' ? sheetRows.slice(1) : sheetRows;
-        const bookingByEventId = new Map(dataRows.map((row) => [row[16], row[6]]).filter(([id]) => id));
+        const hasHeader = sheetRows[0]?.[0] === 'Booking ID';
+        const dataRows = hasHeader ? sheetRows.slice(1) : sheetRows;
+        const bookingByEventId = new Map(dataRows
+          .map((row) => [row[16], row])
+          .filter(([id]) => id));
         const calendarIds = [...new Set([
           PRIMARY_CALENDAR_ID,
           ...dataRows.map((row) => row[15]).filter(Boolean),
@@ -772,7 +884,8 @@ export default async function handler(req, res) {
               const location = event.location || '';
               const start = event.start?.dateTime || event.start?.date || '';
               const localStart = start ? getLocalDateTime(start) : { date: '', time: '' };
-              const eventTherapist = bookingByEventId.get(event.id) || getTherapistFromDescription(event.description);
+              const bookingRow = bookingByEventId.get(event.id);
+              const eventTherapist = bookingRow?.[6] || getTherapistFromDescription(event.description);
               if (
                 localStart.date === date &&
                 (!branch || location.toLowerCase().includes(branch)) &&
@@ -788,6 +901,23 @@ export default async function handler(req, res) {
                   end: event.end?.dateTime || event.end?.date || '',
                   therapistName: eventTherapist,
                   localTime: localStart.time,
+                  booking: bookingRow ? {
+                    id: bookingRow[0] || '',
+                    customerName: bookingRow[1] || '',
+                    phone: bookingRow[2] || '',
+                    email: bookingRow[3] || '',
+                    branchName: bookingRow[4] || '',
+                    serviceName: bookingRow[5] || '',
+                    therapistName: bookingRow[6] || '',
+                    date: bookingRow[7] || localStart.date,
+                    time: bookingRow[8] || localStart.time,
+                    paymentOption: bookingRow[9] || '',
+                    paidAmount: Number(bookingRow[10]) || 0,
+                    total: Number(bookingRow[11]) || 0,
+                    durationMinutes: Number(bookingRow[12]) || 0,
+                    receiptNumber: bookingRow[18] || '',
+                    receiptEmailStatus: bookingRow[20] || '',
+                  } : null,
                 });
               }
             }
@@ -807,7 +937,7 @@ export default async function handler(req, res) {
 
       const result = await sheets.spreadsheets.values.get({
         spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'Sheet1!A:R',
+        range: 'Sheet1!A:U',
       });
       const rows = result.data.values || [];
       const dataRows = rows[0]?.[0] === 'Booking ID' ? rows.slice(1) : rows;
@@ -831,8 +961,99 @@ export default async function handler(req, res) {
           calendarId: row[15] || '',
           calendarEventId: row[16] || '',
           createdAt: row[17] || '',
+          receiptNumber: row[18] || '',
+          receiptIssuedAt: row[19] || '',
+          receiptEmailStatus: row[20] || '',
           syncedToSheets: true,
         })),
+      });
+    }
+
+    if (req.method === 'POST' && req.query?.view === 'issue-receipt') {
+      const bookingId = String(req.body?.bookingId || '').trim();
+      if (!bookingId || bookingId.length > 100) {
+        return res.status(400).json({ message: 'A valid booking ID is required' });
+      }
+      if (!process.env.GOOGLE_SPREADSHEET_ID) {
+        throw new Error('GOOGLE_SPREADSHEET_ID is not configured');
+      }
+      const result = await sheets.spreadsheets.values.get({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: 'Sheet1!A:U',
+      });
+      const rows = result.data.values || [];
+      const hasHeader = rows[0]?.[0] === 'Booking ID';
+      const startIndex = hasHeader ? 1 : 0;
+      const rowIndex = rows.findIndex((row, index) => index >= startIndex && String(row[0] || '') === bookingId);
+      if (rowIndex < 0) return res.status(404).json({ message: 'Booking was not found in Google Sheets' });
+
+      const row = rows[rowIndex];
+      const booking = {
+        id: row[0] || '',
+        customerName: row[1] || '',
+        phone: row[2] || '',
+        email: row[3] || '',
+        branchName: row[4] || '',
+        serviceName: row[5] || '',
+        therapistName: row[6] || '',
+        date: row[7] || '',
+        time: row[8] || '',
+        paymentOption: row[9] || '',
+        paidAmount: Number(row[10]) || 0,
+        total: Number(row[11]) || 0,
+      };
+      if (!booking.email || !/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(booking.email)) {
+        return res.status(400).json({ message: 'This appointment does not have a valid patient email address' });
+      }
+      if (booking.total <= 0 || booking.paidAmount + 0.005 < booking.total) {
+        return res.status(409).json({ message: 'A receipt can only be issued when the appointment is fully paid' });
+      }
+
+      const businessProfile = await getBusinessProfile(sheets);
+      const isTaxExempt = /registered massage therapy|\brmt\b|acupuncture/i.test(booking.serviceName);
+      const tax = isTaxExempt ? 0 : Math.round((booking.total - booking.total / 1.13) * 100) / 100;
+      const receipt = {
+        number: row[18] || `MTT-${new Date().getFullYear()}-${String(rowIndex + 1).padStart(6, '0')}`,
+        issuedAt: row[19] || new Date().toISOString(),
+        subtotal: Math.round((booking.total - tax) * 100) / 100,
+        tax,
+        taxLabel: isTaxExempt ? 'HST exempt' : 'HST (13%)',
+        total: booking.total,
+      };
+      const sheetRow = rowIndex + 1;
+      if (hasHeader) await ensureReceiptHeaders(sheets);
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: `Sheet1!S${sheetRow}:U${sheetRow}`,
+        valueInputOption: 'RAW',
+        requestBody: { values: [[receipt.number, receipt.issuedAt, row[20] || 'pending']] },
+      });
+
+      if (row[20] !== 'sent') {
+        try {
+          await sendReceiptEmail(createGmailApi(), booking, receipt, businessProfile);
+        } catch (error) {
+          await sheets.spreadsheets.values.update({
+            spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+            range: `Sheet1!U${sheetRow}`,
+            valueInputOption: 'RAW',
+            requestBody: { values: [['failed']] },
+          });
+          throw new Error(`Receipt ${receipt.number} was created but could not be emailed: ${error.message}`);
+        }
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+          range: `Sheet1!U${sheetRow}`,
+          valueInputOption: 'RAW',
+          requestBody: { values: [['sent']] },
+        });
+      }
+      return res.status(200).json({
+        receipt,
+        booking,
+        businessProfile,
+        emailed: true,
+        alreadyIssued: row[20] === 'sent',
       });
     }
 
@@ -841,7 +1062,7 @@ export default async function handler(req, res) {
       await ensureBusinessProfileSheet(sheets);
       await sheets.spreadsheets.values.update({
         spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'BusinessProfile!A2:F2',
+        range: 'BusinessProfile!A2:H2',
         valueInputOption: 'RAW',
         requestBody: { values: [BUSINESS_PROFILE_FIELDS.map((field) => profile[field])] },
       });
