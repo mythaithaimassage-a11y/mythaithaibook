@@ -274,6 +274,52 @@ function BodyAreaMap({ value = '', onChange, readOnly = false }) {
   );
 }
 
+function TherapistDonutCard({ title, subtitle, segments, centerValue, centerLabel }) {
+  const total = segments.reduce((sum, segment) => sum + segment.value, 0);
+  let offset = 0;
+  const gradient = total
+    ? segments.filter((segment) => segment.value > 0).map((segment) => {
+      const start = offset;
+      offset += (segment.value / total) * 100;
+      return `${segment.color} ${start}% ${offset}%`;
+    }).join(', ')
+    : '#e2e8f0 0% 100%';
+
+  return (
+    <section className="min-h-[250px] rounded-xl border border-slate-200 bg-white shadow-sm">
+      <header className="flex items-center justify-between gap-3 rounded-t-xl bg-sky-800 px-4 py-3 text-white">
+        <div>
+          <h3 className="text-sm font-semibold">{title}</h3>
+          <p className="mt-0.5 text-[10px] text-sky-100">{subtitle}</p>
+        </div>
+        <BarChart3 className="h-4 w-4 shrink-0 text-sky-100" />
+      </header>
+      <div className="flex min-h-[190px] items-center justify-between gap-3 p-4">
+        <ul className="min-w-0 flex-1 space-y-2">
+          {segments.map((segment) => (
+            <li key={segment.label} className="flex items-center gap-2 text-[10px] text-slate-600">
+              <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: segment.color }} />
+              <span className="min-w-0 flex-1 truncate">{segment.label}</span>
+              <span className="font-semibold tabular-nums text-slate-800">{segment.value}</span>
+            </li>
+          ))}
+        </ul>
+        <div
+          className="relative grid h-32 w-32 shrink-0 place-items-center rounded-full"
+          role="img"
+          aria-label={`${title}: ${segments.map((segment) => `${segment.label} ${segment.value}`).join(', ')}`}
+          style={{ background: `conic-gradient(${gradient})` }}
+        >
+          <div className="grid h-[5.25rem] w-[5.25rem] place-content-center rounded-full bg-white text-center shadow-inner">
+            <span className="text-xl font-bold leading-6 text-slate-900">{centerValue}</span>
+            <span className="mt-0.5 max-w-[4.75rem] text-[9px] leading-3 text-slate-500">{centerLabel}</span>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export default function App() {
   const [viewMode, setViewMode] = useState('customer'); // 'customer' or 'admin'
   const [adminLang, setAdminLang] = useState('en'); // 'en' or 'th'
@@ -333,7 +379,7 @@ export default function App() {
       </header>
 
       {/* Main View Switcher */}
-      <main className={`flex-1 w-full ${viewMode === 'admin' ? 'p-0' : 'p-3 sm:p-6 max-w-7xl mx-auto'}`}>
+      <main className={`flex-1 w-full ${viewMode === 'admin' || viewMode === 'therapist' ? 'p-0' : 'p-3 sm:p-6 max-w-7xl mx-auto'}`}>
         {viewMode === 'customer' ? (
           <CustomerPortal 
             branches={MOCK_BRANCHES} 
@@ -386,7 +432,6 @@ function TherapistPortal() {
   const [calendarDate, setCalendarDate] = useState(new Date().toISOString().slice(0, 10));
   const [calendarEvents, setCalendarEvents] = useState([]);
   const [selectedAppointment, setSelectedAppointment] = useState(null);
-  const [therapistPanel, setTherapistPanel] = useState('schedule');
   const [workspaceView, setWorkspaceView] = useState('dashboard');
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [professionalProfile, setProfessionalProfile] = useState({ email: '', phone: '', specialties: '', certifications: '', bio: '', updatedAt: '' });
@@ -524,41 +569,101 @@ function TherapistPortal() {
     professionalProfile.email || professionalProfile.phone || professionalProfile.specialties ||
     professionalProfile.certifications || professionalProfile.bio,
   );
+  const treatmentCounts = Object.entries(appointments.reduce((counts, appointment) => {
+    const label = appointment.serviceName || 'Other treatment';
+    counts[label] = (counts[label] || 0) + 1;
+    return counts;
+  }, {})).sort((first, second) => second[1] - first[1]);
+  const treatmentSegments = treatmentCounts.slice(0, 3)
+    .map(([label, value], index) => ({
+      label,
+      value,
+      color: ['#f59e0b', '#4f8fe8', '#18b77a', '#a84bd1'][index],
+    }));
+  const otherTreatmentCount = treatmentCounts.slice(3).reduce((sum, [, value]) => sum + value, 0);
+  if (otherTreatmentCount) {
+    treatmentSegments.push({ label: 'Other treatments', value: otherTreatmentCount, color: '#a84bd1' });
+  }
+  const pressureSegments = ['Light', 'Medium', 'Firm', 'Extra Firm'].map((label, index) => ({
+    label,
+    value: appointments.filter((appointment) => appointment.pressure?.toLowerCase() === label.toLowerCase()).length,
+    color: ['#4f8fe8', '#f59e0b', '#18b77a', '#a84bd1'][index],
+  })).concat([{
+    label: 'Not recorded',
+    value: appointments.filter((appointment) => !appointment.pressure).length,
+    color: '#94a3b8',
+  }]);
+  const notesSegments = [
+    { label: 'Notes recorded', value: appointments.filter((appointment) => appointment.painAreas || appointment.additionalDetails || appointment.bodyAreas).length, color: '#4f8fe8' },
+    { label: 'No notes recorded', value: appointments.filter((appointment) => !appointment.painAreas && !appointment.additionalDetails && !appointment.bodyAreas).length, color: '#a84bd1' },
+  ];
 
   return (
-    <div className="flex flex-col gap-5 lg:flex-row lg:items-start">
-      <aside className="w-full shrink-0 rounded-2xl border border-stone-200 bg-white p-3 shadow-sm lg:sticky lg:top-20 lg:w-64">
-        <div className="mb-3 flex items-center gap-3 rounded-xl bg-slate-950 px-3 py-3 text-white">
+    <div className="min-h-[calc(100vh-7rem)] bg-slate-100">
+      <header className="flex min-h-14 items-center justify-between gap-4 bg-blue-700 px-4 py-2 text-white shadow-sm sm:px-6">
+        <div className="flex items-center gap-3">
+          <div className="grid h-9 w-9 place-items-center rounded-lg border border-white/40 bg-white/10 text-xs font-black">MT</div>
+          <div><p className="text-sm font-black tracking-wide">MY THAI THAI</p><p className="text-[9px] uppercase tracking-[0.18em] text-blue-100">Therapist portal</p></div>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="hidden text-xs text-blue-100 sm:inline">{new Date().toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })}</span>
+          <button type="button" onClick={async () => { setRefreshing(true); try { await loadAppointments(); } catch (refreshError) { setError(refreshError.message || 'Unable to refresh therapist data'); } finally { setRefreshing(false); } }} disabled={refreshing} aria-label="Refresh dashboard" className="rounded-lg p-2 transition hover:bg-blue-600 disabled:opacity-50">
+            <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+          </button>
+          <button type="button" onClick={() => { setWorkspaceView('profile'); setProfileMenuOpen(true); }} aria-label="Open therapist profile" className="flex h-9 w-9 items-center justify-center rounded-full border-2 border-white/70 bg-blue-900 text-xs font-bold">
+            {(therapist.name || 'T').split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase()}
+          </button>
+        </div>
+      </header>
+      <div className="flex min-h-[calc(100vh-10.5rem)] flex-col lg:flex-row">
+      <aside className="w-full shrink-0 bg-blue-700 px-3 py-3 text-white lg:min-h-[calc(100vh-10.5rem)] lg:w-52 lg:px-3">
+        <div className="mb-4 flex items-center gap-3 rounded-xl bg-blue-800/70 px-3 py-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/20 text-sm font-black text-emerald-200">
             {(therapist.name || 'T').split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase()}
           </div>
           <div className="min-w-0">
             <p className="truncate text-sm font-bold">{therapist.name}</p>
-            <p className="text-[10px] text-slate-300">Therapist workspace</p>
+            <p className="text-[10px] text-blue-100">Therapist account</p>
           </div>
         </div>
-        <nav aria-label="Therapist workspace" className="space-y-1">
+        <nav aria-label="Therapist workspace" className="flex gap-1 overflow-x-auto lg:flex-col">
           <button
             type="button"
             onClick={() => setWorkspaceView('dashboard')}
-            className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold transition ${workspaceView === 'dashboard' ? 'bg-emerald-50 text-emerald-900' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-950'}`}
+            className={`flex shrink-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold transition lg:w-full ${workspaceView === 'dashboard' ? 'bg-blue-900 text-white shadow-sm' : 'text-blue-50 hover:bg-blue-600'}`}
+          >
+            <Home className="h-4 w-4" />
+            <span className="flex-1">Dashboard</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => { setWorkspaceView('appointments'); document.getElementById('therapist-calendar')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}
+            className={`flex shrink-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold transition lg:w-full ${workspaceView === 'appointments' ? 'bg-blue-900 text-white shadow-sm' : 'text-blue-50 hover:bg-blue-600'}`}
           >
             <CalendarDays className="h-4 w-4" />
-            <span className="flex-1">Workspace</span>
+            <span className="flex-1">Appointments</span>
           </button>
-          <div className={`rounded-xl ${workspaceView === 'profile' ? 'bg-emerald-50' : ''}`}>
+          <button
+            type="button"
+            onClick={() => { document.getElementById('therapist-patient-notes')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}
+            className="flex shrink-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-blue-50 transition hover:bg-blue-600 lg:w-full"
+          >
+            <Stethoscope className="h-4 w-4" />
+            <span className="flex-1">Patient notes</span>
+          </button>
+          <div className={`relative rounded-xl ${workspaceView === 'profile' ? 'bg-blue-900' : ''}`}>
             <button
               type="button"
               aria-expanded={profileMenuOpen}
               onClick={() => setProfileMenuOpen((open) => !open)}
-              className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold transition ${workspaceView === 'profile' ? 'text-emerald-900' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-950'}`}
+              className={`flex shrink-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold transition lg:w-full ${workspaceView === 'profile' ? 'bg-blue-900 text-white' : 'text-blue-50 hover:bg-blue-600'}`}
             >
               <UserRound className="h-4 w-4" />
-              <span className="flex-1">My profile</span>
+              <span className="flex-1 whitespace-nowrap">My profile</span>
               <ChevronRight className={`h-4 w-4 transition-transform ${profileMenuOpen ? 'rotate-90' : ''}`} />
             </button>
             {profileMenuOpen && (
-              <div className="mb-2 ml-5 border-l border-emerald-100 pl-4">
+              <div className="absolute z-20 mt-1 rounded-xl bg-blue-800 p-2 shadow-lg lg:static lg:mb-2 lg:ml-5 lg:border-l lg:border-blue-400 lg:bg-transparent lg:pl-3 lg:shadow-none">
                 <button
                   type="button"
                   onClick={() => {
@@ -566,25 +671,28 @@ function TherapistPortal() {
                     setProfileError('');
                     setProfileMessage('');
                   }}
-                  className={`w-full rounded-lg px-3 py-2 text-left text-xs font-semibold ${workspaceView === 'profile' ? 'bg-white text-emerald-900 shadow-sm' : 'text-slate-600 hover:bg-white hover:text-slate-950'}`}
+                  className={`w-full whitespace-nowrap rounded-lg px-3 py-2 text-left text-xs font-semibold ${workspaceView === 'profile' ? 'bg-blue-600 text-white' : 'text-blue-50 hover:bg-blue-700'}`}
                 >
                   {hasProfessionalProfile ? 'Edit professional profile' : 'Create professional profile'}
                 </button>
-                <p className="px-3 pt-2 text-[10px] leading-4 text-slate-400">
+                <p className="px-3 pt-2 text-[10px] leading-4 text-blue-200">
                   {hasProfessionalProfile ? 'Update your contact and practice details.' : 'Add your contact and practice details.'}
                 </p>
               </div>
             )}
           </div>
         </nav>
-        <div className="mt-3 border-t border-stone-100 px-3 pt-3">
-          <div className={`text-[10px] font-bold uppercase tracking-wide ${hasProfessionalProfile ? 'text-emerald-700' : 'text-amber-700'}`}>
+        <div className="mt-3 hidden border-t border-blue-500 px-3 pt-3 lg:block">
+          <div className={`text-[10px] font-bold uppercase tracking-wide ${hasProfessionalProfile ? 'text-emerald-200' : 'text-amber-200'}`}>
             {hasProfessionalProfile ? 'Profile added' : 'Profile setup needed'}
           </div>
-          <p className="mt-1 truncate text-xs text-slate-500">{professionalProfile.specialties || 'Add your professional details'}</p>
+          <p className="mt-1 truncate text-xs text-blue-100">{professionalProfile.specialties || 'Add your professional details'}</p>
         </div>
+        <button type="button" onClick={async () => { await fetch('/api/booking?view=therapist-logout', { method: 'POST' }); setTherapist(null); setAppointments([]); }} className="mt-1 flex shrink-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-blue-50 transition hover:bg-blue-600 lg:mt-5 lg:w-full">
+          <X className="h-4 w-4" /><span>Sign out</span>
+        </button>
       </aside>
-      <div className="min-w-0 flex-1 space-y-5">
+      <div className="min-w-0 flex-1 space-y-5 p-3 sm:p-5 lg:p-6">
       {workspaceView === 'profile' ? (
         <section className="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm">
           <div className="bg-gradient-to-r from-slate-950 via-blue-950 to-emerald-900 px-6 py-6 text-white sm:px-8">
@@ -669,39 +777,111 @@ function TherapistPortal() {
         </section>
       ) : (
         <>
-      <div className="rounded-3xl bg-gradient-to-r from-slate-950 via-blue-950 to-emerald-900 p-6 sm:p-8 text-white shadow-lg">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div><p className="text-xs uppercase tracking-[0.2em] text-emerald-200">Therapist workspace</p><h1 className="text-2xl sm:text-3xl font-black mt-1">Good morning, {therapist.name}</h1><p className="text-sm text-blue-100 mt-2">Review your queue and prepare for each patient before their appointment.</p></div>
-          <div className="flex gap-2">
-            <button onClick={async () => { setRefreshing(true); try { await loadAppointments(); } finally { setRefreshing(false); } }} disabled={refreshing} className="px-3 py-2 rounded-xl bg-white/15 hover:bg-white/25 text-xs font-bold disabled:opacity-50">{refreshing ? 'Syncing...' : 'Refresh data'}</button>
-            <button onClick={async () => { await fetch('/api/booking?view=therapist-logout', { method: 'POST' }); setTherapist(null); setAppointments([]); }} className="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-xs">Sign out</button>
+      <div className="mb-1 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-blue-700">Therapist workspace</p>
+          <h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-900">{workspaceView === 'appointments' ? 'Appointments' : 'Dashboard'}</h1>
+        </div>
+        <button type="button" onClick={() => { setWorkspaceView('appointments'); document.getElementById('therapist-calendar')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className="inline-flex items-center gap-2 rounded-lg bg-blue-700 px-4 py-2.5 text-xs font-bold text-white shadow-sm transition hover:bg-blue-800">
+          <CalendarDays className="h-4 w-4" /> View schedule
+        </button>
+      </div>
+      <div className="grid items-start gap-4 xl:grid-cols-[270px_minmax(0,1fr)]">
+        <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+          <header className="flex items-center gap-4 border-b border-slate-100 p-4">
+            <div className="grid h-16 w-16 shrink-0 place-items-center rounded-full bg-slate-100">
+              <div className="grid h-12 w-12 place-items-center rounded-full border-[5px] border-blue-600 bg-white text-blue-700"><CalendarDays className="h-5 w-5" /></div>
+            </div>
+            <div><p className="text-2xl font-bold text-blue-700">{appointments.length}</p><p className="text-xs font-semibold leading-4 text-slate-700">Appointments in your queue</p></div>
+          </header>
+          <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+            <h2 className="text-xs font-bold uppercase tracking-wide text-slate-600">Upcoming patients</h2>
+            <span className="rounded-full bg-blue-50 px-2 py-1 text-[10px] font-bold text-blue-800">{appointments.length}</span>
+          </div>
+          <div className="max-h-[390px] divide-y divide-slate-100 overflow-y-auto">
+            {appointments.length === 0 ? (
+              <p className="p-6 text-center text-xs text-slate-500">No upcoming appointments assigned to you.</p>
+            ) : appointments.map((appointment, index) => (
+              <button
+                key={`rail-${appointment.bookingId}`}
+                type="button"
+                onClick={() => setSelectedAppointment(appointment)}
+                className={`flex w-full items-start gap-3 p-3 text-left transition hover:bg-blue-50 ${selectedAppointment?.bookingId === appointment.bookingId ? 'bg-blue-50' : ''}`}
+              >
+                <span className={`grid h-8 w-8 shrink-0 place-items-center rounded-full text-[10px] font-bold text-white ${['bg-rose-500', 'bg-slate-800', 'bg-purple-600', 'bg-blue-700'][index % 4]}`}>
+                  {(appointment.patientName || 'P').split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase()}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-center justify-between gap-2">
+                    <span className="truncate text-xs font-bold text-slate-900">{appointment.patientName}</span>
+                    <span className="shrink-0 rounded bg-blue-100 px-1.5 py-0.5 text-[9px] font-bold text-blue-800">{appointment.time}</span>
+                  </span>
+                  <span className="mt-1 block truncate text-[10px] text-slate-500">{appointment.serviceName}</span>
+                  <span className="mt-1 block text-[10px] text-slate-400">{appointment.date} · {appointment.branchName}</span>
+                  {(appointment.hasReportedConditions || appointment.allergiesToOil) && <span className="mt-2 inline-flex rounded-full bg-rose-50 px-2 py-0.5 text-[9px] font-bold text-rose-700">Review patient notes</span>}
+                </span>
+              </button>
+            ))}
+          </div>
+          <footer className="border-t border-slate-100 bg-slate-50 px-4 py-3 text-[10px] text-slate-500">
+            Schedule data from your assigned appointments.
+          </footer>
+        </section>
+        <div className="min-w-0 space-y-4">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            {[
+              ['Upcoming', summary.upcomingCount, 'Appointments', 'text-blue-700'],
+              ['Review flags', summary.flaggedCount, 'Safety preparation', 'text-rose-600'],
+              ['Hours served', therapistProfile.attendedHours.toFixed(1), 'Past appointments', 'text-emerald-700'],
+              ['Patients seen', therapistProfile.attendedClientCount, 'Past appointments', 'text-purple-700'],
+            ].map(([label, value, caption, color]) => (
+              <div key={label} className="rounded-xl border border-slate-200 bg-white p-3.5 shadow-sm">
+                <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">{label}</p>
+                <p className={`mt-1 text-2xl font-bold ${color}`}>{value}</p>
+                <p className="mt-1 text-[10px] text-slate-400">{caption}</p>
+              </div>
+            ))}
+          </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            <TherapistDonutCard
+              title="Appointment tracker"
+              subtitle="Upcoming and attended visits"
+              segments={[
+                { label: 'Upcoming', value: appointments.length, color: '#f2a900' },
+                { label: 'Attended', value: attendedClients.length, color: '#4f8fe8' },
+              ]}
+              centerValue={appointments.length + attendedClients.length}
+              centerLabel="appointments"
+            />
+            <TherapistDonutCard
+              title="Treatment mix"
+              subtitle="Upcoming assigned appointments"
+              segments={treatmentSegments}
+              centerValue={appointments.length}
+              centerLabel="appointments"
+            />
+            <TherapistDonutCard
+              title="Pressure preference"
+              subtitle="Patient-reported preferences"
+              segments={pressureSegments}
+              centerValue={pressureSegments.reduce((sum, segment) => sum + segment.value, 0)}
+              centerLabel="recorded"
+            />
+            <TherapistDonutCard
+              title="Preparation notes"
+              subtitle="Upcoming patient intake coverage"
+              segments={notesSegments}
+              centerValue={appointments.length}
+              centerLabel="appointments"
+            />
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-[11px] text-amber-900">
+            <span>Patient information is private. Review only what you need for treatment preparation.</span>
+            <span className="font-semibold">{therapistProfile.branchNames.length ? therapistProfile.branchNames.join(' · ') : 'No branch recorded'}</span>
           </div>
         </div>
       </div>
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <div className="rounded-2xl bg-white border border-stone-200 p-4 shadow-sm"><div className="text-[10px] font-bold uppercase tracking-wide text-stone-500">Today’s queue</div><div className="text-3xl font-black text-blue-800 mt-2">{summary.upcomingCount}</div><div className="text-xs text-stone-500 mt-1">Upcoming appointments</div></div>
-        <div className="rounded-2xl bg-white border border-stone-200 p-4 shadow-sm"><div className="text-[10px] font-bold uppercase tracking-wide text-stone-500">Safety flags</div><div className="text-3xl font-black text-amber-700 mt-2">{summary.flaggedCount}</div><div className="text-xs text-stone-500 mt-1">Needs careful review</div></div>
-        <div className="rounded-2xl bg-white border border-stone-200 p-4 shadow-sm"><div className="text-[10px] font-bold uppercase tracking-wide text-stone-500">Hours served</div><div className="text-3xl font-black text-emerald-800 mt-2">{therapistProfile.attendedHours.toFixed(1)}</div><div className="text-xs text-stone-500 mt-1">Completed treatments</div></div>
-        <div className="rounded-2xl bg-white border border-stone-200 p-4 shadow-sm"><div className="text-[10px] font-bold uppercase tracking-wide text-stone-500">Patients seen</div><div className="text-3xl font-black text-purple-800 mt-2">{therapistProfile.attendedClientCount}</div><div className="text-xs text-stone-500 mt-1">Past appointments</div></div>
-      </div>
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <div className="rounded-2xl bg-white border border-stone-200 p-5 shadow-sm">
-          <div className="text-xs font-bold uppercase tracking-wide text-stone-500">Branches served</div>
-          <div className="text-sm font-black text-emerald-800 mt-2">{therapistProfile.branchNames.length ? therapistProfile.branchNames.join(' · ') : 'No branch recorded'}</div>
-        </div>
-        <div className="rounded-2xl bg-white border border-stone-200 p-5 shadow-sm">
-          <div className="text-xs font-bold uppercase tracking-wide text-stone-500">Hours served</div>
-          <div className="text-3xl font-black text-blue-800 mt-2">{therapistProfile.attendedHours.toFixed(1)}</div>
-          <div className="text-xs text-stone-500 mt-1">Based on past appointments</div>
-        </div>
-        <div className="rounded-2xl bg-white border border-stone-200 p-5 shadow-sm">
-          <div className="text-xs font-bold uppercase tracking-wide text-stone-500">Clients attended</div>
-          <div className="text-3xl font-black text-purple-800 mt-2">{therapistProfile.attendedClientCount}</div>
-          <div className="text-xs text-stone-500 mt-1">Completed/past bookings</div>
-        </div>
-      </div>
-      <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-xs text-amber-900">Only the minimum information needed for treatment preparation is shown. Do not copy, download, or share patient information.</div>
-      <div className="bg-white rounded-2xl border border-stone-200 shadow-sm overflow-hidden">
+      <div id="therapist-calendar" className="scroll-mt-5 bg-white rounded-2xl border border-stone-200 shadow-sm overflow-hidden">
         <div className="bg-gradient-to-r from-slate-900 to-blue-900 px-5 py-4 text-white">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div><h2 className="text-lg font-bold">Google Calendar</h2><p className="text-xs text-blue-200 mt-1">Live schedule for {therapist.name}</p></div>
@@ -745,31 +925,8 @@ function TherapistPortal() {
       </div>
       {appointments.length === 0 && <div className="bg-white rounded-2xl p-8 text-center border border-stone-200 text-sm text-stone-500">No upcoming appointments assigned to you.</div>}
       {appointments.length > 0 && (
-        <div className="bg-white rounded-2xl border border-stone-200 shadow-sm overflow-hidden">
-          <div className="flex items-center gap-1 border-b border-stone-200 px-4 pt-3">
-            {[
-              ['schedule', 'Patient preparation'],
-              ['patients', 'My patients'],
-            ].map(([panel, label]) => (
-              <button key={panel} onClick={() => setTherapistPanel(panel)} className={`px-4 py-2.5 text-xs font-bold border-b-2 ${therapistPanel === panel ? 'border-blue-700 text-blue-800' : 'border-transparent text-stone-500'}`}>
-                {label}
-              </button>
-            ))}
-          </div>
-          {therapistPanel === 'schedule' && (
-            <div className="grid grid-cols-1 lg:grid-cols-[260px_1fr] min-h-[360px]">
-              <div className="border-r border-stone-200 bg-stone-50">
-                <div className="p-4 text-xs font-bold uppercase tracking-wide text-stone-500">Upcoming patients</div>
-                <div className="divide-y divide-stone-200">
-                  {appointments.map((appointment) => (
-                    <button key={`patient-${appointment.bookingId}`} onClick={() => setSelectedAppointment(appointment)} className={`w-full text-left p-4 hover:bg-blue-50 ${selectedAppointment?.bookingId === appointment.bookingId ? 'bg-blue-100 border-l-4 border-blue-700' : ''}`}>
-                      <div className="font-bold text-sm text-stone-900">{appointment.patientName}</div>
-                      <div className="text-[11px] text-stone-500 mt-1">{appointment.date} · {appointment.time}</div>
-                      <div className="text-[11px] text-blue-700 mt-1">{appointment.serviceName}</div>
-                    </button>
-                  ))}
-                </div>
-              </div>
+        <div id="therapist-patient-notes" className="scroll-mt-5 bg-white rounded-2xl border border-stone-200 shadow-sm overflow-hidden">
+            <div className="min-h-[360px]">
               {selectedAppointment && (
                 <div className="p-5 sm:p-7">
                   <div className="flex flex-wrap items-start justify-between gap-3 border-b border-stone-200 pb-4">
@@ -796,56 +953,8 @@ function TherapistPortal() {
                 </div>
               )}
             </div>
-          )}
-          {therapistPanel === 'patients' && (
-            <div className="p-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {appointments.map((appointment) => <button key={`card-${appointment.bookingId}`} onClick={() => { setSelectedAppointment(appointment); setTherapistPanel('schedule'); }} className="text-left rounded-xl border border-stone-200 p-4 hover:border-blue-400 hover:shadow-sm"><div className="font-bold text-stone-900">{appointment.patientName}</div><div className="text-xs text-stone-500 mt-1">{appointment.date} · {appointment.time}</div><div className="text-xs text-blue-700 mt-2">{appointment.branchName}</div></button>)}
-            </div>
-          )}
         </div>
       )}
-      <div className="bg-white rounded-2xl border border-stone-200 shadow-sm overflow-hidden">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-stone-200 px-5 py-4">
-          <div><h2 className="text-lg font-bold text-stone-900">Appointment queue</h2><p className="text-xs text-stone-500 mt-1">Select a patient to open their preparation notes.</p></div>
-          <span className="rounded-full bg-blue-50 px-3 py-1 text-[11px] font-bold text-blue-800">{appointments.length} scheduled</span>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[720px] text-left text-xs">
-            <thead className="bg-stone-50 text-[10px] uppercase tracking-wide text-stone-500">
-              <tr><th className="px-5 py-3">Time</th><th className="px-5 py-3">Patient</th><th className="px-5 py-3">Treatment</th><th className="px-5 py-3">Preparation</th><th className="px-5 py-3">Notes</th></tr>
-            </thead>
-            <tbody className="divide-y divide-stone-100">
-              {appointments.map((appointment) => (
-                <tr key={`queue-${appointment.bookingId}`} onClick={() => { setSelectedAppointment(appointment); setTherapistPanel('schedule'); }} className={`cursor-pointer transition hover:bg-blue-50 ${selectedAppointment?.bookingId === appointment.bookingId ? 'bg-blue-50/70' : ''}`}>
-                  <td className="whitespace-nowrap px-5 py-4 font-bold text-blue-900">{appointment.time}<div className="mt-1 text-[10px] font-normal text-stone-500">{appointment.date}</div></td>
-                  <td className="px-5 py-4"><div className="font-bold text-stone-900">{appointment.patientName}</div><div className="mt-1 text-[10px] text-stone-500">{appointment.branchName}</div></td>
-                  <td className="max-w-[210px] px-5 py-4 text-stone-700">{appointment.serviceName}<div className="mt-1 text-[10px] text-stone-500">{appointment.durationMinutes || '—'} min</div></td>
-                  <td className="px-5 py-4"><div className="flex flex-wrap gap-1">{appointment.pressure && <span className="rounded-full bg-amber-100 px-2 py-1 text-[10px] font-bold text-amber-800">{appointment.pressure}</span>}{appointment.hasReportedConditions && <span className="rounded-full bg-red-100 px-2 py-1 text-[10px] font-bold text-red-800">{appointment.reportedConditionCount} flag{appointment.reportedConditionCount === 1 ? '' : 's'}</span>}{appointment.allergiesToOil && <span className="rounded-full bg-purple-100 px-2 py-1 text-[10px] font-bold text-purple-800">Allergy</span>}</div></td>
-                  <td className="max-w-[190px] px-5 py-4 text-stone-600">{appointment.painAreas || appointment.additionalDetails || 'No notes recorded'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-      <div className="bg-white rounded-2xl border border-stone-200 shadow-sm overflow-hidden">
-        <div className="p-5 border-b border-stone-200">
-          <h2 className="text-lg font-bold text-stone-900">Client history</h2>
-          <p className="text-xs text-stone-500 mt-1">Past appointments assigned to you. Medical details are not shown in this list.</p>
-        </div>
-        {attendedClients.length === 0 ? (
-          <div className="p-6 text-sm text-stone-500">No attended client history is available yet.</div>
-        ) : (
-          <div className="divide-y divide-stone-100">
-            {attendedClients.map((client) => (
-              <div key={client.bookingId} className="p-4 flex flex-wrap items-center justify-between gap-3">
-                <div><div className="font-bold text-sm text-stone-900">{client.patientName}</div><div className="text-xs text-stone-500">{client.date} at {client.time} · {client.serviceName}</div></div>
-                <div className="flex items-center gap-3 text-xs"><span className="text-stone-500">{client.branchName}</span><span className="px-2 py-1 rounded-lg bg-emerald-50 text-emerald-800 font-bold">{(client.durationMinutes / 60).toFixed(1)} hr</span></div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
       <div className="bg-white rounded-2xl border border-stone-200 shadow-sm overflow-hidden">
         <div className="p-5 border-b border-stone-200">
           <h2 className="text-lg font-bold text-stone-900">Historical bookings</h2>
@@ -874,6 +983,7 @@ function TherapistPortal() {
       </div>
         </>
       )}
+      </div>
       </div>
     </div>
   );
