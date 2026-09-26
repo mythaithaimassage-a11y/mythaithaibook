@@ -107,12 +107,13 @@ previews, browser-local drafts, and Gmail campaign delivery to a maximum of 50
 active, opted-in contacts per send. The Vercel function allows up to 60 seconds
 for a campaign batch. The assistant matches historical booking
 dates, branches, and services; audience matching itself does not use an AI
-service and historical bookings do not prove attendance. An optional Gemini
-writing assistant can generate an editable subject, preview, and message from
-the owner's campaign goal and aggregate audience description. It never receives
-customer names, email addresses, or booking rows, and it never sends generated
-copy automatically. Customers are added only after checking the separate
-optional marketing consent box in the booking form.
+service and historical bookings do not prove attendance. An optional Gemini 3.8
+Flash writing assistant uses Google's Interactions API to generate an editable
+subject, preview, and message from the owner's campaign goal and aggregate
+audience description. It never receives customer names, email addresses, or
+booking rows, and it never sends generated copy automatically; generation
+requests are not stored by the provider. Customers are added only after
+checking the separate optional marketing consent box in the booking form.
 Existing booking or treatment-consent records are not imported as marketing
 consent. Campaigns include the business mailing address and unsubscribe links;
 unsubscribed contacts are excluded from future sends. Configure the Gmail OAuth

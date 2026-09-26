@@ -614,32 +614,33 @@ async function generateCampaignCopy(goal, audienceDescription, audienceCount) {
   if (!cleanGoal || cleanGoal.length > 500) {
     throw new Error('Describe the campaign goal in 1-500 characters.');
   }
-  const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent', {
+  const response = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'x-goog-api-key': GEMINI_API_KEY,
     },
     body: JSON.stringify({
-      systemInstruction: {
-        parts: [{
-          text: 'You write warm, concise, professional promotional emails for a Thai massage and wellness clinic in Ontario, Canada. Return only a JSON object with string keys subject, preview, and message. Subject must be at most 100 characters, preview at most 140 characters, and message at most 2500 characters. Use plain text in message, no HTML. Never invent prices, discounts, offers, availability, medical outcomes, or facts. Do not give medical advice or imply a guaranteed health benefit. Do not include customer names, email addresses, or other personal data. Make the email relevant to the aggregate audience description while avoiding language that reveals sensitive health information. Mention the booking website only when a website is supplied in the business context.',
-        }],
-      },
-      contents: [{
-        role: 'user',
-        parts: [{
-          text: JSON.stringify({
-            campaignGoal: cleanGoal,
-            audience: String(audienceDescription || '').slice(0, 300),
-            optedInRecipientCount: Number(audienceCount) || 0,
-          }),
-        }],
-      }],
-      generationConfig: {
-        responseMimeType: 'application/json',
-        maxOutputTokens: 1000,
-        temperature: 0.7,
+      model: 'gemini-3.8-flash',
+      store: false,
+      system_instruction: 'You write warm, concise, professional promotional emails for a Thai massage and wellness clinic in Ontario, Canada. Return a JSON object with string keys subject, preview, and message. Subject must be at most 100 characters, preview at most 140 characters, and message at most 2500 characters. Use plain text in message, no HTML. Never invent prices, discounts, offers, availability, medical outcomes, or facts. Do not give medical advice or imply a guaranteed health benefit. Do not include customer names, email addresses, or other personal data. Make the email relevant to the aggregate audience description while avoiding language that reveals sensitive health information. Mention the booking website only when a website is supplied in the business context.',
+      input: JSON.stringify({
+        campaignGoal: cleanGoal,
+        audience: String(audienceDescription || '').slice(0, 300),
+        optedInRecipientCount: Number(audienceCount) || 0,
+      }),
+      response_format: {
+        type: 'text',
+        mime_type: 'application/json',
+        schema: {
+          type: 'object',
+          properties: {
+            subject: { type: 'string' },
+            preview: { type: 'string' },
+            message: { type: 'string' },
+          },
+          required: ['subject', 'preview', 'message'],
+        },
       },
     }),
   });
@@ -649,7 +650,13 @@ async function generateCampaignCopy(goal, audienceDescription, audienceCount) {
     console.error('Campaign copy generation failed:', providerMessage);
     throw new Error('The campaign writing assistant could not generate copy. Check the Gemini API key and quota, then try again.');
   }
-  const text = data.candidates?.[0]?.content?.parts?.map((part) => part.text || '').join('').trim();
+  const text = data.steps
+    ?.filter((step) => step.type === 'model_output')
+    .flatMap((step) => step.content || [])
+    .filter((part) => part.type === 'text')
+    .map((part) => part.text || '')
+    .join('')
+    .trim();
   if (!text) {
     throw new Error('Gemini returned an empty campaign draft. Please try again.');
   }
