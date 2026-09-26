@@ -65,6 +65,15 @@ const THERAPIST_CALENDAR_COLORS = [
   { name: 'Cyan', event: 'bg-cyan-100 border-cyan-700', dot: 'bg-cyan-600', text: 'text-cyan-950' },
 ];
 
+const DEFAULT_BUSINESS_PROFILE = {
+  businessName: 'MY THAI THAI',
+  tagline: 'Traditional Thai massage & wellness',
+  email: 'mythaithaimassage@gmail.com',
+  phone: '+1 437 898 7424',
+  website: 'https://mythaithaimassage.com',
+  address: 'Ontario, Canada',
+};
+
 function getTherapistCalendarColor(therapistName, therapists) {
   const index = therapists.findIndex((therapist) => therapist.name === therapistName);
   return THERAPIST_CALENDAR_COLORS[(index < 0 ? 0 : index) % THERAPIST_CALENDAR_COLORS.length];
@@ -662,22 +671,45 @@ function TherapistPortal() {
 }
 
 function AdminGate({ children }) {
-  const [authenticated, setAuthenticated] = useState(() => sessionStorage.getItem('mtt_admin_authenticated') === 'true');
+  const [authenticated, setAuthenticated] = useState(false);
+  const [isCheckingSession, setIsCheckingSession] = useState(true);
+  const [isSigningIn, setIsSigningIn] = useState(false);
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    fetch('/api/booking?view=owner-session')
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message || 'Owner sign-in is unavailable.');
+        setAuthenticated(Boolean(data.authenticated));
+      })
+      .catch((requestError) => setError(requestError.message || 'Unable to verify owner session.'))
+      .finally(() => setIsCheckingSession(false));
+  }, []);
+
+  const signOut = async () => {
+    try {
+      const response = await fetch('/api/booking?view=owner-logout', { method: 'POST' });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Unable to sign out.');
+      setAuthenticated(false);
+      setPassword('');
+      setError('');
+    } catch (requestError) {
+      setError(requestError.message || 'Unable to sign out.');
+    }
+  };
 
   if (authenticated) {
     return (
       <div>
         <div className="flex justify-end mb-2">
           <button
-            onClick={() => {
-              sessionStorage.removeItem('mtt_admin_authenticated');
-              setAuthenticated(false);
-            }}
-            className="text-xs text-stone-500 underline hover:text-stone-900"
+            onClick={signOut}
+            className="rounded-lg px-3 py-2 text-xs font-semibold text-slate-500 transition hover:bg-white hover:text-slate-900"
           >
-            Sign out of admin
+            Sign out
           </button>
         </div>
         {children}
@@ -685,32 +717,61 @@ function AdminGate({ children }) {
     );
   }
 
+  if (isCheckingSession) {
+    return (
+      <div className="mx-auto my-16 max-w-md rounded-3xl border border-slate-200 bg-white p-8 text-center shadow-sm">
+        <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-4 border-emerald-100 border-t-emerald-800" />
+        <p className="text-sm font-medium text-slate-600">Verifying secure owner access…</p>
+      </div>
+    );
+  }
+
   return (
-    <div className="max-w-md mx-auto my-10 bg-white rounded-2xl border border-stone-200 shadow-sm p-6">
-      <h1 className="text-xl font-bold text-stone-900">Admin access</h1>
-      <p className="text-sm text-stone-500 mt-1 mb-5">Enter the admin password to continue.</p>
-      <form onSubmit={(event) => {
+    <div className="mx-auto my-14 max-w-md overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-xl shadow-slate-900/5">
+      <div className="bg-gradient-to-br from-slate-950 via-emerald-950 to-emerald-800 px-8 py-7 text-white">
+        <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-2xl border border-white/15 bg-white/10">
+          <Building className="h-6 w-6" />
+        </div>
+        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-100">MY THAI THAI</p>
+        <h1 className="mt-2 text-2xl font-bold">Owner sign in</h1>
+        <p className="mt-2 text-sm leading-6 text-emerald-50/80">Sign in to manage your business profile and practice dashboard.</p>
+      </div>
+      <form onSubmit={async (event) => {
         event.preventDefault();
-        if (password === 'mythai') {
-          sessionStorage.setItem('mtt_admin_authenticated', 'true');
+        setIsSigningIn(true);
+        setError('');
+        try {
+          const response = await fetch('/api/booking?view=owner-login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password }),
+          });
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.message || 'Unable to sign in.');
           setAuthenticated(true);
-          setError('');
-        } else {
-          setError('Incorrect password.');
+          setPassword('');
+        } catch (requestError) {
+          setError(requestError.message || 'Unable to sign in.');
+        } finally {
+          setIsSigningIn(false);
         }
-      }} className="space-y-3">
+      }} className="space-y-4 p-8">
+        {error && <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">{error}</p>}
+        <label htmlFor="owner-password" className="block text-sm font-semibold text-slate-700">Owner password</label>
         <input
+          id="owner-password"
           type="password"
           value={password}
           onChange={(event) => setPassword(event.target.value)}
           autoComplete="current-password"
-          className="w-full p-3 rounded-xl border border-stone-300 focus:ring-2 focus:ring-amber-600 focus:outline-none"
-          placeholder="Admin password"
+          required
+          className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none transition placeholder:text-slate-400 focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100"
+          placeholder="Enter your password"
         />
-        {error && <p className="text-xs text-red-700">{error}</p>}
-        <button type="submit" className="w-full py-3 bg-amber-700 text-white rounded-xl font-bold hover:bg-amber-800">
-          Sign in
+        <button type="submit" disabled={isSigningIn} className="w-full rounded-xl bg-emerald-900 py-3 text-sm font-bold text-white shadow-lg shadow-emerald-950/15 transition hover:bg-emerald-800 disabled:cursor-wait disabled:opacity-60">
+          {isSigningIn ? 'Signing in…' : 'Sign in securely'}
         </button>
+        <p className="text-center text-xs leading-5 text-slate-500">Your secure session expires after 8 hours.</p>
       </form>
     </div>
   );
@@ -1647,6 +1708,12 @@ function AdminPortal({
   onUpdateWebhookUrl
 }) {
   const [activeTab, setActiveTab] = useState('schedule');
+  const [businessProfile, setBusinessProfile] = useState(DEFAULT_BUSINESS_PROFILE);
+  const [hasLoadedBusinessProfile, setHasLoadedBusinessProfile] = useState(false);
+  const [isLoadingBusinessProfile, setIsLoadingBusinessProfile] = useState(false);
+  const [isSavingBusinessProfile, setIsSavingBusinessProfile] = useState(false);
+  const [businessProfileError, setBusinessProfileError] = useState('');
+  const [businessProfileMessage, setBusinessProfileMessage] = useState('');
   const [inputUrl, setInputUrl] = useState(sheetsWebhookUrl);
   const [testResult, setTestResult] = useState(null);
   const [isTesting, setIsTesting] = useState(false);
@@ -1665,6 +1732,53 @@ function AdminPortal({
   const [isLoadingPatientHistory, setIsLoadingPatientHistory] = useState(false);
   const [patientHistoryLoadError, setPatientHistoryLoadError] = useState('');
   const [patientHistorySearch, setPatientHistorySearch] = useState('');
+
+  const loadBusinessProfile = async () => {
+    setIsLoadingBusinessProfile(true);
+    setBusinessProfileError('');
+    setBusinessProfileMessage('');
+    try {
+      const response = await fetch('/api/booking?view=business-profile');
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+      setBusinessProfile({ ...DEFAULT_BUSINESS_PROFILE, ...data.profile });
+      setHasLoadedBusinessProfile(true);
+    } catch (error) {
+      setBusinessProfileError(error.message || 'Unable to load the business profile');
+    } finally {
+      setIsLoadingBusinessProfile(false);
+    }
+  };
+
+  useEffect(() => {
+    loadBusinessProfile();
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === 'business-profile') loadBusinessProfile();
+  }, [activeTab]);
+
+  const saveBusinessProfile = async (event) => {
+    event.preventDefault();
+    setIsSavingBusinessProfile(true);
+    setBusinessProfileError('');
+    setBusinessProfileMessage('');
+    try {
+      const response = await fetch('/api/booking?view=business-profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ profile: businessProfile }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+      setBusinessProfile({ ...DEFAULT_BUSINESS_PROFILE, ...data.profile });
+      setBusinessProfileMessage('Business profile saved and synced for your owner account.');
+    } catch (error) {
+      setBusinessProfileError(error.message || 'Unable to save the business profile');
+    } finally {
+      setIsSavingBusinessProfile(false);
+    }
+  };
 
   // Staff management state
   const [showAddTherapistModal, setShowAddTherapistModal] = useState(false);
@@ -1816,105 +1930,90 @@ function AdminPortal({
 
   return (
     <div className="space-y-6">
-      {/* Admin Top Navigation & Header Controls */}
-      <div className="bg-white rounded-2xl p-4 sm:p-6 shadow-sm border border-stone-200 flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center space-x-2">
-            <h1 className="text-xl sm:text-2xl font-bold text-stone-900">{t.title}</h1>
-            <span className="bg-amber-100 text-amber-800 text-xs px-2.5 py-0.5 rounded-full font-bold">
-              {lang === 'en' ? 'ENGLISH' : 'ภาษาไทย'}
-            </span>
+      <section className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-slate-950 via-emerald-950 to-emerald-800 px-5 py-6 text-white shadow-xl shadow-emerald-950/10 sm:px-8 sm:py-8">
+        <div aria-hidden="true" className="absolute -right-16 -top-28 h-72 w-72 rounded-full border border-white/10" />
+        <div aria-hidden="true" className="absolute -right-2 -top-14 h-48 w-48 rounded-full border border-white/10" />
+        <div className="relative z-10 flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.15em] text-emerald-100">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-300" />
+              Owner dashboard
+            </div>
+            <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">{businessProfile.businessName || 'MY THAI THAI'}</h1>
+            <p className="mt-2 max-w-2xl text-sm text-emerald-50/75">{businessProfile.tagline || t.subTitle}</p>
           </div>
-          <p className="text-xs text-stone-500">{t.subTitle}</p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex items-center space-x-1 bg-stone-100 p-1 rounded-xl">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center rounded-xl border border-white/15 bg-white/10 p-1">
+              <Globe className="ml-2 mr-1 h-3.5 w-3.5 text-emerald-100" />
+              <button onClick={() => setLang('en')} className={`rounded-lg px-2.5 py-1.5 text-xs font-bold ${lang === 'en' ? 'bg-white text-emerald-950' : 'text-white hover:bg-white/10'}`}>EN</button>
+              <button onClick={() => setLang('th')} className={`rounded-lg px-2.5 py-1.5 text-xs font-bold ${lang === 'th' ? 'bg-white text-emerald-950' : 'text-white hover:bg-white/10'}`}>ไทย</button>
+            </div>
             <button
-              onClick={() => setSelectedBranchId('all')}
-              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition ${
-                selectedBranchId === 'all' 
-                  ? 'bg-white text-stone-900 shadow-sm' 
-                  : 'text-stone-600 hover:text-stone-900'
-              }`}
+              onClick={() => setActiveTab('business-profile')}
+              className="inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2.5 text-xs font-bold text-emerald-950 shadow-lg transition hover:bg-emerald-50"
             >
-              {t.allBranches}
-            </button>
-            {branches.map(b => (
-              <button
-                key={b.id}
-                onClick={() => setSelectedBranchId(b.id)}
-                className={`px-3 py-1.5 text-xs font-bold rounded-lg transition ${
-                  selectedBranchId === b.id 
-                    ? 'bg-emerald-800 text-white shadow-sm' 
-                    : 'text-stone-600 hover:text-stone-900'
-                }`}
-              >
-                {b.name}
-              </button>
-            ))}
-          </div>
-
-          <div className="flex items-center bg-amber-50 border border-amber-200 p-1 rounded-xl">
-            <Globe className="w-3.5 h-3.5 text-amber-700 ml-1.5 mr-1" />
-            <button
-              onClick={() => setLang('en')}
-              className={`px-2 py-1 text-xs font-bold rounded-lg ${lang === 'en' ? 'bg-amber-700 text-white' : 'text-amber-900'}`}
-            >
-              EN
-            </button>
-            <button
-              onClick={() => setLang('th')}
-              className={`px-2 py-1 text-xs font-bold rounded-lg ${lang === 'th' ? 'bg-amber-700 text-white' : 'text-amber-900'}`}
-            >
-              ไทย
+              <Settings className="h-4 w-4" />
+              Edit business profile
             </button>
           </div>
         </div>
-      </div>
+        <div className="relative z-10 mt-6 flex flex-wrap items-center gap-2 border-t border-white/15 pt-5">
+          <span className="mr-1 text-[11px] font-semibold uppercase tracking-wide text-emerald-100/70">Location</span>
+          <button onClick={() => setSelectedBranchId('all')} className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${selectedBranchId === 'all' ? 'bg-white text-emerald-950' : 'text-white/80 hover:bg-white/10'}`}>{t.allBranches}</button>
+          {branches.map((branch) => (
+            <button key={branch.id} onClick={() => setSelectedBranchId(branch.id)} className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${selectedBranchId === branch.id ? 'bg-white text-emerald-950' : 'text-white/80 hover:bg-white/10'}`}>{branch.name}</button>
+          ))}
+          <span className="ml-auto hidden text-xs text-emerald-100/70 sm:inline">Practice & branch management</span>
+        </div>
+      </section>
 
       {/* Admin KPI Stat Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="bg-white rounded-xl p-4 border border-stone-200 shadow-sm">
-          <div className="text-xs font-semibold text-stone-500">{t.revenueToday}</div>
-          <div className="text-2xl font-black text-emerald-800 mt-1">${totalRevenue.toFixed(2)}</div>
+        <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
+          <div className="flex items-center justify-between"><div className="text-xs font-semibold text-slate-500">{t.revenueToday}</div><span className="rounded-xl bg-emerald-50 p-2 text-emerald-800"><TrendingUp className="h-4 w-4" /></span></div>
+          <div className="mt-3 text-2xl font-bold tracking-tight text-emerald-900">${totalRevenue.toFixed(2)}</div>
+          <div className="mt-1 text-[11px] text-slate-400">Across current bookings</div>
         </div>
-        <div className="bg-white rounded-xl p-4 border border-stone-200 shadow-sm">
-          <div className="text-xs font-semibold text-stone-500">{t.appointmentsToday}</div>
-          <div className="text-2xl font-black text-stone-900 mt-1">{bookings.length}</div>
+        <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
+          <div className="flex items-center justify-between"><div className="text-xs font-semibold text-slate-500">{t.appointmentsToday}</div><span className="rounded-xl bg-blue-50 p-2 text-blue-800"><CalendarIcon className="h-4 w-4" /></span></div>
+          <div className="mt-3 text-2xl font-bold tracking-tight text-slate-900">{bookings.length}</div>
+          <div className="mt-1 text-[11px] text-slate-400">Appointments on record</div>
         </div>
-        <div className="bg-white rounded-xl p-4 border border-stone-200 shadow-sm">
-          <div className="text-xs font-semibold text-stone-500">{t.activeStaff}</div>
-          <div className="text-2xl font-black text-amber-700 mt-1">{therapists.length}</div>
+        <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
+          <div className="flex items-center justify-between"><div className="text-xs font-semibold text-slate-500">{t.activeStaff}</div><span className="rounded-xl bg-amber-50 p-2 text-amber-800"><Users className="h-4 w-4" /></span></div>
+          <div className="mt-3 text-2xl font-bold tracking-tight text-slate-900">{therapists.length}</div>
+          <div className="mt-1 text-[11px] text-slate-400">Therapists & practitioners</div>
         </div>
-        <div className="bg-white rounded-xl p-4 border border-stone-200 shadow-sm">
-          <div className="text-xs font-semibold text-stone-500">{t.hstCollected}</div>
-          <div className="text-2xl font-black text-stone-800 mt-1">${hstCollected.toFixed(2)}</div>
+        <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
+          <div className="flex items-center justify-between"><div className="text-xs font-semibold text-slate-500">{t.hstCollected}</div><span className="rounded-xl bg-violet-50 p-2 text-violet-800"><DollarSign className="h-4 w-4" /></span></div>
+          <div className="mt-3 text-2xl font-bold tracking-tight text-slate-900">${hstCollected.toFixed(2)}</div>
+          <div className="mt-1 text-[11px] text-slate-400">Estimated Ontario HST</div>
         </div>
       </div>
 
       {/* Navigation Tabs */}
-      <div className="flex border-b border-stone-200 bg-white rounded-xl px-2 pt-2 shadow-sm space-x-1 overflow-x-auto">
+      <div className="flex gap-1 overflow-x-auto rounded-2xl border border-slate-200/80 bg-white p-2 shadow-sm">
         {[
           { id: 'schedule', label: t.schedule, icon: CalendarIcon },
           { id: 'calendar', label: 'Live Google Calendar', icon: CalendarIcon },
           { id: 'services', label: t.services, icon: Layers },
           { id: 'staff', label: t.staff, icon: Users },
           { id: 'patient-history', label: 'Patient Summary', icon: FileText },
-          { id: 'financials', label: t.financials, icon: DollarSign }
+          { id: 'financials', label: t.financials, icon: DollarSign },
+          { id: 'business-profile', label: 'Business profile', icon: Building }
         ].map(tab => {
           const Icon = tab.icon;
           return (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`flex items-center space-x-2 px-4 py-3 text-xs sm:text-sm font-bold rounded-t-lg transition border-b-2 whitespace-nowrap ${
+              className={`flex items-center gap-2 whitespace-nowrap rounded-xl px-3 py-2.5 text-xs font-semibold transition sm:px-4 sm:text-sm ${
                 activeTab === tab.id 
-                  ? 'border-emerald-800 text-emerald-800 bg-emerald-50/50' 
-                  : 'border-transparent text-stone-500 hover:text-stone-800'
+                ? 'bg-emerald-950 text-white shadow-sm'
+                  : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'
               }`}
             >
-              <Icon className="w-4 h-4" />
+              <Icon className="h-4 w-4" />
               <span>{tab.label}</span>
             </button>
           );
@@ -2459,6 +2558,89 @@ export default async function handler(req, res) {
             )}
           </div>
         </div>
+      )}
+
+      {activeTab === 'business-profile' && (
+        <section className="overflow-hidden rounded-3xl border border-slate-200/80 bg-white shadow-sm">
+          <div className="border-b border-slate-100 bg-gradient-to-r from-white to-emerald-50/60 px-5 py-5 sm:px-8">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <div className="mb-2 inline-flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.16em] text-emerald-800">
+                  <Building className="h-4 w-4" /> Owner settings
+                </div>
+                <h2 className="text-xl font-bold tracking-tight text-slate-900">Business profile</h2>
+                <p className="mt-1 text-sm text-slate-500">Manage the identity and contact details associated with your practice.</p>
+              </div>
+              <span className="inline-flex w-fit items-center gap-2 rounded-full border border-emerald-200 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-800">
+                <CheckCircle2 className="h-4 w-4" /> Synced across owner devices
+              </span>
+            </div>
+          </div>
+
+          {businessProfileError && <div role="alert" className="mx-5 mt-5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 sm:mx-8">{businessProfileError}</div>}
+          {businessProfileMessage && <div role="status" className="mx-5 mt-5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 sm:mx-8">{businessProfileMessage}</div>}
+          {isLoadingBusinessProfile ? (
+            <div className="p-10 text-center text-sm text-slate-500">Loading business profile…</div>
+          ) : !hasLoadedBusinessProfile ? (
+            <div className="p-8 text-center">
+              <p className="text-sm text-slate-600">The saved profile could not be loaded. Retry before making changes.</p>
+              <button type="button" onClick={loadBusinessProfile} className="mt-4 rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">Retry loading</button>
+            </div>
+          ) : (
+            <div className="grid gap-8 p-5 sm:p-8 lg:grid-cols-[minmax(0,1.4fr)_minmax(260px,0.8fr)]">
+              <form onSubmit={saveBusinessProfile} className="space-y-5">
+                <div className="grid gap-5 sm:grid-cols-2">
+                  {[
+                    { key: 'businessName', label: 'Business name', type: 'text', required: true, placeholder: 'MY THAI THAI' },
+                    { key: 'tagline', label: 'Short description', type: 'text', placeholder: 'Traditional Thai massage & wellness' },
+                    { key: 'email', label: 'Business email', type: 'email', placeholder: 'hello@example.com' },
+                    { key: 'phone', label: 'Phone number', type: 'tel', placeholder: '+1 437 898 7424' },
+                    { key: 'website', label: 'Website', type: 'url', placeholder: 'https://example.com' },
+                    { key: 'address', label: 'Business location', type: 'text', placeholder: 'City, Province' },
+                  ].map((field) => (
+                    <label key={field.key} className={`block ${field.key === 'businessName' || field.key === 'tagline' ? 'sm:col-span-2' : ''}`}>
+                      <span className="mb-1.5 block text-xs font-semibold text-slate-700">{field.label}{field.required && <span className="ml-1 text-rose-600">*</span>}</span>
+                      <input
+                        type={field.type}
+                        required={field.required}
+                        maxLength={field.key === 'businessName' ? 100 : 250}
+                        value={businessProfile[field.key] || ''}
+                        onChange={(event) => {
+                          setBusinessProfile((profile) => ({ ...profile, [field.key]: event.target.value }));
+                          setBusinessProfileMessage('');
+                        }}
+                        placeholder={field.placeholder}
+                        className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100"
+                      />
+                    </label>
+                  ))}
+                </div>
+                <div className="flex flex-col-reverse gap-3 border-t border-slate-100 pt-5 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-xs leading-5 text-slate-500">Profile details are stored in your connected Google Sheet and available when you sign in on another device.</p>
+                  <button type="submit" disabled={isSavingBusinessProfile || !hasLoadedBusinessProfile} className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-950 px-5 py-3 text-sm font-bold text-white shadow-md shadow-emerald-950/10 transition hover:bg-emerald-800 disabled:cursor-wait disabled:opacity-60">
+                    {isSavingBusinessProfile ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                    {isSavingBusinessProfile ? 'Saving…' : 'Save profile'}
+                  </button>
+                </div>
+              </form>
+
+              <aside className="self-start rounded-2xl border border-slate-200 bg-slate-50 p-5">
+                <p className="text-[11px] font-bold uppercase tracking-[0.15em] text-slate-400">Profile preview</p>
+                <div className="mt-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-900 to-emerald-700 text-lg font-bold text-white shadow-md">
+                  {(businessProfile.businessName || 'MT').split(/\s+/).filter(Boolean).slice(0, 2).map((word) => word[0]).join('').toUpperCase()}
+                </div>
+                <h3 className="mt-4 text-lg font-bold text-slate-900">{businessProfile.businessName || 'Your business name'}</h3>
+                <p className="mt-1 text-sm leading-5 text-slate-500">{businessProfile.tagline || 'Add a short introduction to your practice.'}</p>
+                <div className="mt-5 space-y-3 border-t border-slate-200 pt-4 text-sm text-slate-600">
+                  {businessProfile.email && <div className="flex items-start gap-2.5"><Mail className="mt-0.5 h-4 w-4 shrink-0 text-emerald-800" /><span className="break-all">{businessProfile.email}</span></div>}
+                  {businessProfile.phone && <div className="flex items-start gap-2.5"><Phone className="mt-0.5 h-4 w-4 shrink-0 text-emerald-800" /><span>{businessProfile.phone}</span></div>}
+                  {businessProfile.website && <div className="flex items-start gap-2.5"><Globe className="mt-0.5 h-4 w-4 shrink-0 text-emerald-800" /><span className="break-all">{businessProfile.website}</span></div>}
+                  {businessProfile.address && <div className="flex items-start gap-2.5"><MapPin className="mt-0.5 h-4 w-4 shrink-0 text-emerald-800" /><span>{businessProfile.address}</span></div>}
+                </div>
+              </aside>
+            </div>
+          )}
+        </section>
       )}
 
       {/* TAB CONTENT: FINANCIAL REPORTS */}

@@ -37,6 +37,8 @@ Configure these Vercel environment variables before using it:
 - `GOOGLE_OAUTH_REFRESH_TOKEN`
 - `PATIENT_HISTORY_SPREADSHEET_ID` (defaults to the dedicated patient-history
   spreadsheet configured for this project)
+- `OWNER_ADMIN_PASSWORD` (strong password for the owner dashboard)
+- `OWNER_ADMIN_SESSION_SECRET` (long random secret used to sign owner sessions)
 - `THERAPIST_SESSION_SECRET` (long random secret used to sign HTTP-only
   therapist sessions)
 - `THERAPIST_ACCOUNTS` (JSON array of therapist accounts with scrypt password
@@ -81,10 +83,20 @@ header row.
 
 The admin dashboard includes a live Google Calendar tab with date and branch
 filters, a native embedded Google Calendar view for
-`mythaithaimassage@gmail.com`, and a filtered appointment list. Admin access is currently gated in the browser with the temporary
-password `mythai`. This is a UI gate, not production-grade authentication;
-replace it with server-side authentication before exposing the dashboard
-publicly.
+`mythaithaimassage@gmail.com`, and a filtered appointment list. Owner access
+uses server-side password verification. Set `OWNER_ADMIN_PASSWORD` and
+`OWNER_ADMIN_SESSION_SECRET` in Vercel before deploying the owner dashboard
+changes. Use a unique password of at least 16 characters and generate the
+session secret with `openssl rand -hex 32`. The owner sign-in creates an
+HTTP-only, same-site session that expires after eight hours. Owner-only
+booking reads, calendar, patient-history, and business-profile endpoints
+require this session; public customer booking submissions remain unchanged.
+
+The owner dashboard includes a **Business profile** section for editing the
+business name, description, email, phone, website, and location. Profile values
+are saved to a `BusinessProfile` tab in `GOOGLE_SPREADSHEET_ID`, which the API
+creates automatically, and load for owners across devices. The service account
+must have Editor access to that spreadsheet.
 
 For new bookings to be written to the primary calendar, share that calendar
 with the service-account email as an Editor. For the embedded native calendar

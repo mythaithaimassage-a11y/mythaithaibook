@@ -11,11 +11,27 @@ const GOOGLE_OAUTH_REFRESH_TOKEN = process.env.GOOGLE_OAUTH_REFRESH_TOKEN || '';
 const PATIENT_HISTORY_SPREADSHEET_ID = process.env.PATIENT_HISTORY_SPREADSHEET_ID || '1tNrhigAWrvAc6DiLi-W_NwG04bPiTZZEs6KwfYDUclA';
 const THERAPIST_SESSION_SECRET = process.env.THERAPIST_SESSION_SECRET || '';
 const THERAPIST_ACCOUNTS = process.env.THERAPIST_ACCOUNTS || '[]';
+const OWNER_ADMIN_PASSWORD = process.env.OWNER_ADMIN_PASSWORD || '';
+const OWNER_ADMIN_SESSION_SECRET = process.env.OWNER_ADMIN_SESSION_SECRET || '';
+const BUSINESS_PROFILE_FIELDS = ['businessName', 'tagline', 'email', 'phone', 'website', 'address'];
+const DEFAULT_BUSINESS_PROFILE = {
+  businessName: 'MY THAI THAI',
+  tagline: 'Traditional Thai massage & wellness',
+  email: 'mythaithaimassage@gmail.com',
+  phone: '+1 437 898 7424',
+  website: 'https://mythaithaimassage.com',
+  address: 'Ontario, Canada',
+};
 
 function parseCookies(req) {
   return Object.fromEntries((req.headers.cookie || '').split(';').filter(Boolean).map((part) => {
     const index = part.indexOf('=');
-    return [part.slice(0, index).trim(), decodeURIComponent(part.slice(index + 1))];
+    const value = part.slice(index + 1);
+    try {
+      return [part.slice(0, index).trim(), decodeURIComponent(value)];
+    } catch {
+      return [part.slice(0, index).trim(), ''];
+    }
   }));
 }
 
@@ -63,6 +79,43 @@ function hashPassword(password) {
 
 function therapistCookie(value, maxAge) {
   return `mtt_therapist_session=${encodeURIComponent(value)}; Max-Age=${maxAge}; Path=/; HttpOnly; SameSite=Strict; Secure`;
+}
+
+function signOwnerSession() {
+  const payload = Buffer.from(JSON.stringify({ role: 'owner', expiresAt: Date.now() + 8 * 60 * 60 * 1000 })).toString('base64url');
+  const signature = crypto.createHmac('sha256', OWNER_ADMIN_SESSION_SECRET).update(payload).digest('base64url');
+  return `${payload}.${signature}`;
+}
+
+function isOwnerAuthConfigured() {
+  return OWNER_ADMIN_PASSWORD.length >= 16 && OWNER_ADMIN_SESSION_SECRET.length >= 32;
+}
+
+function getOwnerSession(req) {
+  if (!isOwnerAuthConfigured()) return null;
+  const value = parseCookies(req).mtt_owner_session || '';
+  const [payload, signature] = value.split('.');
+  if (!payload || !signature) return null;
+  const expected = crypto.createHmac('sha256', OWNER_ADMIN_SESSION_SECRET).update(payload).digest('base64url');
+  if (signature.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return null;
+  try {
+    const session = JSON.parse(Buffer.from(payload, 'base64url').toString());
+    return session.role === 'owner' && session.expiresAt > Date.now() ? session : null;
+  } catch {
+    return null;
+  }
+}
+
+function ownerCookie(value, maxAge) {
+  return `mtt_owner_session=${encodeURIComponent(value)}; Max-Age=${maxAge}; Path=/; HttpOnly; SameSite=Strict; Secure`;
+}
+
+function isSameOriginRequest(req) {
+  const origin = req.headers.origin;
+  if (!origin) return false;
+  const host = req.headers['x-forwarded-host'] || req.headers.host;
+  const protocol = req.headers['x-forwarded-proto'] || 'https';
+  return origin === `${protocol}://${host}`;
 }
 
 function parseBookingDateTime(date, time) {
@@ -188,6 +241,75 @@ async function ensurePatientHistorySheet(sheets) {
     spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
     requestBody: { requests },
   });
+}
+
+async function ensureBusinessProfileSheet(sheets) {
+  const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
+  if (!spreadsheetId) throw new Error('GOOGLE_SPREADSHEET_ID is not configured');
+  const spreadsheet = await sheets.spreadsheets.get({
+    spreadsheetId,
+    fields: 'sheets.properties',
+  });
+  const exists = (spreadsheet.data.sheets || [])
+    .some((sheet) => sheet.properties?.title === 'BusinessProfile');
+  if (!exists) {
+    try {
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: { requests: [{ addSheet: { properties: { title: 'BusinessProfile' } } }] },
+      });
+    } catch (error) {
+      const refreshed = await sheets.spreadsheets.get({
+        spreadsheetId,
+        fields: 'sheets.properties',
+      });
+      const createdByConcurrentRequest = (refreshed.data.sheets || [])
+        .some((sheet) => sheet.properties?.title === 'BusinessProfile');
+      if (!createdByConcurrentRequest) throw error;
+    }
+  }
+  const header = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: 'BusinessProfile!A1:F1',
+  });
+  if (BUSINESS_PROFILE_FIELDS.some((field, index) => header.data.values?.[0]?.[index] !== field)) {
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: 'BusinessProfile!A1:F1',
+      valueInputOption: 'RAW',
+      requestBody: { values: [BUSINESS_PROFILE_FIELDS] },
+    });
+  }
+}
+
+function validateBusinessProfile(input) {
+  const profile = Object.fromEntries(BUSINESS_PROFILE_FIELDS.map((field) => [
+    field,
+    String(input?.[field] || '').trim(),
+  ]));
+  if (!profile.businessName || profile.businessName.length > 100) {
+    throw new Error('Business name is required and must be 100 characters or fewer');
+  }
+  for (const field of BUSINESS_PROFILE_FIELDS.slice(1)) {
+    if (profile[field].length > 250) {
+      throw new Error(`${field} must be 250 characters or fewer`);
+    }
+  }
+  if (profile.email && !/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(profile.email)) {
+    throw new Error('Enter a valid business email address');
+  }
+  if (profile.website) {
+    let website;
+    try {
+      website = new URL(profile.website);
+    } catch {
+      throw new Error('Website must be a valid https:// or http:// URL');
+    }
+    if (!['http:', 'https:'].includes(website.protocol)) {
+      throw new Error('Website must use https:// or http://');
+    }
+  }
+  return profile;
 }
 
 function createGmailApi() {
@@ -328,6 +450,53 @@ export default async function handler(req, res) {
     if (req.method === 'POST' && req.query?.view === 'therapist-logout') {
       res.setHeader('Set-Cookie', therapistCookie('', 0));
       return res.status(200).json({ status: 'signed_out' });
+    }
+
+    if (req.query?.view === 'owner-session' && req.method === 'GET') {
+      if (!isOwnerAuthConfigured()) {
+        return res.status(503).json({ message: 'Configure an owner password of at least 16 characters and a session secret of at least 32 characters.' });
+      }
+      res.setHeader('Cache-Control', 'no-store');
+      return res.status(200).json({ authenticated: Boolean(getOwnerSession(req)) });
+    }
+
+    if (req.query?.view === 'owner-login' && req.method === 'POST') {
+      if (!isOwnerAuthConfigured()) {
+        return res.status(503).json({ message: 'Configure an owner password of at least 16 characters and a session secret of at least 32 characters.' });
+      }
+      if (!isSameOriginRequest(req)) {
+        return res.status(403).json({ message: 'Sign-in request origin is not allowed' });
+      }
+      const password = String(req.body?.password || '');
+      const provided = Buffer.from(password);
+      const expected = Buffer.from(OWNER_ADMIN_PASSWORD);
+      if (
+        password.length > 1024 ||
+        provided.length !== expected.length ||
+        !crypto.timingSafeEqual(provided, expected)
+      ) {
+        return res.status(401).json({ message: 'Incorrect owner password' });
+      }
+      res.setHeader('Set-Cookie', ownerCookie(signOwnerSession(), 8 * 60 * 60));
+      return res.status(200).json({ authenticated: true });
+    }
+
+    if (req.query?.view === 'owner-logout' && req.method === 'POST') {
+      if (!isSameOriginRequest(req)) {
+        return res.status(403).json({ message: 'Sign-out request origin is not allowed' });
+      }
+      res.setHeader('Set-Cookie', ownerCookie('', 0));
+      return res.status(200).json({ authenticated: false });
+    }
+
+    const view = String(req.query?.view || '');
+    const ownerOnlyRequest = req.method === 'GET' || view === 'business-profile';
+    if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
+    if (ownerOnlyRequest && !getOwnerSession(req)) {
+      return res.status(401).json({ message: 'Owner sign-in required' });
+    }
+    if (view === 'business-profile' && req.method === 'POST' && !isSameOriginRequest(req)) {
+      return res.status(403).json({ message: 'Profile update origin is not allowed' });
     }
 
     const auth = new google.auth.GoogleAuth({
@@ -513,6 +682,20 @@ export default async function handler(req, res) {
     }
 
     if (req.method === 'GET') {
+      if (req.query?.view === 'business-profile') {
+        await ensureBusinessProfileSheet(sheets);
+        const result = await sheets.spreadsheets.values.get({
+          spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+          range: 'BusinessProfile!A1:F2',
+        });
+        const row = result.data.values?.[1] || [];
+        const profile = Object.fromEntries(BUSINESS_PROFILE_FIELDS.map((field, index) => [
+          field,
+          row[index] === undefined ? DEFAULT_BUSINESS_PROFILE[field] : row[index],
+        ]));
+        return res.status(200).json({ profile });
+      }
+
       if (req.query?.view === 'patient-history') {
         const result = await sheets.spreadsheets.values.get({
           spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
@@ -646,6 +829,18 @@ export default async function handler(req, res) {
           syncedToSheets: true,
         })),
       });
+    }
+
+    if (req.method === 'POST' && req.query?.view === 'business-profile') {
+      const profile = validateBusinessProfile(req.body?.profile);
+      await ensureBusinessProfileSheet(sheets);
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: 'BusinessProfile!A2:F2',
+        valueInputOption: 'RAW',
+        requestBody: { values: [BUSINESS_PROFILE_FIELDS.map((field) => profile[field])] },
+      });
+      return res.status(200).json({ profile });
     }
 
     const payload = req.body;
