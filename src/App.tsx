@@ -387,6 +387,13 @@ function TherapistPortal() {
   const [calendarEvents, setCalendarEvents] = useState([]);
   const [selectedAppointment, setSelectedAppointment] = useState(null);
   const [therapistPanel, setTherapistPanel] = useState('schedule');
+  const [workspaceView, setWorkspaceView] = useState('dashboard');
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [professionalProfile, setProfessionalProfile] = useState({ email: '', phone: '', specialties: '', certifications: '', bio: '', updatedAt: '' });
+  const [profileForm, setProfileForm] = useState({ email: '', phone: '', specialties: '', certifications: '', bio: '' });
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profileError, setProfileError] = useState('');
+  const [profileMessage, setProfileMessage] = useState('');
   const [isSignup, setIsSignup] = useState(false);
   const [name, setName] = useState('');
   const [signupComplete, setSignupComplete] = useState('');
@@ -400,8 +407,46 @@ function TherapistPortal() {
     setSelectedAppointment((current) => current || data.appointments?.[0] || null);
     setSummary(data.summary || { upcomingCount: (data.appointments || []).length, flaggedCount: 0 });
     setTherapistProfile(data.profile || { branchNames: [], attendedHours: 0, attendedClientCount: 0 });
+    const savedProfile = data.professionalProfile || { email: '', phone: '', specialties: '', certifications: '', bio: '', updatedAt: '' };
+    setProfessionalProfile(savedProfile);
+    setProfileForm({
+      email: savedProfile.email || '',
+      phone: savedProfile.phone || '',
+      specialties: savedProfile.specialties || '',
+      certifications: savedProfile.certifications || '',
+      bio: savedProfile.bio || '',
+    });
     setAttendedClients(data.attended || []);
     setCalendarEvents(data.calendarEvents || []);
+  };
+
+  const saveProfessionalProfile = async (event) => {
+    event.preventDefault();
+    setProfileSaving(true);
+    setProfileError('');
+    setProfileMessage('');
+    try {
+      const response = await fetch('/api/booking?view=therapist-profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(profileForm),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Unable to save your profile.');
+      setProfessionalProfile(data.profile);
+      setProfileForm({
+        email: data.profile.email || '',
+        phone: data.profile.phone || '',
+        specialties: data.profile.specialties || '',
+        certifications: data.profile.certifications || '',
+        bio: data.profile.bio || '',
+      });
+      setProfileMessage('Your professional profile has been saved.');
+    } catch (requestError) {
+      setProfileError(requestError.message || 'Unable to save your profile.');
+    } finally {
+      setProfileSaving(false);
+    }
   };
 
   useEffect(() => {
@@ -475,20 +520,169 @@ function TherapistPortal() {
     );
   }
 
+  const hasProfessionalProfile = Boolean(
+    professionalProfile.email || professionalProfile.phone || professionalProfile.specialties ||
+    professionalProfile.certifications || professionalProfile.bio,
+  );
+
   return (
-    <div className="space-y-6">
-      <div className="rounded-3xl bg-gradient-to-r from-blue-900 via-blue-800 to-emerald-800 p-6 sm:p-8 text-white shadow-lg">
+    <div className="flex flex-col gap-5 lg:flex-row lg:items-start">
+      <aside className="w-full shrink-0 rounded-2xl border border-stone-200 bg-white p-3 shadow-sm lg:sticky lg:top-20 lg:w-64">
+        <div className="mb-3 flex items-center gap-3 rounded-xl bg-slate-950 px-3 py-3 text-white">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/20 text-sm font-black text-emerald-200">
+            {(therapist.name || 'T').split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase()}
+          </div>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-bold">{therapist.name}</p>
+            <p className="text-[10px] text-slate-300">Therapist workspace</p>
+          </div>
+        </div>
+        <nav aria-label="Therapist workspace" className="space-y-1">
+          <button
+            type="button"
+            onClick={() => setWorkspaceView('dashboard')}
+            className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold transition ${workspaceView === 'dashboard' ? 'bg-emerald-50 text-emerald-900' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-950'}`}
+          >
+            <CalendarDays className="h-4 w-4" />
+            <span className="flex-1">Workspace</span>
+          </button>
+          <div className={`rounded-xl ${workspaceView === 'profile' ? 'bg-emerald-50' : ''}`}>
+            <button
+              type="button"
+              aria-expanded={profileMenuOpen}
+              onClick={() => setProfileMenuOpen((open) => !open)}
+              className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold transition ${workspaceView === 'profile' ? 'text-emerald-900' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-950'}`}
+            >
+              <UserRound className="h-4 w-4" />
+              <span className="flex-1">My profile</span>
+              <ChevronRight className={`h-4 w-4 transition-transform ${profileMenuOpen ? 'rotate-90' : ''}`} />
+            </button>
+            {profileMenuOpen && (
+              <div className="mb-2 ml-5 border-l border-emerald-100 pl-4">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setWorkspaceView('profile');
+                    setProfileError('');
+                    setProfileMessage('');
+                  }}
+                  className={`w-full rounded-lg px-3 py-2 text-left text-xs font-semibold ${workspaceView === 'profile' ? 'bg-white text-emerald-900 shadow-sm' : 'text-slate-600 hover:bg-white hover:text-slate-950'}`}
+                >
+                  {hasProfessionalProfile ? 'Edit professional profile' : 'Create professional profile'}
+                </button>
+                <p className="px-3 pt-2 text-[10px] leading-4 text-slate-400">
+                  {hasProfessionalProfile ? 'Update your contact and practice details.' : 'Add your contact and practice details.'}
+                </p>
+              </div>
+            )}
+          </div>
+        </nav>
+        <div className="mt-3 border-t border-stone-100 px-3 pt-3">
+          <div className={`text-[10px] font-bold uppercase tracking-wide ${hasProfessionalProfile ? 'text-emerald-700' : 'text-amber-700'}`}>
+            {hasProfessionalProfile ? 'Profile added' : 'Profile setup needed'}
+          </div>
+          <p className="mt-1 truncate text-xs text-slate-500">{professionalProfile.specialties || 'Add your professional details'}</p>
+        </div>
+      </aside>
+      <div className="min-w-0 flex-1 space-y-5">
+      {workspaceView === 'profile' ? (
+        <section className="overflow-hidden rounded-2xl border border-stone-200 bg-white shadow-sm">
+          <div className="bg-gradient-to-r from-slate-950 via-blue-950 to-emerald-900 px-6 py-6 text-white sm:px-8">
+            <div className="flex items-start gap-4">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-white/10"><UserRound className="h-6 w-6" /></div>
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-200">Therapist profile</p>
+                <h1 className="mt-1 text-2xl font-black">{hasProfessionalProfile ? 'Update your profile' : 'Create your profile'}</h1>
+                <p className="mt-2 max-w-2xl text-sm leading-6 text-blue-100">Share your professional contact information and treatment experience with your clinic team. Your account name and sign-in details are managed separately.</p>
+              </div>
+            </div>
+          </div>
+          <form onSubmit={saveProfessionalProfile} className="space-y-6 p-5 sm:p-8">
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+              <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500">Account name</p>
+              <p className="mt-1 text-sm font-bold text-slate-900">{therapist.name}</p>
+            </div>
+            <div className="grid gap-5 sm:grid-cols-2">
+              <label className="block text-xs font-bold text-slate-700">
+                Professional email
+                <input
+                  type="email"
+                  maxLength={254}
+                  value={profileForm.email}
+                  onChange={(event) => setProfileForm((current) => ({ ...current, email: event.target.value }))}
+                  placeholder="name@example.com"
+                  className="mt-2 w-full rounded-xl border border-slate-300 px-3.5 py-3 text-sm font-normal outline-none transition focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100"
+                />
+              </label>
+              <label className="block text-xs font-bold text-slate-700">
+                Phone number
+                <input
+                  type="tel"
+                  maxLength={40}
+                  value={profileForm.phone}
+                  onChange={(event) => setProfileForm((current) => ({ ...current, phone: event.target.value }))}
+                  placeholder="+1 416 555 0123"
+                  className="mt-2 w-full rounded-xl border border-slate-300 px-3.5 py-3 text-sm font-normal outline-none transition focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100"
+                />
+              </label>
+              <label className="block text-xs font-bold text-slate-700 sm:col-span-2">
+                Specialties
+                <input
+                  maxLength={300}
+                  value={profileForm.specialties}
+                  onChange={(event) => setProfileForm((current) => ({ ...current, specialties: event.target.value }))}
+                  placeholder="Thai massage, deep tissue, hot stone"
+                  className="mt-2 w-full rounded-xl border border-slate-300 px-3.5 py-3 text-sm font-normal outline-none transition focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100"
+                />
+              </label>
+              <label className="block text-xs font-bold text-slate-700 sm:col-span-2">
+                Certifications and credentials
+                <input
+                  maxLength={300}
+                  value={profileForm.certifications}
+                  onChange={(event) => setProfileForm((current) => ({ ...current, certifications: event.target.value }))}
+                  placeholder="RMT registration, training, professional credentials"
+                  className="mt-2 w-full rounded-xl border border-slate-300 px-3.5 py-3 text-sm font-normal outline-none transition focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100"
+                />
+              </label>
+              <label className="block text-xs font-bold text-slate-700 sm:col-span-2">
+                About you
+                <textarea
+                  rows={5}
+                  maxLength={1200}
+                  value={profileForm.bio}
+                  onChange={(event) => setProfileForm((current) => ({ ...current, bio: event.target.value }))}
+                  placeholder="Describe your experience and approach to care."
+                  className="mt-2 w-full resize-y rounded-xl border border-slate-300 px-3.5 py-3 text-sm font-normal leading-6 outline-none transition focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100"
+                />
+                <span className="mt-1 block text-right text-[10px] font-normal text-slate-400">{profileForm.bio.length}/1200</span>
+              </label>
+            </div>
+            {profileError && <p role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{profileError}</p>}
+            {profileMessage && <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{profileMessage}</p>}
+            {professionalProfile.updatedAt && <p className="text-[11px] text-slate-400">Last updated {new Date(professionalProfile.updatedAt).toLocaleString()}</p>}
+            <div className="flex flex-wrap justify-end gap-2 border-t border-stone-100 pt-5">
+              <button type="button" onClick={() => { setWorkspaceView('dashboard'); setProfileError(''); setProfileMessage(''); }} className="rounded-xl border border-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">Cancel</button>
+              <button type="submit" disabled={profileSaving} className="rounded-xl bg-emerald-900 px-5 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-800 disabled:cursor-wait disabled:opacity-60">{profileSaving ? 'Saving…' : hasProfessionalProfile ? 'Save profile' : 'Create profile'}</button>
+            </div>
+          </form>
+        </section>
+      ) : (
+        <>
+      <div className="rounded-3xl bg-gradient-to-r from-slate-950 via-blue-950 to-emerald-900 p-6 sm:p-8 text-white shadow-lg">
         <div className="flex flex-wrap items-center justify-between gap-4">
-          <div><p className="text-xs uppercase tracking-[0.2em] text-blue-200">Therapist workspace</p><h1 className="text-2xl sm:text-3xl font-black mt-1">Welcome, {therapist.name}</h1><p className="text-sm text-blue-100 mt-2">Your upcoming schedule and treatment-safety preparation</p></div>
+          <div><p className="text-xs uppercase tracking-[0.2em] text-emerald-200">Therapist workspace</p><h1 className="text-2xl sm:text-3xl font-black mt-1">Good morning, {therapist.name}</h1><p className="text-sm text-blue-100 mt-2">Review your queue and prepare for each patient before their appointment.</p></div>
           <div className="flex gap-2">
             <button onClick={async () => { setRefreshing(true); try { await loadAppointments(); } finally { setRefreshing(false); } }} disabled={refreshing} className="px-3 py-2 rounded-xl bg-white/15 hover:bg-white/25 text-xs font-bold disabled:opacity-50">{refreshing ? 'Syncing...' : 'Refresh data'}</button>
             <button onClick={async () => { await fetch('/api/booking?view=therapist-logout', { method: 'POST' }); setTherapist(null); setAppointments([]); }} className="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-xs">Sign out</button>
           </div>
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-4">
-        <div className="rounded-2xl bg-white border border-stone-200 p-5 shadow-sm"><div className="text-xs font-bold uppercase tracking-wide text-stone-500">Upcoming appointments</div><div className="text-3xl font-black text-blue-800 mt-2">{summary.upcomingCount}</div><div className="text-xs text-stone-500 mt-1">Synced from Google Sheets</div></div>
-        <div className="rounded-2xl bg-white border border-stone-200 p-5 shadow-sm"><div className="text-xs font-bold uppercase tracking-wide text-stone-500">Safety flags</div><div className="text-3xl font-black text-amber-700 mt-2">{summary.flaggedCount}</div><div className="text-xs text-stone-500 mt-1">Conditions or oil allergies</div></div>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="rounded-2xl bg-white border border-stone-200 p-4 shadow-sm"><div className="text-[10px] font-bold uppercase tracking-wide text-stone-500">Today’s queue</div><div className="text-3xl font-black text-blue-800 mt-2">{summary.upcomingCount}</div><div className="text-xs text-stone-500 mt-1">Upcoming appointments</div></div>
+        <div className="rounded-2xl bg-white border border-stone-200 p-4 shadow-sm"><div className="text-[10px] font-bold uppercase tracking-wide text-stone-500">Safety flags</div><div className="text-3xl font-black text-amber-700 mt-2">{summary.flaggedCount}</div><div className="text-xs text-stone-500 mt-1">Needs careful review</div></div>
+        <div className="rounded-2xl bg-white border border-stone-200 p-4 shadow-sm"><div className="text-[10px] font-bold uppercase tracking-wide text-stone-500">Hours served</div><div className="text-3xl font-black text-emerald-800 mt-2">{therapistProfile.attendedHours.toFixed(1)}</div><div className="text-xs text-stone-500 mt-1">Completed treatments</div></div>
+        <div className="rounded-2xl bg-white border border-stone-200 p-4 shadow-sm"><div className="text-[10px] font-bold uppercase tracking-wide text-stone-500">Patients seen</div><div className="text-3xl font-black text-purple-800 mt-2">{therapistProfile.attendedClientCount}</div><div className="text-xs text-stone-500 mt-1">Past appointments</div></div>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="rounded-2xl bg-white border border-stone-200 p-5 shadow-sm">
@@ -579,7 +773,7 @@ function TherapistPortal() {
               {selectedAppointment && (
                 <div className="p-5 sm:p-7">
                   <div className="flex flex-wrap items-start justify-between gap-3 border-b border-stone-200 pb-4">
-                    <div><div className="text-xs uppercase tracking-wide text-stone-500">Patient preparation</div><h2 className="text-2xl font-black text-stone-900 mt-1">{selectedAppointment.patientName}</h2><p className="text-sm text-stone-500 mt-1">{selectedAppointment.date} at {selectedAppointment.time} · {selectedAppointment.serviceName}</p></div>
+                    <div><div className="text-xs uppercase tracking-wide text-stone-500">Patient preparation</div><h2 className="text-2xl font-black text-stone-900 mt-1">{selectedAppointment.patientName}</h2><p className="text-sm text-stone-500 mt-1">{selectedAppointment.date} at {selectedAppointment.time} · {selectedAppointment.serviceName}</p><div className="mt-2 flex flex-wrap gap-2 text-[11px] text-stone-500"><span>{selectedAppointment.patientPhone || 'Phone not recorded'}</span><span>•</span><span>{selectedAppointment.patientEmail || 'Email not recorded'}</span></div></div>
                     <span className="px-3 py-1.5 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold">{selectedAppointment.branchName}</span>
                   </div>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-5">
@@ -592,7 +786,12 @@ function TherapistPortal() {
                     <h3 className="text-sm font-bold text-stone-800 mb-2">Affected body areas</h3>
                     <BodyAreaMap value={selectedAppointment.bodyAreas} readOnly />
                   </div>
-                  {(selectedAppointment.painAreas || selectedAppointment.additionalDetails) && <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-3"><div className="rounded-xl bg-stone-50 p-4 text-xs"><div className="font-bold text-stone-700 mb-1">Pain / discomfort</div>{selectedAppointment.painAreas || 'None recorded'}</div><div className="rounded-xl bg-stone-50 p-4 text-xs"><div className="font-bold text-stone-700 mb-1">Safety details</div>{selectedAppointment.additionalDetails || 'None recorded'}</div></div>}
+                  <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="rounded-xl bg-stone-50 p-4 text-xs"><div className="font-bold text-stone-700 mb-1">Pain / discomfort notes</div><p className="leading-5 text-stone-600">{selectedAppointment.painAreas || 'No pain or discomfort notes recorded.'}</p></div>
+                    <div className="rounded-xl bg-stone-50 p-4 text-xs"><div className="font-bold text-stone-700 mb-1">Patient notes</div><p className="leading-5 text-stone-600">{selectedAppointment.additionalDetails || 'No additional notes recorded.'}</p></div>
+                    <div className="rounded-xl bg-stone-50 p-4 text-xs"><div className="font-bold text-stone-700 mb-1">Medical history flags</div><div className="flex flex-wrap gap-1.5">{selectedAppointment.conditionFlags?.length ? selectedAppointment.conditionFlags.map((flag) => <span key={flag} className="rounded-full bg-red-100 px-2 py-1 text-[10px] font-bold text-red-800">{flag}</span>) : <span className="text-stone-600">No conditions reported.</span>}</div></div>
+                    <div className="rounded-xl bg-stone-50 p-4 text-xs"><div className="font-bold text-stone-700 mb-1">Patient profile</div><p className="leading-5 text-stone-600">{[selectedAppointment.gender, selectedAppointment.dateOfBirth ? `DOB ${selectedAppointment.dateOfBirth}` : '', selectedAppointment.medications ? `Medication: ${selectedAppointment.medications}` : ''].filter(Boolean).join(' · ') || 'Profile details not recorded.'}</p></div>
+                  </div>
                   <div className="mt-5 p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900">Use this summary to prepare. Review the complete patient history only through the authorized clinical workflow.</div>
                 </div>
               )}
@@ -605,19 +804,29 @@ function TherapistPortal() {
           )}
         </div>
       )}
-      <div className="grid gap-4">
-        {appointments.map((appointment) => (
-          <div key={appointment.bookingId} className="bg-white rounded-2xl p-5 border border-stone-200 shadow-sm hover:shadow-md transition">
-            <div className="flex flex-wrap justify-between gap-2"><div><h2 className="text-lg font-bold text-stone-900">{appointment.patientName}</h2><p className="text-xs text-stone-500">{appointment.date} at {appointment.time} · {appointment.serviceName}</p></div><span className="px-2 py-1 rounded-lg bg-blue-50 text-blue-800 text-xs font-bold">{appointment.branchName}</span></div>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4">
-              <div className="p-3 rounded-xl bg-amber-50"><div className="text-[10px] font-bold uppercase text-amber-800">Pressure</div><div className="text-sm font-bold">{appointment.pressure || 'Not recorded'}</div></div>
-              <div className="p-3 rounded-xl bg-red-50"><div className="text-[10px] font-bold uppercase text-red-800">Conditions</div><div className="text-sm font-bold">{appointment.hasReportedConditions ? `${appointment.reportedConditionCount} reported` : 'None flagged'}</div></div>
-              <div className="p-3 rounded-xl bg-purple-50"><div className="text-[10px] font-bold uppercase text-purple-800">Oil allergy</div><div className="text-sm font-bold">{appointment.allergiesToOil ? 'Yes' : 'No'}</div></div>
-              <div className="p-3 rounded-xl bg-blue-50"><div className="text-[10px] font-bold uppercase text-blue-800">Body areas</div><div className="text-xs font-bold">{appointment.bodyAreas || 'Not recorded'}</div></div>
-            </div>
-            {(appointment.painAreas || appointment.additionalDetails) && <div className="mt-4 p-3 rounded-xl bg-stone-50 text-xs space-y-1"><div><strong>Pain/discomfort:</strong> {appointment.painAreas || 'None recorded'}</div><div><strong>Additional safety details:</strong> {appointment.additionalDetails || 'None recorded'}</div></div>}
-          </div>
-        ))}
+      <div className="bg-white rounded-2xl border border-stone-200 shadow-sm overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-stone-200 px-5 py-4">
+          <div><h2 className="text-lg font-bold text-stone-900">Appointment queue</h2><p className="text-xs text-stone-500 mt-1">Select a patient to open their preparation notes.</p></div>
+          <span className="rounded-full bg-blue-50 px-3 py-1 text-[11px] font-bold text-blue-800">{appointments.length} scheduled</span>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[720px] text-left text-xs">
+            <thead className="bg-stone-50 text-[10px] uppercase tracking-wide text-stone-500">
+              <tr><th className="px-5 py-3">Time</th><th className="px-5 py-3">Patient</th><th className="px-5 py-3">Treatment</th><th className="px-5 py-3">Preparation</th><th className="px-5 py-3">Notes</th></tr>
+            </thead>
+            <tbody className="divide-y divide-stone-100">
+              {appointments.map((appointment) => (
+                <tr key={`queue-${appointment.bookingId}`} onClick={() => { setSelectedAppointment(appointment); setTherapistPanel('schedule'); }} className={`cursor-pointer transition hover:bg-blue-50 ${selectedAppointment?.bookingId === appointment.bookingId ? 'bg-blue-50/70' : ''}`}>
+                  <td className="whitespace-nowrap px-5 py-4 font-bold text-blue-900">{appointment.time}<div className="mt-1 text-[10px] font-normal text-stone-500">{appointment.date}</div></td>
+                  <td className="px-5 py-4"><div className="font-bold text-stone-900">{appointment.patientName}</div><div className="mt-1 text-[10px] text-stone-500">{appointment.branchName}</div></td>
+                  <td className="max-w-[210px] px-5 py-4 text-stone-700">{appointment.serviceName}<div className="mt-1 text-[10px] text-stone-500">{appointment.durationMinutes || '—'} min</div></td>
+                  <td className="px-5 py-4"><div className="flex flex-wrap gap-1">{appointment.pressure && <span className="rounded-full bg-amber-100 px-2 py-1 text-[10px] font-bold text-amber-800">{appointment.pressure}</span>}{appointment.hasReportedConditions && <span className="rounded-full bg-red-100 px-2 py-1 text-[10px] font-bold text-red-800">{appointment.reportedConditionCount} flag{appointment.reportedConditionCount === 1 ? '' : 's'}</span>}{appointment.allergiesToOil && <span className="rounded-full bg-purple-100 px-2 py-1 text-[10px] font-bold text-purple-800">Allergy</span>}</div></td>
+                  <td className="max-w-[190px] px-5 py-4 text-stone-600">{appointment.painAreas || appointment.additionalDetails || 'No notes recorded'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
       <div className="bg-white rounded-2xl border border-stone-200 shadow-sm overflow-hidden">
         <div className="p-5 border-b border-stone-200">
@@ -662,6 +871,9 @@ function TherapistPortal() {
           </table>
           {attendedClients.length === 0 && <div className="p-6 text-sm text-stone-500">No historical bookings are available.</div>}
         </div>
+      </div>
+        </>
+      )}
       </div>
     </div>
   );

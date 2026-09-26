@@ -260,6 +260,47 @@ async function ensurePatientHistorySheet(sheets) {
   });
 }
 
+async function ensureTherapistProfilesSheet(sheets) {
+  const spreadsheet = await sheets.spreadsheets.get({
+    spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+    fields: 'sheets.properties',
+  });
+  const exists = (spreadsheet.data.sheets || [])
+    .some((sheet) => sheet.properties?.title === 'TherapistProfiles');
+  if (!exists) {
+    try {
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+        requestBody: { requests: [{ addSheet: { properties: { title: 'TherapistProfiles' } } }] },
+      });
+    } catch (error) {
+      const refreshed = await sheets.spreadsheets.get({
+        spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+        fields: 'sheets.properties',
+      });
+      const createdByConcurrentRequest = (refreshed.data.sheets || [])
+        .some((sheet) => sheet.properties?.title === 'TherapistProfiles');
+      if (!createdByConcurrentRequest) throw error;
+    }
+  }
+
+  const headers = ['Therapist ID', 'Email', 'Phone', 'Specialties', 'Certifications', 'Bio', 'Updated At'];
+  const headerResult = await sheets.spreadsheets.values.get({
+    spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+    range: 'TherapistProfiles!A1:G1',
+  });
+  if (!headerResult.data.values?.[0]?.length) {
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+      range: 'TherapistProfiles!A1:G1',
+      valueInputOption: 'RAW',
+      requestBody: { values: [headers] },
+    });
+  } else if (headers.some((header, index) => headerResult.data.values[0][index] !== header)) {
+    throw new Error('TherapistProfiles sheet has an unexpected header format');
+  }
+}
+
 async function ensureBusinessProfileSheet(sheets) {
   const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
   if (!spreadsheetId) throw new Error('GOOGLE_SPREADSHEET_ID is not configured');
@@ -1024,6 +1065,77 @@ export default async function handler(req, res) {
     const sheets = google.sheets({ version: 'v4', auth });
     const calendarApi = google.calendar({ version: 'v3', auth });
 
+    if (req.method === 'POST' && req.query?.view === 'therapist-profile') {
+      res.setHeader('Cache-Control', 'no-store');
+      if (!isSameOriginRequest(req)) {
+        return res.status(403).json({ message: 'Profile update origin is not allowed' });
+      }
+      const session = getTherapistSession(req);
+      if (!session) return res.status(401).json({ message: 'Therapist sign-in required' });
+
+      const accountsResult = await sheets.spreadsheets.values.get({
+        spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+        range: 'TherapistAccounts!A:F',
+      }).catch((error) => {
+        if (error.code === 400) return { data: { values: [] } };
+        throw error;
+      });
+      const sheetAccount = (accountsResult.data.values || []).slice(1)
+        .map((row) => ({ id: row[0], name: row[2], status: row[4] }))
+        .find((item) => item.id === session.therapistId);
+      if (sheetAccount && sheetAccount.status !== 'approved') {
+        return res.status(403).json({ message: 'Therapist account is not approved' });
+      }
+      const account = sheetAccount || getTherapistAccounts().find((item) => item.id === session.therapistId);
+      if (!account) return res.status(401).json({ message: 'Therapist account is not available' });
+
+      const profile = {
+        email: String(req.body?.email || '').trim().slice(0, 254),
+        phone: String(req.body?.phone || '').trim().slice(0, 40),
+        specialties: String(req.body?.specialties || '').trim().slice(0, 300),
+        certifications: String(req.body?.certifications || '').trim().slice(0, 300),
+        bio: String(req.body?.bio || '').trim().slice(0, 1200),
+      };
+      if (profile.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(profile.email)) {
+        return res.status(400).json({ message: 'Enter a valid email address.' });
+      }
+
+      await ensureTherapistProfilesSheet(sheets);
+      const profileRowsResult = await sheets.spreadsheets.values.get({
+        spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+        range: 'TherapistProfiles!A:G',
+      });
+      const profileRows = profileRowsResult.data.values || [];
+      const profileRowIndex = profileRows.slice(1).findIndex((row) => row[0] === session.therapistId);
+      const updatedAt = new Date().toISOString();
+      const values = [
+        session.therapistId,
+        profile.email,
+        profile.phone,
+        profile.specialties,
+        profile.certifications,
+        profile.bio,
+        updatedAt,
+      ];
+      if (profileRowIndex >= 0) {
+        const sheetRow = profileRowIndex + 2;
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+          range: `TherapistProfiles!A${sheetRow}:G${sheetRow}`,
+          valueInputOption: 'RAW',
+          requestBody: { values: [values] },
+        });
+      } else {
+        await sheets.spreadsheets.values.append({
+          spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+          range: 'TherapistProfiles!A:G',
+          valueInputOption: 'RAW',
+          requestBody: { values: [values] },
+        });
+      }
+      return res.status(200).json({ profile: { ...profile, updatedAt } });
+    }
+
     if (view === 'unsubscribe' && req.method === 'GET') {
       const token = String(req.query?.token || '');
       if (!/^[a-f0-9]{64}$/.test(token)) {
@@ -1144,6 +1256,7 @@ export default async function handler(req, res) {
     }
 
     if (req.query?.view === 'therapist-dashboard' || req.query?.view === 'therapist-session') {
+      res.setHeader('Cache-Control', 'no-store');
       const session = getTherapistSession(req);
       if (!session) return res.status(401).json({ message: 'Therapist sign-in required' });
       const accountsResult = await sheets.spreadsheets.values.get({
@@ -1237,17 +1350,33 @@ export default async function handler(req, res) {
         .map((row) => ({ id: row[0], name: row[2], status: row[4] }))
         .find((item) => item.id === session.therapistId && item.status === 'approved');
       const account = sheetAccount || getTherapistAccounts().find((item) => item.id === session.therapistId);
+      await ensureTherapistProfilesSheet(sheets);
+      const professionalProfilesResult = await sheets.spreadsheets.values.get({
+        spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+        range: 'TherapistProfiles!A:G',
+      });
+      const professionalProfileRow = (professionalProfilesResult.data.values || [])
+        .slice(1)
+        .find((row) => row[0] === session.therapistId) || [];
       const therapistBookings = bookings.filter((row) => row[6] === account.name);
       const upcoming = therapistBookings.filter((row) => row[7] >= new Date().toISOString().slice(0, 10))
         .map((row) => {
           const history = histories.find((candidate) => candidate[0] === row[0]);
-          const yesConditions = history ? [11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24].filter((index) => String(history[index] || '').toLowerCase() === 'yes').length : 0;
+          const conditionLabels = ['Heart condition', 'Blood pressure', 'Diabetes', 'Cancer', 'Headaches', 'Bone or joint concern', 'Broken bones', 'Osteoporosis', 'Allergies', 'Surgeries', 'Numbness', 'Skin sensitivity', 'Pregnancy', 'Medications'];
+          const conditionFlags = history
+            ? [11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]
+              .map((index, conditionIndex) => String(history[index] || '').toLowerCase() === 'yes' ? conditionLabels[conditionIndex] : '')
+              .filter(Boolean)
+            : [];
           return {
             bookingId: row[0], patientName: row[1], date: row[7], time: row[8],
             serviceName: row[5], branchName: row[4], durationMinutes: Number(row[12]) || 0, pressure: history?.[28] || '',
             painAreas: history?.[26] || '', bodyAreas: history?.[27] || '',
-            hasReportedConditions: yesConditions > 0, reportedConditionCount: yesConditions,
+            hasReportedConditions: conditionFlags.length > 0, reportedConditionCount: conditionFlags.length, conditionFlags,
             allergiesToOil: history?.[19] === 'Yes', additionalDetails: history?.[25] || '',
+            patientPhone: history?.[5] || row[2] || '', patientEmail: history?.[6] || row[3] || '',
+            dateOfBirth: history?.[3] || '', gender: history?.[4] || '',
+            medications: history?.[24] || '', historyCreatedAt: history?.[1] || '',
           };
         });
       const attended = therapistBookings
@@ -1294,6 +1423,14 @@ export default async function handler(req, res) {
         }));
       return res.status(200).json({
         therapist: { name: account.name },
+        professionalProfile: {
+          email: professionalProfileRow[1] || '',
+          phone: professionalProfileRow[2] || '',
+          specialties: professionalProfileRow[3] || '',
+          certifications: professionalProfileRow[4] || '',
+          bio: professionalProfileRow[5] || '',
+          updatedAt: professionalProfileRow[6] || '',
+        },
         appointments: upcoming,
         calendarEvents,
         calendarDate,
