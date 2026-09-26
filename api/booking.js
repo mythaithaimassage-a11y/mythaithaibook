@@ -212,31 +212,105 @@ async function sendGmailConfirmation(gmail, payload) {
     throw new Error('A valid customer email is required for confirmation email');
   }
 
-  const subject = `MY THAI THAI booking confirmation - ${payload.id}`;
+  const escapeHtml = (value) => String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+  const base64Lines = (value) => Buffer.from(value)
+    .toString('base64')
+    .match(/.{1,76}/g)
+    .join('\r\n');
+  const subject = `Your MY THAI THAI appointment is confirmed - ${payload.id}`;
   const text = [
-    'Your MY THAI THAI appointment is confirmed.',
+    `Hello${payload.customerName ? ` ${payload.customerName}` : ''},`,
     '',
-    `Booking: ${payload.id}`,
+    'Your appointment with MY THAI THAI is confirmed. We look forward to welcoming you.',
+    '',
+    'YOUR APPOINTMENT',
+    `Booking reference: ${payload.id}`,
     `Service: ${payload.serviceName}`,
     `Therapist: ${payload.therapistName}`,
     `Date: ${payload.date}`,
     `Time: ${payload.time}`,
-    `Branch: ${payload.branchName}`,
-    `Payment: ${payload.paymentOption}`,
-    `Paid: $${payload.paidAmount}`,
-    `Total: $${payload.totalAmount}`,
+    `Location: ${payload.branchName}`,
+    '',
+    'PAYMENT SUMMARY',
+    `Payment method: ${payload.paymentOption}`,
+    `Deposit paid: $${payload.paidAmount}`,
+    `Appointment total: $${payload.totalAmount}`,
     '',
     'Your appointment has been added to the therapist calendar.',
+    'Please keep your booking reference for your records.',
+    '',
+    'Thank you for choosing MY THAI THAI.',
   ].join('\n');
+  const details = [
+    ['Booking reference', payload.id],
+    ['Service', payload.serviceName],
+    ['Therapist', payload.therapistName],
+    ['Date', payload.date],
+    ['Time', payload.time],
+    ['Location', payload.branchName],
+  ];
+  const html = `<!doctype html>
+<html lang="en">
+  <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Appointment confirmed</title></head>
+  <body style="margin:0;padding:0;background:#f5f3ef;color:#292821;font-family:Arial,Helvetica,sans-serif;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f5f3ef;padding:32px 12px;">
+      <tr><td align="center">
+        <table role="presentation" width="600" cellspacing="0" cellpadding="0" style="width:100%;max-width:600px;background:#ffffff;border-radius:16px;overflow:hidden;">
+          <tr><td style="background:#31594b;padding:30px 36px;color:#ffffff;">
+            <p style="margin:0 0 8px;font-size:12px;letter-spacing:2px;text-transform:uppercase;color:#dce9df;">MY THAI THAI</p>
+            <h1 style="margin:0;font-size:26px;line-height:1.3;">Your appointment is confirmed</h1>
+          </td></tr>
+          <tr><td style="padding:30px 36px 12px;">
+            <p style="margin:0 0 10px;font-size:17px;">Hello${payload.customerName ? ` ${escapeHtml(payload.customerName)}` : ''},</p>
+            <p style="margin:0;color:#625f56;line-height:1.6;">We look forward to welcoming you. Here are the details of your upcoming visit.</p>
+          </td></tr>
+          <tr><td style="padding:16px 36px;">
+            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border:1px solid #e8e5dd;border-radius:10px;">
+              ${details.map(([label, value], index) => `<tr><td style="padding:12px 16px;${index < details.length - 1 ? 'border-bottom:1px solid #eeeae3;' : ''}color:#777368;font-size:13px;width:40%;">${escapeHtml(label)}</td><td style="padding:12px 16px;${index < details.length - 1 ? 'border-bottom:1px solid #eeeae3;' : ''}font-size:14px;font-weight:600;">${escapeHtml(value)}</td></tr>`).join('')}
+            </table>
+          </td></tr>
+          <tr><td style="padding:12px 36px 24px;">
+            <h2 style="margin:0 0 12px;font-size:17px;">Payment summary</h2>
+            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f7f6f2;border-radius:10px;">
+              <tr><td style="padding:12px 16px;color:#625f56;">Payment method</td><td align="right" style="padding:12px 16px;font-weight:600;">${escapeHtml(payload.paymentOption)}</td></tr>
+              <tr><td style="padding:8px 16px;color:#625f56;">Deposit paid</td><td align="right" style="padding:8px 16px;">$${escapeHtml(payload.paidAmount)}</td></tr>
+              <tr><td style="padding:8px 16px 14px;color:#292821;font-weight:700;">Appointment total</td><td align="right" style="padding:8px 16px 14px;font-weight:700;">$${escapeHtml(payload.totalAmount)}</td></tr>
+            </table>
+          </td></tr>
+          <tr><td style="padding:0 36px 30px;">
+            <p style="margin:0 0 8px;color:#625f56;line-height:1.6;">Your visit has been added to the therapist calendar. Please keep your booking reference <strong>${escapeHtml(payload.id)}</strong> for your records.</p>
+            <p style="margin:18px 0 0;color:#31594b;font-weight:600;">Thank you for choosing MY THAI THAI.</p>
+          </td></tr>
+          <tr><td style="padding:16px 36px;background:#f7f6f2;color:#888477;font-size:12px;text-align:center;">MY THAI THAI · We look forward to seeing you</td></tr>
+        </table>
+      </td></tr>
+    </table>
+  </body>
+</html>`;
+  const boundary = `mtt_${crypto.randomBytes(12).toString('hex')}`;
   const message = [
     `From: ${GOOGLE_GMAIL_SENDER_EMAIL}`,
     `To: ${recipient}`,
     `Subject: =?UTF-8?B?${Buffer.from(subject).toString('base64')}?=`,
     'MIME-Version: 1.0',
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    '',
+    `--${boundary}`,
     'Content-Type: text/plain; charset=UTF-8',
     'Content-Transfer-Encoding: base64',
     '',
-    Buffer.from(text).toString('base64'),
+    base64Lines(text),
+    `--${boundary}`,
+    'Content-Type: text/html; charset=UTF-8',
+    'Content-Transfer-Encoding: base64',
+    '',
+    base64Lines(html),
+    `--${boundary}--`,
   ].join('\r\n');
 
   await gmail.users.messages.send({
