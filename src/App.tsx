@@ -1746,7 +1746,7 @@ function AdminPortal({
   const [campaignGoal, setCampaignGoal] = useState('');
   const [campaignChatInput, setCampaignChatInput] = useState('');
   const [campaignConversation, setCampaignConversation] = useState([
-    { role: 'assistant', text: 'Describe the customers you want to reach. I can find opted-in customers by visit weekday, recent booking, branch, service, or most recent activity.' },
+    { role: 'assistant', text: 'Describe a group, or choose “All active opted-in subscribers” to include everyone. Branch, weekday, and recent-booking filters only match customers with corresponding booking history.' },
   ]);
   const [campaignAudience, setCampaignAudience] = useState(null);
   const [isBuildingCampaignAudience, setIsBuildingCampaignAudience] = useState(false);
@@ -1987,9 +1987,12 @@ function AdminPortal({
       if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
       setCampaignAudience({ query: cleanQuery, ...data });
       const readinessMessage = data.sendReady ? '' : ` ${data.sendBlockReason}`;
+      const filterMessage = data.count < data.subscriberCount
+        ? ' A filter can exclude subscribers who do not have matching booking history. Choose “All active opted-in subscribers” to include everyone.'
+        : '';
       setCampaignConversation((current) => [...current, {
         role: 'assistant',
-        text: `${data.description} I found ${data.count} matching people from ${data.subscriberCount} active opted-in subscribers.${readinessMessage}`,
+        text: `${data.description} I found ${data.count} matching ${data.count === 1 ? 'person' : 'people'} from ${data.subscriberCount} active opted-in subscribers.${filterMessage}${readinessMessage}`,
       }]);
     } catch (error) {
       setCampaignAudience(null);
@@ -2772,19 +2775,20 @@ function AdminPortal({
           {campaignNotice && <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">{campaignNotice}</div>}
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
             <div className="flex flex-wrap items-start justify-between gap-3">
-              <div><h3 className="font-bold text-slate-900">Audience assistant</h3><p className="mt-1 text-xs leading-5 text-slate-500">Describe a segment in plain language. Matching runs privately against booking dates and consented contacts; no patient data is sent to an AI service.</p></div>
-              {campaignAudience && <span className="rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-900">{campaignAudience.count} matched · {campaignAudience.subscriberCount} opted in</span>}
+              <div><h3 className="font-bold text-slate-900">Audience assistant</h3><p className="mt-1 text-xs leading-5 text-slate-500">Choose all subscribers or describe a segment. Branch, weekday, and recent-booking filters only include people with matching booking history. Matching runs privately; no patient data is sent to an AI service.</p></div>
+              {campaignAudience && <span className="rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-900">{campaignAudience.count} matched / {campaignAudience.subscriberCount} opted in</span>}
             </div>
             <div aria-live="polite" className="mt-4 max-h-56 space-y-2 overflow-y-auto rounded-xl bg-slate-50 p-3">
               {campaignConversation.map((entry, index) => <div key={`${entry.role}-${index}`} className={`max-w-[90%] rounded-xl px-3.5 py-2.5 text-xs leading-5 ${entry.role === 'user' ? 'ml-auto bg-emerald-950 text-white' : 'bg-white text-slate-700 shadow-sm'}`}>{entry.text}</div>)}
               {isBuildingCampaignAudience && <p className="text-xs text-slate-500">Checking opted-in contacts and booking history…</p>}
             </div>
             <form onSubmit={(event) => { event.preventDefault(); askCampaignAudience(); }} className="mt-3 flex gap-2">
-              <input value={campaignChatInput} onChange={(event) => setCampaignChatInput(event.target.value)} maxLength={300} disabled={isSendingCampaign} placeholder="e.g. Customers who visit every Wednesday at Oakville Downtown" className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3.5 py-3 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100 disabled:bg-slate-50" />
+              <input value={campaignChatInput} onChange={(event) => setCampaignChatInput(event.target.value)} maxLength={300} disabled={isSendingCampaign} placeholder="e.g. All active opted-in subscribers" className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3.5 py-3 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100 disabled:bg-slate-50" />
               <button type="submit" disabled={isBuildingCampaignAudience || isSendingCampaign || !campaignChatInput.trim()} className="shrink-0 rounded-xl bg-emerald-950 px-4 py-2.5 text-xs font-bold text-white hover:bg-emerald-800 disabled:opacity-50">{isBuildingCampaignAudience ? 'Thinking…' : 'Find audience'}</button>
             </form>
             <div className="mt-3 flex flex-wrap gap-2">
               {[
+                'All active opted-in subscribers',
                 'Customers who visit every Wednesday',
                 `Most recent customers at ${branches[0]?.name || 'a branch'} in the last 30 days`,
                 `All opted-in customers at ${branches[0]?.name || 'a branch'}`,
@@ -2793,6 +2797,7 @@ function AdminPortal({
             {campaignAudience && <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
               <p className="text-sm font-bold text-slate-900">{campaignAudience.description}</p>
               <p className="mt-1 text-xs text-slate-500">{campaignAudience.count ? `Examples: ${campaignAudience.sampleNames.join(', ')}` : campaignAudience.subscriberCount ? 'No opted-in subscribers match that description yet.' : 'There are no opted-in subscribers yet. New customers can choose marketing emails in the booking form.'}</p>
+              {campaignAudience.count < campaignAudience.subscriberCount && campaignAudience.subscriberCount > 0 && <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">This filter matches {campaignAudience.count} of {campaignAudience.subscriberCount} active opted-in subscribers. A branch, weekday, or date filter requires a matching booking in the history. Choose “All active opted-in subscribers” above to include everyone.</p>}
               {!campaignAudience.sendReady && <p className="mt-2 text-xs font-semibold text-amber-800">{campaignAudience.sendBlockReason}</p>}
               {campaignAudience.count > 50 && <p className="mt-2 text-xs font-semibold text-amber-800">Campaigns are limited to 50 recipients per send. Narrow this group before sending.</p>}
               <p className="mt-2 text-[10px] leading-4 text-slate-400">Audience matching uses historical booking dates, not verified attendance or visit frequency.</p>
