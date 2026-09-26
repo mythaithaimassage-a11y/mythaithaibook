@@ -1711,6 +1711,7 @@ function AdminPortal({
   const [selectedCalendarEvent, setSelectedCalendarEvent] = useState(null);
   const [issuedReceipt, setIssuedReceipt] = useState(null);
   const [isIssuingReceipt, setIsIssuingReceipt] = useState(false);
+  const [isMarkingPaid, setIsMarkingPaid] = useState(false);
   const [receiptError, setReceiptError] = useState('');
   const [receiptNotice, setReceiptNotice] = useState('');
   const [reportStartDate, setReportStartDate] = useState(() => {
@@ -1870,6 +1871,36 @@ function AdminPortal({
       setReceiptError(error.message || 'Unable to issue receipt');
     } finally {
       setIsIssuingReceipt(false);
+    }
+  };
+
+  const markBookingPaid = async (booking) => {
+    setIsMarkingPaid(true);
+    setReceiptError('');
+    setReceiptNotice('');
+    try {
+      const response = await fetch('/api/booking?view=mark-paid', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bookingId: booking.id }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+      setSelectedCalendarEvent((current) => current ? {
+        ...current,
+        booking: { ...current.booking, ...data.booking },
+      } : current);
+      setBookings((current) => current.map((item) => item.id === data.booking.id
+        ? { ...item, paidAmount: data.booking.paidAmount }
+        : item));
+      setReceiptNotice(data.alreadyPaid
+        ? 'This appointment was already marked as paid.'
+        : `Payment of $${Number(data.booking.paidAmount).toFixed(2)} recorded. You can now issue the receipt.`);
+      await loadCalendar();
+    } catch (error) {
+      setReceiptError(error.message || 'Unable to record payment');
+    } finally {
+      setIsMarkingPaid(false);
     }
   };
 
@@ -2915,6 +2946,21 @@ function AdminPortal({
                       <div className="flex justify-between text-sm text-slate-500"><span>Amount paid</span><span>${Number(booking.paidAmount || 0).toFixed(2)}</span></div>
                       <div className="mt-2 flex justify-between text-sm font-bold text-slate-900"><span>Appointment total</span><span>${Number(booking.total || 0).toFixed(2)}</span></div>
                     </div>
+                    {!issuedReceipt && booking.id && Number(booking.total) > 0 && (
+                      <label className={`flex items-start gap-3 rounded-xl border px-4 py-3 ${paidInFull ? 'border-emerald-200 bg-emerald-50' : 'border-slate-200 bg-white'}`}>
+                        <input
+                          type="checkbox"
+                          checked={Boolean(paidInFull)}
+                          disabled={Boolean(paidInFull) || isMarkingPaid}
+                          onChange={() => markBookingPaid(booking)}
+                          className="mt-0.5 h-4 w-4 rounded border-slate-300 text-emerald-800 focus:ring-emerald-700 disabled:opacity-70"
+                        />
+                        <span>
+                          <span className="block text-sm font-semibold text-slate-900">{paidInFull ? 'Paid already' : 'Paid already — mark as fully paid'}</span>
+                          <span className="mt-0.5 block text-xs leading-5 text-slate-500">{isMarkingPaid ? 'Recording payment…' : paidInFull ? 'Full payment is recorded for this booking.' : `Check this if payment has been received. It records $${Number(booking.total).toFixed(2)} as paid and enables receipt issuing.`}</span>
+                        </span>
+                      </label>
+                    )}
                     {issuedReceipt && (
                       <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-4">
                         <div className="flex items-center justify-between"><div><p className="text-[10px] font-bold uppercase tracking-wider text-emerald-800">Receipt issued</p><p className="mt-1 font-mono text-sm font-bold text-slate-900">{issuedReceipt.receipt.number}</p></div><CheckCircle2 className="h-5 w-5 text-emerald-700" /></div>

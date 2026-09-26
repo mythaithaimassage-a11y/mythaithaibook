@@ -107,12 +107,14 @@ does not send campaigns. Configure an opt-in subscriber list and unsubscribe
 handling before enabling promotional delivery.
 
 In the owner **Booking Calendar**, open a linked appointment to review its
-patient and payment details. A receipt can be issued and emailed only when the
-booking sheet records full payment and a valid patient email. Receipt number,
-issue time, and email status are recorded in columns S-U of `Sheet1`. Receipt
-delivery uses the configured Gmail OAuth sender and the saved business profile.
-RMT/acupuncture services are treated as HST-exempt; other services use the
-Ontario 13% tax-inclusive rate for the receipt breakdown.
+patient and payment details. If payment was received outside the booking flow,
+check **Paid already** to record the full appointment total as paid in Google
+Sheets. A receipt can be issued and emailed only when the booking sheet records
+full payment and a valid patient email. Receipt number, issue time, and email
+status are recorded in columns S-U of `Sheet1`. Receipt delivery uses the
+configured Gmail OAuth sender and the saved business profile. RMT/acupuncture
+services are treated as HST-exempt; other services use the Ontario 13%
+tax-inclusive rate for the receipt breakdown.
 
 For new bookings to be written to the primary calendar, share that calendar
 with the service-account email as an Editor. For the embedded native calendar

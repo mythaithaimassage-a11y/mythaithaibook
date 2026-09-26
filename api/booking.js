@@ -604,12 +604,12 @@ export default async function handler(req, res) {
     }
     const ownerOnlyRequest =
       (req.method === 'GET' && ['', 'calendar', 'patient-history', 'business-profile'].includes(view)) ||
-      ['business-profile', 'issue-receipt'].includes(view);
+      ['business-profile', 'mark-paid', 'issue-receipt'].includes(view);
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
     if (ownerOnlyRequest && !getOwnerSession(req)) {
       return res.status(401).json({ message: 'Owner sign-in required' });
     }
-    if (['business-profile', 'issue-receipt'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
+    if (['business-profile', 'mark-paid', 'issue-receipt'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
       return res.status(403).json({ message: 'Profile update origin is not allowed' });
     }
 
@@ -966,6 +966,51 @@ export default async function handler(req, res) {
           receiptEmailStatus: row[20] || '',
           syncedToSheets: true,
         })),
+      });
+    }
+
+    if (req.method === 'POST' && req.query?.view === 'mark-paid') {
+      const bookingId = String(req.body?.bookingId || '').trim();
+      if (!bookingId || bookingId.length > 100) {
+        return res.status(400).json({ message: 'A valid booking ID is required' });
+      }
+      if (!process.env.GOOGLE_SPREADSHEET_ID) {
+        throw new Error('GOOGLE_SPREADSHEET_ID is not configured');
+      }
+      const result = await sheets.spreadsheets.values.get({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: 'Sheet1!A:U',
+      });
+      const rows = result.data.values || [];
+      const hasHeader = rows[0]?.[0] === 'Booking ID';
+      const startIndex = hasHeader ? 1 : 0;
+      const rowIndex = rows.findIndex((row, index) => index >= startIndex && String(row[0] || '') === bookingId);
+      if (rowIndex < 0) return res.status(404).json({ message: 'Booking was not found in Google Sheets' });
+
+      const row = rows[rowIndex];
+      const total = Number(row[11]) || 0;
+      if (total <= 0) {
+        return res.status(409).json({ message: 'This booking does not have a valid appointment total' });
+      }
+      const paidAmount = Number(row[10]) || 0;
+      if (paidAmount + 0.005 < total) {
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+          range: `Sheet1!K${rowIndex + 1}`,
+          valueInputOption: 'RAW',
+          requestBody: { values: [[total]] },
+        });
+      }
+      return res.status(200).json({
+        booking: {
+          id: row[0] || '',
+          customerName: row[1] || '',
+          email: row[3] || '',
+          paymentOption: row[9] || '',
+          paidAmount: Math.max(paidAmount, total),
+          total,
+        },
+        alreadyPaid: paidAmount + 0.005 >= total,
       });
     }
 
