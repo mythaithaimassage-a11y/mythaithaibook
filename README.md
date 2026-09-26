@@ -102,9 +102,24 @@ account must have Editor access to that spreadsheet.
 
 **Sales & reports** summarizes sales, collected payments, outstanding balances,
 appointments, tax estimates, and top services for a selectable date range.
-**Email marketing** currently saves campaign drafts in the browser only; it
-does not send campaigns. Configure an opt-in subscriber list and unsubscribe
-handling before enabling promotional delivery.
+**Email marketing** includes a private, rule-based audience assistant, campaign
+previews, browser-local drafts, and Gmail campaign delivery to a maximum of 50
+active, opted-in contacts per send. The Vercel function allows up to 60 seconds
+for a campaign batch. The assistant matches historical booking
+dates, branches, and services; it does not use an external AI service and
+historical bookings do not prove attendance. Customers are added only after
+checking the separate optional marketing consent box in the booking form.
+Existing booking or treatment-consent records are not imported as marketing
+consent. Campaigns include the business mailing address and unsubscribe links;
+unsubscribed contacts are excluded from future sends. Configure the Gmail OAuth
+sender as `mythaithaimassage@gmail.com` with the existing `gmail.send` scope,
+and enter the full business mailing address in Business profile before sending.
+The API creates a `MarketingContacts` tab in `GOOGLE_SPREADSHEET_ID` for consent
+status and unsubscribe tokens. Restrict access to this tab to authorized staff.
+For example, ask for customers with at least two past Wednesday bookings at a
+named branch, or the most recently active customers at a branch in the last 30
+days. Audience rules use recorded booking dates and do not infer appointment
+attendance.
 
 In the owner **Booking Calendar**, open a linked appointment to review its
 patient and payment details. If payment was received outside the booking flow,

@@ -186,6 +186,8 @@ async function sendBookingToGoogleSheets(apiUrl, bookingPayload) {
         data: result,
         emailSent: result.emailSent !== false,
         emailReason: result.emailError || '',
+        marketingConsentSaved: result.marketingConsentSaved !== false,
+        marketingConsentReason: result.marketingConsentError || '',
         patientHistorySaved: result.patientHistorySaved !== false,
         patientHistoryReason: result.patientHistoryError || ''
       };
@@ -786,6 +788,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
     therapist: null,
     date: new Date().toISOString().split('T')[0],
     time: null,
+    marketingOptIn: false,
     customer: { firstName: '', lastName: '', email: '', phone: '' },
     intake: {
       pressure: 'Medium',
@@ -883,6 +886,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
       customerName: customerFullName,
       phone: bookingData.customer.phone,
       email: bookingData.customer.email,
+      marketingOptIn: bookingData.marketingOptIn,
       branchName: bookingData.branch.name,
       serviceName: bookingData.service.name,
       therapistName: bookingData.therapist?.name || 'Any Available',
@@ -913,10 +917,10 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
     };
 
     // Use the Vercel route by default; retain support for a configured webhook.
-    const syncResult = await sendBookingToGoogleSheets(sheetsWebhookUrl, payloadForSheets);
+    const syncResult = await sendBookingToGoogleSheets(bookingData.marketingOptIn ? '' : sheetsWebhookUrl, payloadForSheets);
     const syncSuccess = syncResult.success;
-    if (!syncSuccess || syncResult.emailSent === false || syncResult.patientHistorySaved === false) {
-      setSheetsSyncReason(syncResult.reason || syncResult.emailReason || syncResult.patientHistoryReason || 'The booking sync failed.');
+    if (!syncSuccess || syncResult.emailSent === false || syncResult.patientHistorySaved === false || (bookingData.marketingOptIn && syncResult.marketingConsentSaved === false)) {
+      setSheetsSyncReason(syncResult.reason || syncResult.emailReason || syncResult.patientHistoryReason || syncResult.marketingConsentReason || 'The booking sync failed.');
     }
 
     const newRecord = {
@@ -940,7 +944,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
     onNewBooking(newRecord);
     setBookingData(prev => ({ ...prev, confirmationCode: code }));
     setSheetsSyncStatus(syncSuccess
-      ? (syncResult.emailSent === false ? 'email_failed' : (syncResult.patientHistorySaved === false ? 'patient_history_failed' : 'success'))
+      ? (syncResult.emailSent === false ? 'email_failed' : (syncResult.patientHistorySaved === false ? 'patient_history_failed' : (bookingData.marketingOptIn && syncResult.marketingConsentSaved === false ? 'marketing_consent_failed' : 'success')))
       : 'failed');
     setIsSubmitting(false);
     setStep(5);
@@ -1297,6 +1301,15 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                   />
                 </div>
               </div>
+              <label className="mt-3 flex items-start gap-3 rounded-xl border border-stone-200 bg-stone-50 p-3.5 text-xs leading-5 text-stone-700">
+                <input
+                  type="checkbox"
+                  checked={bookingData.marketingOptIn}
+                  onChange={(event) => updateBooking('marketingOptIn', event.target.checked)}
+                  className="mt-0.5 h-4 w-4 rounded border-stone-300 text-emerald-800 focus:ring-emerald-700"
+                />
+                <span>I agree to receive occasional promotional emails from MY THAI THAI. I can unsubscribe at any time. This is optional and is not required for booking or treatment.</span>
+              </label>
             </div>
 
             <div className="pt-4 border-t border-stone-200">
@@ -1630,6 +1643,12 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                 {sheetsSyncReason && <span>{sheetsSyncReason}</span>}
               </div>
             )}
+            {sheetsSyncStatus === 'marketing_consent_failed' && (
+              <div className="inline-flex flex-col items-center space-y-1 bg-amber-50 border border-amber-300 text-amber-900 px-4 py-2 rounded-xl text-xs">
+                <span className="font-semibold">Booking saved, but your optional marketing preference could not be recorded.</span>
+                {sheetsSyncReason && <span>{sheetsSyncReason}</span>}
+              </div>
+            )}
 
             <div className="bg-stone-50 border border-stone-200 rounded-2xl p-5 max-w-md mx-auto text-left space-y-2 text-xs sm:text-sm">
               <div className="flex justify-between border-b pb-2">
@@ -1660,6 +1679,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                     therapist: null,
                     date: new Date().toISOString().split('T')[0],
                     time: null,
+                    marketingOptIn: false,
                     customer: { firstName: '', lastName: '', email: '', phone: '' },
                     intake: {
                       pressure: 'Medium', focusAreas: '', injuries: '', agreeTerms: false,
@@ -1723,6 +1743,13 @@ function AdminPortal({
   const [campaignSubject, setCampaignSubject] = useState('');
   const [campaignPreview, setCampaignPreview] = useState('');
   const [campaignMessage, setCampaignMessage] = useState('');
+  const [campaignChatInput, setCampaignChatInput] = useState('');
+  const [campaignConversation, setCampaignConversation] = useState([
+    { role: 'assistant', text: 'Describe the customers you want to reach. I can find opted-in customers by visit weekday, recent booking, branch, service, or most recent activity.' },
+  ]);
+  const [campaignAudience, setCampaignAudience] = useState(null);
+  const [isBuildingCampaignAudience, setIsBuildingCampaignAudience] = useState(false);
+  const [isSendingCampaign, setIsSendingCampaign] = useState(false);
   const [campaignDrafts, setCampaignDrafts] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('medbook_email_campaign_drafts') || '[]');
@@ -1936,6 +1963,80 @@ function AdminPortal({
       setCampaignDrafts(nextDrafts);
     } catch {
       setCampaignError('Could not update saved drafts in this browser.');
+    }
+  };
+
+  const askCampaignAudience = async (query = campaignChatInput) => {
+    const cleanQuery = query.trim();
+    if (!cleanQuery || isBuildingCampaignAudience || isSendingCampaign) return;
+    setCampaignError('');
+    setCampaignNotice('');
+    setCampaignChatInput('');
+    setCampaignAudience(null);
+    setCampaignConversation((current) => [...current, { role: 'user', text: cleanQuery }]);
+    setIsBuildingCampaignAudience(true);
+    try {
+      const response = await fetch('/api/booking?view=campaign-audience', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: cleanQuery }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+      setCampaignAudience({ query: cleanQuery, ...data });
+      const readinessMessage = data.sendReady ? '' : ` ${data.sendBlockReason}`;
+      setCampaignConversation((current) => [...current, {
+        role: 'assistant',
+        text: `${data.description} I found ${data.count} matching people from ${data.subscriberCount} active opted-in subscribers.${readinessMessage}`,
+      }]);
+    } catch (error) {
+      setCampaignAudience(null);
+      setCampaignConversation((current) => [...current, {
+        role: 'assistant',
+        text: error.message || 'I could not build that audience. Try one of the example requests.',
+      }]);
+    } finally {
+      setIsBuildingCampaignAudience(false);
+    }
+  };
+
+  const sendCampaign = async () => {
+    if (isBuildingCampaignAudience || isSendingCampaign || !campaignAudience || !campaignAudience.sendReady || campaignAudience.count < 1 || campaignAudience.count > 50) return;
+    if (!campaignSubject.trim() || !campaignMessage.trim()) {
+      setCampaignError('Add a subject and message before sending.');
+      return;
+    }
+    const confirmed = window.confirm(
+      `Send “${campaignSubject.trim()}” to ${campaignAudience.count} opted-in recipients?\n\nAudience: ${campaignAudience.description}\n\nThis sends immediately from ${campaignAudience.senderEmail || 'mythaithaimassage@gmail.com'}.`,
+    );
+    if (!confirmed) return;
+    setIsSendingCampaign(true);
+    setCampaignError('');
+    setCampaignNotice('');
+    try {
+      const response = await fetch('/api/booking?view=campaign-send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query: campaignAudience.query,
+          subject: campaignSubject,
+          preview: campaignPreview,
+          message: campaignMessage,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+      setCampaignNotice(`Campaign sent to ${data.sent} of ${data.audienceCount} opted-in recipients.${data.failed ? ` ${data.failed} message${data.failed === 1 ? '' : 's'} failed; check server logs before retrying to avoid duplicate emails.` : ''}`);
+      setCampaignAudience(null);
+      if (data.failed) setCampaignError('Some campaign emails failed to send. Do not resend until you have checked which messages were delivered.');
+      setCampaignConversation((current) => [...current, {
+        role: 'assistant',
+        text: `Campaign delivery finished: ${data.sent} sent and ${data.failed} failed.`,
+      }]);
+    } catch (error) {
+      setCampaignError(error.message || 'Unable to send campaign');
+    } finally {
+      setIsSendingCampaign(false);
     }
   };
 
@@ -2627,33 +2728,64 @@ function AdminPortal({
               <div>
                 <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-violet-800">Grow your practice</p>
                 <h2 className="mt-1 text-xl font-bold text-slate-950">Email marketing</h2>
-                <p className="mt-1 max-w-2xl text-sm text-slate-500">Create and save campaign drafts for future patient outreach.</p>
+                <p className="mt-1 max-w-2xl text-sm text-slate-500">Build an audience with chat, review your message, and send from mythaithaimassage@gmail.com.</p>
               </div>
             </div>
-            <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-950">
-              Campaign sending is not enabled. Before marketing emails can be sent, configure a consent-based subscriber list and unsubscribe handling. Appointment receipts remain separate transactional emails.
+            <div className="mt-5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs leading-5 text-emerald-950">
+              Campaigns go only to people who checked the optional marketing consent box when booking and remain subscribed. Each email includes an unsubscribe link. Appointment confirmations and receipts are separate.
             </div>
           </section>
           {campaignError && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{campaignError}</div>}
           {campaignNotice && <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">{campaignNotice}</div>}
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div><h3 className="font-bold text-slate-900">Audience assistant</h3><p className="mt-1 text-xs leading-5 text-slate-500">Describe a segment in plain language. Matching runs privately against booking dates and consented contacts; no patient data is sent to an AI service.</p></div>
+              {campaignAudience && <span className="rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-900">{campaignAudience.count} matched · {campaignAudience.subscriberCount} opted in</span>}
+            </div>
+            <div aria-live="polite" className="mt-4 max-h-56 space-y-2 overflow-y-auto rounded-xl bg-slate-50 p-3">
+              {campaignConversation.map((entry, index) => <div key={`${entry.role}-${index}`} className={`max-w-[90%] rounded-xl px-3.5 py-2.5 text-xs leading-5 ${entry.role === 'user' ? 'ml-auto bg-emerald-950 text-white' : 'bg-white text-slate-700 shadow-sm'}`}>{entry.text}</div>)}
+              {isBuildingCampaignAudience && <p className="text-xs text-slate-500">Checking opted-in contacts and booking history…</p>}
+            </div>
+            <form onSubmit={(event) => { event.preventDefault(); askCampaignAudience(); }} className="mt-3 flex gap-2">
+              <input value={campaignChatInput} onChange={(event) => setCampaignChatInput(event.target.value)} maxLength={300} disabled={isSendingCampaign} placeholder="e.g. Customers who visit every Wednesday at Oakville Downtown" className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3.5 py-3 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100 disabled:bg-slate-50" />
+              <button type="submit" disabled={isBuildingCampaignAudience || isSendingCampaign || !campaignChatInput.trim()} className="shrink-0 rounded-xl bg-emerald-950 px-4 py-2.5 text-xs font-bold text-white hover:bg-emerald-800 disabled:opacity-50">{isBuildingCampaignAudience ? 'Thinking…' : 'Find audience'}</button>
+            </form>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {[
+                'Customers who visit every Wednesday',
+                `Most recent customers at ${branches[0]?.name || 'a branch'} in the last 30 days`,
+                `All opted-in customers at ${branches[0]?.name || 'a branch'}`,
+              ].map((example) => <button key={example} type="button" onClick={() => { setCampaignChatInput(example); askCampaignAudience(example); }} disabled={isBuildingCampaignAudience || isSendingCampaign} className="rounded-full border border-slate-200 px-3 py-1.5 text-[10px] font-semibold text-slate-600 hover:border-emerald-300 hover:bg-emerald-50 disabled:opacity-50">{example}</button>)}
+            </div>
+            {campaignAudience && <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
+              <p className="text-sm font-bold text-slate-900">{campaignAudience.description}</p>
+              <p className="mt-1 text-xs text-slate-500">{campaignAudience.count ? `Examples: ${campaignAudience.sampleNames.join(', ')}` : campaignAudience.subscriberCount ? 'No opted-in subscribers match that description yet.' : 'There are no opted-in subscribers yet. New customers can choose marketing emails in the booking form.'}</p>
+              {!campaignAudience.sendReady && <p className="mt-2 text-xs font-semibold text-amber-800">{campaignAudience.sendBlockReason}</p>}
+              {campaignAudience.count > 50 && <p className="mt-2 text-xs font-semibold text-amber-800">Campaigns are limited to 50 recipients per send. Narrow this group before sending.</p>}
+              <p className="mt-2 text-[10px] leading-4 text-slate-400">Audience matching uses historical booking dates, not verified attendance or visit frequency.</p>
+            </div>}
+          </section>
           <div className="grid gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(300px,0.8fr)]">
             <form onSubmit={saveCampaignDraft} className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-              <div><h3 className="font-bold text-slate-900">Campaign draft</h3><p className="mt-1 text-xs text-slate-500">Drafts are saved in this browser only. Nothing is sent.</p></div>
+              <div><h3 className="font-bold text-slate-900">Campaign message</h3><p className="mt-1 text-xs text-slate-500">Save drafts in this browser or send to the audience above.</p></div>
               <label className="block"><span className="mb-1.5 block text-xs font-semibold text-slate-700">Subject line</span><input maxLength={180} required value={campaignSubject} onChange={(event) => setCampaignSubject(event.target.value)} placeholder="A little time for yourself…" className="w-full rounded-xl border border-slate-200 px-3.5 py-3 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" /></label>
               <label className="block"><span className="mb-1.5 block text-xs font-semibold text-slate-700">Preview text</span><input maxLength={200} value={campaignPreview} onChange={(event) => setCampaignPreview(event.target.value)} placeholder="A short summary shown in the inbox" className="w-full rounded-xl border border-slate-200 px-3.5 py-3 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" /></label>
               <label className="block"><span className="mb-1.5 block text-xs font-semibold text-slate-700">Message</span><textarea required rows={8} maxLength={5000} value={campaignMessage} onChange={(event) => setCampaignMessage(event.target.value)} placeholder="Write a helpful, considerate message for your subscribers…" className="w-full resize-y rounded-xl border border-slate-200 px-3.5 py-3 text-sm leading-6 outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" /></label>
               <div className="flex flex-wrap justify-between gap-3 border-t border-slate-100 pt-4">
                 <span className="self-center text-[11px] text-slate-400">{campaignMessage.length}/5000 characters</span>
-                <button type="submit" className="inline-flex items-center gap-2 rounded-xl bg-emerald-950 px-4 py-2.5 text-xs font-bold text-white transition hover:bg-emerald-800"><Check className="h-4 w-4" />Save draft</button>
+                <div className="flex flex-wrap gap-2">
+                  <button type="submit" className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-50"><Check className="h-4 w-4" />Save draft</button>
+                  <button type="button" onClick={sendCampaign} disabled={isSendingCampaign || isBuildingCampaignAudience || !campaignAudience?.sendReady || !campaignAudience?.count || campaignAudience.count > 50 || !campaignSubject.trim() || !campaignMessage.trim()} className="inline-flex items-center gap-2 rounded-xl bg-emerald-950 px-4 py-2.5 text-xs font-bold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-45"><Mail className="h-4 w-4" />{isSendingCampaign ? 'Sending…' : `Send to ${campaignAudience?.count || 0}`}</button>
+                </div>
               </div>
             </form>
             <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
               <div className="mb-4 flex items-center gap-2"><Eye className="h-4 w-4 text-slate-500" /><h3 className="font-bold text-slate-900">Email preview</h3></div>
               <div className="overflow-hidden rounded-xl border border-slate-200">
                 <div className="border-b border-slate-100 bg-slate-50 px-4 py-3"><p className="text-[10px] text-slate-400">MY THAI THAI · to your subscribers</p><p className="mt-1 text-xs font-bold text-slate-800">{campaignSubject || 'Your campaign subject'}</p><p className="mt-1 truncate text-[11px] text-slate-500">{campaignPreview || 'Preview text appears here'}</p></div>
-                <div className="min-h-48 whitespace-pre-wrap px-5 py-5 text-sm leading-6 text-slate-700">{campaignMessage || 'Your message preview will appear here as you write.'}</div>
+                <div className="min-h-48 whitespace-pre-wrap px-5 py-5 text-sm leading-6 text-slate-700">{campaignMessage || 'Your message preview will appear here as you write.'}<div className="mt-8 border-t border-slate-100 pt-4 text-[10px] leading-5 text-slate-400">MY THAI THAI · Business mailing address from profile<br />You are receiving this because you opted in to promotional emails.<br /><span className="underline">Unsubscribe</span></div></div>
               </div>
-              <p className="mt-3 text-[11px] leading-5 text-slate-500">Sending is intentionally unavailable until a compliant, opt-in contact list and unsubscribe process are configured.</p>
+              <p className="mt-3 text-[11px] leading-5 text-slate-500">Campaign emails include your business mailing address and an unsubscribe link. Sending requires Gmail OAuth and a mailing address in Business profile.</p>
             </section>
           </div>
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">

@@ -1,6 +1,8 @@
 import { google } from 'googleapis';
 import crypto from 'node:crypto';
 
+export const config = { maxDuration: 60 };
+
 const CALENDAR_TIME_ZONE = process.env.GOOGLE_CALENDAR_TIME_ZONE || 'America/Toronto';
 const CALENDAR_OWNER_EMAIL = process.env.GOOGLE_CALENDAR_OWNER_EMAIL || 'mythaithaimassage@gmail.com';
 const PRIMARY_CALENDAR_ID = process.env.GOOGLE_PRIMARY_CALENDAR_ID || CALENDAR_OWNER_EMAIL;
@@ -26,6 +28,16 @@ const DEFAULT_BUSINESS_PROFILE = {
   taxRegistrationNumber: '',
 };
 const RECEIPT_HEADERS = ['Receipt No.', 'Receipt Issued At', 'Receipt Email Status'];
+const MARKETING_CONTACT_HEADERS = [
+  'Email',
+  'Customer Name',
+  'Status',
+  'Consent At',
+  'Consent Source',
+  'Unsubscribe Token',
+  'Unsubscribed At',
+];
+const MARKETING_SENDER_EMAIL = 'mythaithaimassage@gmail.com';
 
 function parseCookies(req) {
   return Object.fromEntries((req.headers.cookie || '').split(';').filter(Boolean).map((part) => {
@@ -336,6 +348,317 @@ async function ensureReceiptHeaders(sheets) {
   }
 }
 
+async function ensureMarketingContactsSheet(sheets) {
+  const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
+  if (!spreadsheetId) throw new Error('GOOGLE_SPREADSHEET_ID is not configured');
+  let spreadsheet = await sheets.spreadsheets.get({
+    spreadsheetId,
+    fields: 'sheets.properties',
+  });
+  let exists = (spreadsheet.data.sheets || [])
+    .some((sheet) => sheet.properties?.title === 'MarketingContacts');
+  if (!exists) {
+    try {
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: { requests: [{ addSheet: { properties: { title: 'MarketingContacts' } } }] },
+      });
+    } catch (error) {
+      spreadsheet = await sheets.spreadsheets.get({
+        spreadsheetId,
+        fields: 'sheets.properties',
+      });
+      exists = (spreadsheet.data.sheets || [])
+        .some((sheet) => sheet.properties?.title === 'MarketingContacts');
+      if (!exists) throw error;
+    }
+  }
+  const header = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: 'MarketingContacts!A1:G1',
+  });
+  const values = header.data.values?.[0] || [];
+  if (!values.length) {
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: 'MarketingContacts!A1:G1',
+      valueInputOption: 'RAW',
+      requestBody: { values: [MARKETING_CONTACT_HEADERS] },
+    });
+  } else if (MARKETING_CONTACT_HEADERS.some((field, index) => values[index] !== field)) {
+    throw new Error('MarketingContacts sheet has an unexpected header. Preserve its data and restore the required Email through Unsubscribed At columns before retrying.');
+  }
+}
+
+async function getMarketingContactRows(sheets) {
+  await ensureMarketingContactsSheet(sheets);
+  const result = await sheets.spreadsheets.values.get({
+    spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+    range: 'MarketingContacts!A:G',
+  });
+  return (result.data.values || []).slice(1);
+}
+
+async function recordMarketingConsent(sheets, payload) {
+  const email = String(payload.email || '').trim().toLowerCase();
+  if (!/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(email)) {
+    throw new Error('A valid customer email is required to record marketing consent');
+  }
+  const rows = await getMarketingContactRows(sheets);
+  const rowIndex = rows.findIndex((row) => String(row[0] || '').trim().toLowerCase() === email);
+  const now = new Date().toISOString();
+  const name = String(payload.customerName || '').trim().slice(0, 200);
+  if (rowIndex >= 0 && String(rows[rowIndex][2] || '').toLowerCase() === 'subscribed') {
+    return;
+  }
+  const token = crypto.randomBytes(32).toString('hex');
+  const values = [[email, name, 'subscribed', now, 'booking form opt-in', token, '']];
+  if (rowIndex >= 0) {
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+      range: `MarketingContacts!A${rowIndex + 2}:G${rowIndex + 2}`,
+      valueInputOption: 'RAW',
+      requestBody: { values },
+    });
+    return;
+  }
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+    range: 'MarketingContacts!A:G',
+    valueInputOption: 'RAW',
+    requestBody: { values },
+  });
+}
+
+const WEEKDAYS = [
+  ['sunday', 0], ['monday', 1], ['tuesday', 2], ['wednesday', 3],
+  ['thursday', 4], ['friday', 5], ['saturday', 6],
+];
+
+function parseAudienceQuery(query, bookingRows) {
+  const text = String(query || '').trim();
+  if (!text || text.length > 300) {
+    throw new Error('Describe the audience in 1-300 characters.');
+  }
+  const normalized = text.toLowerCase();
+  const weekday = WEEKDAYS.find(([name]) => new RegExp(`\\b${name}\\b`).test(normalized));
+  const recurring = Boolean(weekday && /\b(every|regular|regularly|recurring|frequent|often)\b/.test(normalized));
+  const rangeMatch = normalized.match(/\b(?:last|past|within)\s+(\d{1,3})\s+(day|week|month)s?\b/);
+  const recent = /\b(recent|latest|newest|most recent)\b/.test(normalized) || Boolean(rangeMatch);
+  const days = rangeMatch
+    ? Number(rangeMatch[1]) * ({ day: 1, week: 7, month: 30 }[rangeMatch[2]])
+    : recent ? 30 : null;
+  if (days !== null && (days < 1 || days > 365)) {
+    throw new Error('Choose a recent-visit window between 1 and 365 days.');
+  }
+  const branches = [...new Set(bookingRows.map((row) => String(row[4] || '').trim()).filter(Boolean))];
+  const matchingBranches = branches.filter((branch) => normalized.includes(branch.toLowerCase()));
+  if (/\b(branch|location)\b/.test(normalized) && matchingBranches.length > 1) {
+    throw new Error('Please name one branch so I can build a precise audience.');
+  }
+  const branch = matchingBranches.length === 1 ? matchingBranches[0] : '';
+  const services = [...new Set(bookingRows.map((row) => String(row[5] || '').trim()).filter(Boolean))];
+  const matchingServices = services.filter((service) => normalized.includes(service.toLowerCase()));
+  if (matchingServices.length > 1) {
+    throw new Error('Please name one service so I can build a precise audience.');
+  }
+  const service = matchingServices[0] || '';
+  const countMatch = normalized.match(/\b(?:last|latest|most recent)\s+(\d{1,2})\s+(?:customers|clients|patients)\b/);
+  const limit = countMatch ? Number(countMatch[1]) : null;
+  if (limit !== null && (limit < 1 || limit > 50)) {
+    throw new Error('Choose between 1 and 50 most recent customers per campaign.');
+  }
+  const allOptedIn = /\b(all|everyone|everybody)\b/.test(normalized) &&
+    /\b(subscribers|opted[ -]?in|customers|clients|patients|contacts)\b/.test(normalized);
+  if (!weekday && !recent && !branch && !service && !limit && !allOptedIn) {
+    throw new Error('I can find opted-in customers by weekday, recent visit, branch, service, or most recent customer count. Try “customers who visit every Wednesday at Oakville Downtown” or “most recent customers at Toronto West in the last 30 days”.');
+  }
+  const descriptions = [];
+  if (weekday) descriptions.push(`${recurring ? 'at least two past bookings on' : 'a past booking on'} ${weekday[0].charAt(0).toUpperCase()}${weekday[0].slice(1)}s`);
+  if (days) descriptions.push(`a booking in the last ${days} days`);
+  if (branch) descriptions.push(`the ${branch} branch`);
+  if (service) descriptions.push(`${service} appointments`);
+  if (allOptedIn && descriptions.length === 0) descriptions.push('all active opted-in subscribers');
+  if (limit) descriptions.push(`the ${limit} most recently active customers`);
+  return {
+    query: text,
+    weekday: weekday?.[1] ?? null,
+    recurring,
+    days,
+    branch,
+    service,
+    limit,
+    allOptedIn,
+    description: `Opted-in customers with ${descriptions.join(' and ')}.`,
+  };
+}
+
+function parseBookingDate(value) {
+  const text = String(value || '').trim();
+  const iso = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (iso) {
+    return new Date(Date.UTC(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]), 12));
+  }
+  const parsed = new Date(text);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+async function resolveMarketingAudience(sheets, query) {
+  const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
+  if (!spreadsheetId) throw new Error('GOOGLE_SPREADSHEET_ID is not configured');
+  const [contacts, bookingResult] = await Promise.all([
+    getMarketingContactRows(sheets),
+    sheets.spreadsheets.values.get({ spreadsheetId, range: 'Sheet1!A:U' }),
+  ]);
+  const allRows = bookingResult.data.values || [];
+  const bookingRows = allRows[0]?.[0] === 'Booking ID' ? allRows.slice(1) : allRows;
+  const criteria = parseAudienceQuery(query, bookingRows);
+  const now = new Date();
+  const localDateParts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    timeZone: CALENDAR_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(now).map((part) => [part.type, part.value]));
+  const today = Date.UTC(Number(localDateParts.year), Number(localDateParts.month) - 1, Number(localDateParts.day));
+  const cutoff = criteria.days
+    ? today - (criteria.days - 1) * 24 * 60 * 60 * 1000
+    : null;
+  const bookingsByEmail = new Map();
+  for (const row of bookingRows) {
+    const email = String(row[3] || '').trim().toLowerCase();
+    const date = parseBookingDate(row[7]);
+    if (!email || !date || date.getTime() > today) continue;
+    const booking = {
+      timestamp: date.getTime(),
+      weekday: date.getUTCDay(),
+      branch: String(row[4] || '').trim(),
+      service: String(row[5] || '').trim(),
+    };
+    const history = bookingsByEmail.get(email) || [];
+    history.push(booking);
+    bookingsByEmail.set(email, history);
+  }
+  const activeContacts = contacts.filter((row) =>
+    String(row[2] || '').toLowerCase() === 'subscribed' &&
+    /^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(String(row[0] || '').trim()) &&
+    /^[a-f0-9]{64}$/.test(String(row[5] || '')));
+  let recipients = activeContacts
+    .map((row) => {
+      const email = String(row[0] || '').trim().toLowerCase();
+      const history = bookingsByEmail.get(email) || [];
+      const matchedHistory = history.filter((booking) =>
+        (!criteria.branch || booking.branch.toLowerCase() === criteria.branch.toLowerCase()) &&
+        (!criteria.service || booking.service.toLowerCase() === criteria.service.toLowerCase()));
+      if (criteria.weekday !== null) {
+        const visits = matchedHistory.filter((booking) => booking.weekday === criteria.weekday);
+        if (visits.length < (criteria.recurring ? 2 : 1)) return null;
+      }
+      if (cutoff !== null && !matchedHistory.some((booking) => booking.timestamp >= cutoff)) return null;
+      if ((criteria.branch || criteria.service) && !matchedHistory.length) return null;
+      return {
+        email,
+        name: String(row[1] || '').trim(),
+        token: String(row[5] || ''),
+        lastVisit: matchedHistory.reduce((latest, booking) => Math.max(latest, booking.timestamp), 0),
+        consentAt: String(row[3] || ''),
+      };
+    })
+    .filter(Boolean);
+  const uniqueRecipients = new Map();
+  for (const recipient of recipients) {
+    if (!uniqueRecipients.has(recipient.email)) uniqueRecipients.set(recipient.email, recipient);
+  }
+  recipients = [...uniqueRecipients.values()];
+  recipients.sort((a, b) => b.lastVisit - a.lastVisit || b.consentAt.localeCompare(a.consentAt));
+  if (criteria.limit) recipients = recipients.slice(0, criteria.limit);
+  return { criteria, recipients, subscriberCount: new Set(activeContacts.map((row) => String(row[0] || '').trim().toLowerCase())).size };
+}
+
+function getCampaignUnsubscribeUrl(req, token) {
+  const host = req.headers['x-forwarded-host'] || req.headers.host;
+  if (!host || /[\r\n/]/.test(host)) throw new Error('Unable to determine the public app address for unsubscribe links');
+  const protocol = req.headers['x-forwarded-proto'] === 'http' ? 'http' : 'https';
+  return `${protocol}://${host}/api/booking?view=unsubscribe&token=${encodeURIComponent(token)}`;
+}
+
+function getCampaignSendBlockReason(businessProfile) {
+  if (
+    GOOGLE_GMAIL_SENDER_EMAIL.trim().toLowerCase() !== MARKETING_SENDER_EMAIL ||
+    !GOOGLE_OAUTH_CLIENT_ID ||
+    !GOOGLE_OAUTH_CLIENT_SECRET ||
+    !GOOGLE_OAUTH_REFRESH_TOKEN
+  ) {
+    return `Configure Gmail OAuth for ${MARKETING_SENDER_EMAIL} in Vercel before sending campaigns.`;
+  }
+  if (
+    !businessProfile.address ||
+    businessProfile.address.trim().length < 10 ||
+    businessProfile.address.trim().toLowerCase() === 'ontario, canada' ||
+    !/\d/.test(businessProfile.address)
+  ) {
+    return 'Add the full street mailing address, including street number, in Business profile before sending campaigns.';
+  }
+  if (!businessProfile.phone && !businessProfile.email) {
+    return 'Add a business email or phone number in Business profile before sending campaigns.';
+  }
+  return '';
+}
+
+async function sendMarketingEmail(gmail, campaign, recipient, businessProfile, unsubscribeUrl) {
+  const sender = GOOGLE_GMAIL_SENDER_EMAIL;
+  if (sender.trim().toLowerCase() !== MARKETING_SENDER_EMAIL) {
+    throw new Error(`Campaign sender must be configured as ${MARKETING_SENDER_EMAIL}`);
+  }
+  const subject = String(campaign.subject || '').trim();
+  const preview = String(campaign.preview || '').trim();
+  const message = String(campaign.message || '').trim();
+  if (!subject || subject.length > 180 || /[\r\n]/.test(subject)) throw new Error('Enter a subject line of 1-180 characters');
+  if (preview.length > 200) throw new Error('Preview text must be 200 characters or fewer');
+  if (!message || message.length > 5000) throw new Error('Enter a campaign message of 1-5000 characters');
+  const safeSubject = `=?UTF-8?B?${Buffer.from(subject).toString('base64')}?=`;
+  const safeName = String(businessProfile.businessName || 'MY THAI THAI').replace(/[\r\n"]/g, '');
+  const text = [
+    message,
+    '',
+    businessProfile.businessName,
+    businessProfile.address,
+    businessProfile.phone,
+    businessProfile.email,
+    '',
+    `Unsubscribe: ${unsubscribeUrl}`,
+  ].filter(Boolean).join('\n');
+  const htmlMessage = escapeHtml(message).replace(/\r?\n/g, '<br>');
+  const html = `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(subject)}</title></head><body style="margin:0;background:#f3f5f4;padding:24px 12px;font-family:Arial,Helvetica,sans-serif;color:#18251f"><span style="display:none!important;visibility:hidden;opacity:0;height:0;width:0;overflow:hidden">${escapeHtml(preview)}</span><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td align="center"><table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width:600px;width:100%;background:#fff;border:1px solid #e2e9e5;border-radius:14px"><tr><td style="padding:26px 30px;background:#073d32;color:#fff"><p style="margin:0;font-size:12px;letter-spacing:2px">${escapeHtml(safeName).toUpperCase()}</p></td></tr><tr><td style="padding:28px 30px;font-size:15px;line-height:1.7">${htmlMessage}<hr style="border:0;border-top:1px solid #e5ebe7;margin:28px 0 18px"><p style="margin:0;color:#64716b;font-size:12px">${escapeHtml(businessProfile.businessName)} · ${escapeHtml(businessProfile.address)}<br>${escapeHtml(businessProfile.phone)} · ${escapeHtml(businessProfile.email)}</p><p style="margin:12px 0 0;font-size:12px"><a href="${escapeHtml(unsubscribeUrl)}" style="color:#087765">Unsubscribe from marketing emails</a></p></td></tr></table></td></tr></table></body></html>`;
+  const boundary = `campaign_${crypto.randomBytes(12).toString('hex')}`;
+  const encode = (value) => Buffer.from(value).toString('base64').match(/.{1,76}/g).join('\r\n');
+  const rawMessage = [
+    `From: "${safeName}" <${sender}>`,
+    `To: ${recipient.email}`,
+    `Subject: ${safeSubject}`,
+    'MIME-Version: 1.0',
+    `List-Unsubscribe: <${unsubscribeUrl}>`,
+    'List-Unsubscribe-Post: List-Unsubscribe=One-Click',
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    '',
+    `--${boundary}`,
+    'Content-Type: text/plain; charset=UTF-8',
+    'Content-Transfer-Encoding: base64',
+    '',
+    encode(text),
+    `--${boundary}`,
+    'Content-Type: text/html; charset=UTF-8',
+    'Content-Transfer-Encoding: base64',
+    '',
+    encode(html),
+    `--${boundary}--`,
+  ].join('\r\n');
+  await gmail.users.messages.send({
+    userId: 'me',
+    requestBody: { raw: Buffer.from(rawMessage).toString('base64url') },
+  });
+}
+
 function escapeHtml(value) {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -598,18 +921,18 @@ export default async function handler(req, res) {
     }
 
     const view = String(req.query?.view || '');
-    const validGetViews = ['', 'calendar', 'patient-history', 'business-profile', 'therapist-dashboard', 'therapist-session'];
+    const validGetViews = ['', 'calendar', 'patient-history', 'business-profile', 'therapist-dashboard', 'therapist-session', 'unsubscribe'];
     if (req.method === 'GET' && !validGetViews.includes(view)) {
       return res.status(404).json({ message: 'Unknown booking view' });
     }
     const ownerOnlyRequest =
       (req.method === 'GET' && ['', 'calendar', 'patient-history', 'business-profile'].includes(view)) ||
-      ['business-profile', 'mark-paid', 'issue-receipt'].includes(view);
+      ['business-profile', 'mark-paid', 'issue-receipt', 'campaign-audience', 'campaign-send'].includes(view);
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
     if (ownerOnlyRequest && !getOwnerSession(req)) {
       return res.status(401).json({ message: 'Owner sign-in required' });
     }
-    if (['business-profile', 'mark-paid', 'issue-receipt'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
+    if (['business-profile', 'mark-paid', 'issue-receipt', 'campaign-audience', 'campaign-send'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
       return res.status(403).json({ message: 'Profile update origin is not allowed' });
     }
 
@@ -626,6 +949,106 @@ export default async function handler(req, res) {
 
     const sheets = google.sheets({ version: 'v4', auth });
     const calendarApi = google.calendar({ version: 'v3', auth });
+
+    if (view === 'unsubscribe' && req.method === 'GET') {
+      const token = String(req.query?.token || '');
+      if (!/^[a-f0-9]{64}$/.test(token)) {
+        return res.status(400).json({ message: 'This unsubscribe link is invalid or incomplete.' });
+      }
+      const contacts = await getMarketingContactRows(sheets);
+      const contact = contacts.find((row) => row[5] === token && String(row[2] || '').toLowerCase() === 'subscribed');
+      const message = contact
+        ? 'Confirm that you want to unsubscribe from MY THAI THAI marketing emails.'
+        : 'This email address is already unsubscribed, or this link is no longer valid.';
+      const form = contact
+        ? `<form method="post" action="/api/booking?view=unsubscribe&amp;token=${encodeURIComponent(token)}"><input type="hidden" name="token" value="${encodeURIComponent(token)}"><button type="submit">Unsubscribe</button></form>`
+        : '';
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-store');
+      return res.status(200).send(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Email preferences</title><body style="font:16px Arial,sans-serif;background:#f3f5f4;color:#18251f;padding:32px"><main style="max-width:520px;margin:10vh auto;background:white;border:1px solid #e2e9e5;border-radius:16px;padding:28px"><h1 style="font-size:22px">Email preferences</h1><p>${message}</p>${form}<style>button{background:#073d32;color:white;border:0;border-radius:8px;padding:12px 18px;font-weight:bold;cursor:pointer}</style></main></body></html>`);
+    }
+
+    if (view === 'unsubscribe' && req.method === 'POST') {
+      const token = String(req.query?.token || req.body?.token || '');
+      if (!/^[a-f0-9]{64}$/.test(token)) {
+        return res.status(400).json({ message: 'This unsubscribe link is invalid or incomplete.' });
+      }
+      const contacts = await getMarketingContactRows(sheets);
+      const rowIndex = contacts.findIndex((row) => row[5] === token && String(row[2] || '').toLowerCase() === 'subscribed');
+      if (rowIndex < 0) {
+        return res.status(200).json({ status: 'already_unsubscribed' });
+      }
+      const row = contacts[rowIndex];
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: `MarketingContacts!C${rowIndex + 2}:G${rowIndex + 2}`,
+        valueInputOption: 'RAW',
+        requestBody: { values: [['unsubscribed', row[3] || '', row[4] || '', row[5], new Date().toISOString()]] },
+      });
+      if (req.headers['list-unsubscribe'] || req.body?.['List-Unsubscribe']) {
+        return res.status(200).json({ status: 'unsubscribed' });
+      }
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-store');
+      return res.status(200).send('<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Email preferences</title><body style="font:16px Arial,sans-serif;background:#f3f5f4;color:#18251f;padding:32px"><main style="max-width:520px;margin:10vh auto;background:white;border:1px solid #e2e9e5;border-radius:16px;padding:28px"><h1 style="font-size:22px">You are unsubscribed</h1><p>You will no longer receive marketing emails from MY THAI THAI. Booking and receipt emails are not affected.</p></main></body></html>');
+    }
+
+    if (req.method === 'POST' && view === 'campaign-audience') {
+      const query = String(req.body?.query || '');
+      const audience = await resolveMarketingAudience(sheets, query);
+      const businessProfile = await getBusinessProfile(sheets);
+      const sendBlockReason = getCampaignSendBlockReason(businessProfile);
+      return res.status(200).json({
+        description: audience.criteria.description,
+        count: audience.recipients.length,
+        subscriberCount: audience.subscriberCount,
+        sampleNames: audience.recipients.slice(0, 3).map((recipient) => recipient.name || 'Subscriber'),
+        senderEmail: MARKETING_SENDER_EMAIL,
+        sendReady: !sendBlockReason,
+        sendBlockReason,
+      });
+    }
+
+    if (req.method === 'POST' && view === 'campaign-send') {
+      const campaign = {
+        subject: String(req.body?.subject || '').trim(),
+        preview: String(req.body?.preview || '').trim(),
+        message: String(req.body?.message || '').trim(),
+      };
+      if (!campaign.subject || campaign.subject.length > 180 || /[\r\n]/.test(campaign.subject)) {
+        return res.status(400).json({ message: 'Enter a subject line of 1-180 characters.' });
+      }
+      if (campaign.preview.length > 200 || !campaign.message || campaign.message.length > 5000) {
+        return res.status(400).json({ message: 'Preview text must be 200 characters or fewer and the message must be 1-5000 characters.' });
+      }
+      const audience = await resolveMarketingAudience(sheets, String(req.body?.query || ''));
+      if (audience.recipients.length === 0) {
+        return res.status(409).json({ message: 'This audience has no active, opted-in recipients.' });
+      }
+      if (audience.recipients.length > 50) {
+        return res.status(409).json({ message: `This audience has ${audience.recipients.length} subscribers. Campaigns are limited to 50 recipients; narrow the audience in chat and try again.` });
+      }
+      const businessProfile = await getBusinessProfile(sheets);
+      const sendBlockReason = getCampaignSendBlockReason(businessProfile);
+      if (sendBlockReason) return res.status(409).json({ message: sendBlockReason });
+      const gmail = createGmailApi();
+      const results = { sent: 0, failed: 0 };
+      for (const recipient of audience.recipients) {
+        try {
+          const unsubscribeUrl = getCampaignUnsubscribeUrl(req, recipient.token);
+          await sendMarketingEmail(gmail, campaign, recipient, businessProfile, unsubscribeUrl);
+          results.sent += 1;
+        } catch (error) {
+          results.failed += 1;
+          console.error('Marketing campaign delivery failed:', error.message || error);
+        }
+      }
+      return res.status(200).json({
+        ...results,
+        audienceCount: audience.recipients.length,
+        description: audience.criteria.description,
+      });
+    }
 
     if (req.query?.view === 'therapist-dashboard' || req.query?.view === 'therapist-session') {
       const session = getTherapistSession(req);
@@ -1208,6 +1631,18 @@ export default async function handler(req, res) {
       },
     });
 
+    let marketingConsentSaved = !payload.marketingOptIn;
+    let marketingConsentError = '';
+    if (payload.marketingOptIn === true) {
+      try {
+        await recordMarketingConsent(sheets, payload);
+        marketingConsentSaved = true;
+      } catch (error) {
+        marketingConsentError = error.message || 'Marketing consent could not be saved';
+        console.error('Marketing consent spreadsheet error:', error);
+      }
+    }
+
     let patientHistorySaved = false;
     let patientHistoryError = '';
     try {
@@ -1281,6 +1716,8 @@ export default async function handler(req, res) {
       therapistName,
       patientHistorySaved,
       patientHistoryError,
+      marketingConsentSaved,
+      marketingConsentError,
     });
   } catch (error) {
     console.error('Google Sheets API Error:', error);
