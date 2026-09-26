@@ -4,7 +4,10 @@ import crypto from 'node:crypto';
 const CALENDAR_TIME_ZONE = process.env.GOOGLE_CALENDAR_TIME_ZONE || 'America/Toronto';
 const CALENDAR_OWNER_EMAIL = process.env.GOOGLE_CALENDAR_OWNER_EMAIL || 'mythaithaimassage@gmail.com';
 const PRIMARY_CALENDAR_ID = process.env.GOOGLE_PRIMARY_CALENDAR_ID || CALENDAR_OWNER_EMAIL;
-const RESEND_FROM_EMAIL = process.env.RESEND_FROM_EMAIL || 'bookings@mythaithaimassage.com';
+const GOOGLE_GMAIL_SENDER_EMAIL = process.env.GOOGLE_GMAIL_SENDER_EMAIL || '';
+const GOOGLE_OAUTH_CLIENT_ID = process.env.GOOGLE_OAUTH_CLIENT_ID || '';
+const GOOGLE_OAUTH_CLIENT_SECRET = process.env.GOOGLE_OAUTH_CLIENT_SECRET || '';
+const GOOGLE_OAUTH_REFRESH_TOKEN = process.env.GOOGLE_OAUTH_REFRESH_TOKEN || '';
 const PATIENT_HISTORY_SPREADSHEET_ID = process.env.PATIENT_HISTORY_SPREADSHEET_ID || '1tNrhigAWrvAc6DiLi-W_NwG04bPiTZZEs6KwfYDUclA';
 const THERAPIST_SESSION_SECRET = process.env.THERAPIST_SESSION_SECRET || '';
 const THERAPIST_ACCOUNTS = process.env.THERAPIST_ACCOUNTS || '[]';
@@ -187,57 +190,59 @@ async function ensurePatientHistorySheet(sheets) {
   });
 }
 
-async function sendConfirmationEmail(payload, calendarEvent) {
-  if (!process.env.RESEND_API_KEY) {
-    throw new Error('RESEND_API_KEY is not configured');
+function createGmailApi() {
+  if (!GOOGLE_OAUTH_CLIENT_ID || !GOOGLE_OAUTH_CLIENT_SECRET || !GOOGLE_OAUTH_REFRESH_TOKEN) {
+    throw new Error('Google Gmail OAuth client ID, client secret, and refresh token must be configured');
   }
-  if (!payload.email) {
-    throw new Error('Customer email is required for confirmation email');
-  }
-  if (!RESEND_FROM_EMAIL.includes('@')) {
-    throw new Error('RESEND_FROM_EMAIL must be a valid email address');
+  if (!/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(GOOGLE_GMAIL_SENDER_EMAIL)) {
+    throw new Error('GOOGLE_GMAIL_SENDER_EMAIL must be a valid Gmail mailbox');
   }
 
-  const response = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      from: RESEND_FROM_EMAIL,
-      to: [payload.email],
-      subject: `MY THAI THAI booking confirmation - ${payload.id}`,
-      text: [
-        `Your MY THAI THAI appointment is confirmed.`,
-        '',
-        `Booking: ${payload.id}`,
-        `Service: ${payload.serviceName}`,
-        `Therapist: ${payload.therapistName}`,
-        `Date: ${payload.date}`,
-        `Time: ${payload.time}`,
-        `Branch: ${payload.branchName}`,
-        `Payment: ${payload.paymentOption}`,
-        `Paid: $${payload.paidAmount}`,
-        `Total: $${payload.totalAmount}`,
-        '',
-        'Your appointment has been added to the therapist calendar.',
-      ].join('\n'),
-    }),
+  const auth = new google.auth.OAuth2(
+    GOOGLE_OAUTH_CLIENT_ID,
+    GOOGLE_OAUTH_CLIENT_SECRET,
+  );
+  auth.setCredentials({ refresh_token: GOOGLE_OAUTH_REFRESH_TOKEN });
+  return google.gmail({ version: 'v1', auth });
+}
+
+async function sendGmailConfirmation(gmail, payload) {
+  const recipient = String(payload.email || '').trim();
+  if (!/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(recipient)) {
+    throw new Error('A valid customer email is required for confirmation email');
+  }
+
+  const subject = `MY THAI THAI booking confirmation - ${payload.id}`;
+  const text = [
+    'Your MY THAI THAI appointment is confirmed.',
+    '',
+    `Booking: ${payload.id}`,
+    `Service: ${payload.serviceName}`,
+    `Therapist: ${payload.therapistName}`,
+    `Date: ${payload.date}`,
+    `Time: ${payload.time}`,
+    `Branch: ${payload.branchName}`,
+    `Payment: ${payload.paymentOption}`,
+    `Paid: $${payload.paidAmount}`,
+    `Total: $${payload.totalAmount}`,
+    '',
+    'Your appointment has been added to the therapist calendar.',
+  ].join('\n');
+  const message = [
+    `From: ${GOOGLE_GMAIL_SENDER_EMAIL}`,
+    `To: ${recipient}`,
+    `Subject: =?UTF-8?B?${Buffer.from(subject).toString('base64')}?=`,
+    'MIME-Version: 1.0',
+    'Content-Type: text/plain; charset=UTF-8',
+    'Content-Transfer-Encoding: base64',
+    '',
+    Buffer.from(text).toString('base64'),
+  ].join('\r\n');
+
+  await gmail.users.messages.send({
+    userId: 'me',
+    requestBody: { raw: Buffer.from(message).toString('base64url') },
   });
-
-  if (!response.ok) {
-    const details = await response.text();
-    if (
-      response.status === 403 &&
-      details.toLowerCase().includes('domain is not verified')
-    ) {
-      throw new Error(
-        `Resend sender domain is not verified. Add and verify the domain used by RESEND_FROM_EMAIL in the Resend account for RESEND_API_KEY, then redeploy the app. Details: ${details}`,
-      );
-    }
-    throw new Error(`Resend email failed (${response.status}): ${details}`);
-  }
 }
 
 export default async function handler(req, res) {
@@ -720,7 +725,7 @@ export default async function handler(req, res) {
     let emailSent = false;
     let emailError = '';
     try {
-      await sendConfirmationEmail(payload, calendarEvent);
+      await sendGmailConfirmation(createGmailApi(), payload);
       emailSent = true;
     } catch (error) {
       emailError = error.message || 'Confirmation email failed';

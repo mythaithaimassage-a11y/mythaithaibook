@@ -31,8 +31,10 @@ Configure these Vercel environment variables before using it:
 - `GOOGLE_CALENDAR_OWNER_EMAIL` (defaults to `mythaithaimassage@gmail.com`)
 - `GOOGLE_PRIMARY_CALENDAR_ID` (defaults to `mythaithaimassage@gmail.com`)
 - `GOOGLE_CALENDAR_TIME_ZONE` (defaults to `America/Toronto`)
-- `RESEND_API_KEY`
-- `RESEND_FROM_EMAIL` (defaults to `bookings@mythaithaimassage.com`)
+- `GOOGLE_GMAIL_SENDER_EMAIL` (Gmail mailbox used for booking confirmations)
+- `GOOGLE_OAUTH_CLIENT_ID`
+- `GOOGLE_OAUTH_CLIENT_SECRET`
+- `GOOGLE_OAUTH_REFRESH_TOKEN`
 - `PATIENT_HISTORY_SPREADSHEET_ID` (defaults to the dedicated patient-history
   spreadsheet configured for this project)
 - `THERAPIST_SESSION_SECRET` (long random secret used to sign HTTP-only
@@ -45,27 +47,32 @@ Google Sheets API and Google Calendar API in the Google Cloud project. The
 service account creates calendars named `<Therapist> - MY THAI THAI` and shares
 the primary calendar with `GOOGLE_PRIMARY_CALENDAR_ID`.
 
-Confirmation emails are sent through Resend. Create a Resend API key and
-verify the sending domain in Resend before using a `mythaithaimassage.com`
-sender:
+Booking confirmation emails are sent through Gmail API using OAuth authorization
+granted by the sender mailbox owner. This works with a regular Gmail mailbox;
+Workspace Domain-Wide Delegation and service-account impersonation are not
+used. Enable Gmail API and configure an OAuth consent screen and OAuth client
+in the Google Cloud project. Authorize the sender mailbox for this scope:
 
-1. In Resend, open **Domains**, add `mythaithaimassage.com`, and copy the DNS
-   records Resend provides.
-2. Add those records at the DNS provider for `mythaithaimassage.com`. Keep the
-   exact hostnames and values shown by Resend; do not substitute records from
-   another domain.
-3. Wait for Resend to show the domain as **Verified**.
-4. Set `RESEND_FROM_EMAIL` to an address on that verified domain, for example
-   `bookings@mythaithaimassage.com`, in the Vercel environment used by the
-   deployed site, then redeploy.
+```text
+https://www.googleapis.com/auth/gmail.send
+```
 
-The `from` domain must be verified in the same Resend account as
-`RESEND_API_KEY`. A `403` response saying that
-`mythaithaimassage.com` is not verified means the booking can still be saved
-to Google Sheets and Calendar, but Resend will reject the confirmation email
-until the DNS verification is complete. The Calendar event does not invite attendees because
-standard Google service accounts cannot invite external attendees without
-Google Workspace Domain-Wide Delegation.
+Create an OAuth client ID and secret in the Google Cloud project. For a
+one-time refresh token setup with OAuth Playground, add
+`https://developers.google.com/oauthplayground` as an authorized redirect URI
+for the OAuth client. In OAuth Playground settings, enable **Use your own OAuth
+credentials**, enter that client ID and secret, authorize the Gmail send scope
+as the sender mailbox, then exchange the authorization code for tokens. Store
+the returned refresh token, client ID, and client secret only in Vercel
+Environment Variables. Set `GOOGLE_GMAIL_SENDER_EMAIL` to the same mailbox
+that granted consent, then redeploy.
+
+If the OAuth consent screen remains in **Testing**, Google refresh tokens for
+Gmail scopes expire after seven days; publish/configure the OAuth app for
+ongoing use and complete any Google verification Google requires for the
+configured audience and scopes. Without valid OAuth credentials and consent,
+Sheets and Calendar booking writes can still succeed while confirmation email
+delivery fails. The Calendar event does not invite attendees.
 
 The Admin Dashboard schedule loads live booking rows from `GET /api/booking`,
 which reads `Sheet1!A:R`. Existing sheets may include the header row from the
