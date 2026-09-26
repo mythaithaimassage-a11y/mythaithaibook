@@ -8,7 +8,7 @@ import {
   TrendingUp, ChevronRight, AlertCircle, Sparkles, ShieldCheck, Check, X,
   DollarSign, Users, Award, Briefcase, RefreshCw, Layers, CheckSquare, Stethoscope, Database,
   Menu, Home, CalendarDays, UserRound, BarChart3, ChevronRight as ChevronRightIcon,
-  Megaphone, ReceiptText, Download, Eye
+  Megaphone, ReceiptText, Download, Eye, MousePointerClick
 } from 'lucide-react';
 
 const MOCK_BRANCHES = [
@@ -1478,22 +1478,22 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
   };
 
   return (
-    <div className="bg-white rounded-2xl shadow-xl border border-stone-200 overflow-hidden max-w-4xl mx-auto my-2 sm:my-6">
+    <div className="bg-white rounded-2xl shadow-xl border border-stone-200 overflow-hidden max-w-6xl mx-auto my-2 sm:my-6">
       {/* Clinic Header Banner */}
-      <div className="bg-emerald-900 text-white p-6 sm:p-8 text-center relative overflow-hidden">
-        <div className="absolute top-0 right-0 transform translate-x-8 -translate-y-8 w-40 h-40 bg-emerald-800 rounded-full opacity-30 pointer-events-none"></div>
+      <div className="bg-slate-950 text-white p-6 sm:p-8 text-center relative overflow-hidden">
+        <div className="absolute top-0 right-0 transform translate-x-8 -translate-y-8 w-40 h-40 bg-slate-700 rounded-full opacity-30 pointer-events-none"></div>
         <div className="relative z-10">
           <h1 className="text-3xl sm:text-4xl font-serif tracking-tight font-bold text-amber-200">MY THAI THAI</h1>
-          <p className="text-emerald-100 font-medium text-sm sm:text-base mt-1">Thai Massage & Wellness • Ontario, Canada</p>
+          <p className="text-slate-300 font-medium text-sm sm:text-base mt-1">Thai Massage & Wellness • Ontario, Canada</p>
           
-          <div className="mt-4 inline-flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-xs sm:text-sm bg-emerald-950/60 backdrop-blur px-5 py-2 rounded-full border border-emerald-700/50">
-            <a href="tel:+14378987424" className="flex items-center text-emerald-200 hover:text-white transition">
-              <Phone className="w-3.5 h-3.5 mr-1.5 text-amber-400" />
+          <div className="mt-4 inline-flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-xs sm:text-sm bg-white/5 backdrop-blur px-5 py-2 rounded-full border border-white/10">
+            <a href="tel:+14378987424" className="flex items-center text-slate-200 hover:text-white transition">
+              <Phone className="w-3.5 h-3.5 mr-1.5 text-amber-300" />
               +1 437 898 7424
             </a>
-            <span className="text-emerald-700 hidden sm:inline">•</span>
-            <a href="https://Mythaithaimassage.com" target="_blank" rel="noreferrer" className="flex items-center text-emerald-200 hover:text-white transition">
-              <Globe className="w-3.5 h-3.5 mr-1.5 text-amber-400" />
+            <span className="text-slate-600 hidden sm:inline">•</span>
+            <a href="https://Mythaithaimassage.com" target="_blank" rel="noreferrer" className="flex items-center text-slate-200 hover:text-white transition">
+              <Globe className="w-3.5 h-3.5 mr-1.5 text-amber-300" />
               Mythaithaimassage.com
             </a>
           </div>
@@ -1501,7 +1501,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
       </div>
 
       {/* 5-Step Progress Stepper */}
-      <div className="bg-stone-50 border-b border-stone-200 px-4 py-3 sm:px-8">
+      <div className="bg-white border-b border-stone-200 px-4 py-4 sm:px-8">
         <div className="flex items-center justify-between text-xs sm:text-sm font-medium">
           {[
             { num: 1, label: "Branch & Service" },
@@ -1510,10 +1510,10 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
             { num: 4, label: "Payment & Review" },
             { num: 5, label: "Confirmed" }
           ].map((s) => (
-            <div key={s.num} className={`flex items-center space-x-1.5 ${step === s.num ? 'text-emerald-700 font-bold' : step > s.num ? 'text-stone-700' : 'text-stone-400'}`}>
+            <div key={s.num} className={`flex items-center space-x-1.5 ${step === s.num ? 'text-slate-950 font-bold' : step > s.num ? 'text-stone-700' : 'text-stone-400'}`}>
               <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ${
                 step === s.num 
-                  ? 'bg-emerald-700 text-white ring-2 ring-emerald-200' 
+                  ? 'bg-slate-950 text-white ring-2 ring-slate-200'
                   : step > s.num 
                   ? 'bg-stone-800 text-white' 
                   : 'bg-stone-200 text-stone-500'
@@ -1526,7 +1526,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
         </div>
       </div>
 
-      <div className="p-4 sm:p-8">
+      <div className="bg-stone-50/70 p-4 sm:p-8">
         {/* STEP 1: Branch & Service */}
         {step === 1 && (
           <div className="space-y-6">
@@ -2267,6 +2267,9 @@ function AdminPortal({
     return date.toISOString().slice(0, 10);
   });
   const [reportEndDate, setReportEndDate] = useState(new Date().toISOString().slice(0, 10));
+  const [googleAdsReport, setGoogleAdsReport] = useState(null);
+  const [isLoadingGoogleAds, setIsLoadingGoogleAds] = useState(false);
+  const [googleAdsError, setGoogleAdsError] = useState('');
   const [campaignSubject, setCampaignSubject] = useState('');
   const [campaignPreview, setCampaignPreview] = useState('');
   const [campaignMessage, setCampaignMessage] = useState('');
@@ -2327,6 +2330,25 @@ function AdminPortal({
 
   useEffect(() => {
     if (activeTab === 'business-profile') loadBusinessProfile();
+  }, [activeTab]);
+
+  const loadGoogleAdsReport = async () => {
+    setIsLoadingGoogleAds(true);
+    setGoogleAdsError('');
+    try {
+      const response = await fetch('/api/booking?view=google-ads-report');
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Google Ads returned status ${response.status}`);
+      setGoogleAdsReport(data);
+    } catch (error) {
+      setGoogleAdsError(error.message || 'Unable to load Google Ads campaign data.');
+    } finally {
+      setIsLoadingGoogleAds(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'google-ads') loadGoogleAdsReport();
   }, [activeTab]);
 
   const saveBusinessProfile = async (event) => {
@@ -2681,6 +2703,7 @@ function AdminPortal({
     { id: 'patient-history', label: 'Patients', icon: UserRound, section: 'Manage' },
     { id: 'business-profile', label: 'Business profile', icon: Building, section: 'Manage' },
     { id: 'marketing', label: 'Email marketing', icon: Megaphone, section: 'Grow' },
+    { id: 'google-ads', label: 'Google Ads', icon: TrendingUp, section: 'Grow' },
   ];
   const navigationSections = ['Workspace', 'Manage', 'Grow'];
   const pageTitle = {
@@ -2688,6 +2711,7 @@ function AdminPortal({
     calendar: 'Booking Calendar',
     reports: 'Sales & reports',
     marketing: 'Email marketing',
+    'google-ads': 'Google Ads',
     services: t.services,
     staff: t.staff,
     'patient-history': 'Patient Summary',
@@ -3280,6 +3304,106 @@ function AdminPortal({
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {activeTab === 'google-ads' && (
+        <div className="space-y-5">
+          <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <div className="bg-gradient-to-r from-slate-950 via-slate-900 to-blue-950 px-5 py-6 text-white sm:px-7">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div className="flex items-start gap-4">
+                  <span className="rounded-xl bg-white/10 p-3 text-blue-200"><TrendingUp className="h-5 w-5" /></span>
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-blue-200">Grow your practice</p>
+                    <h2 className="mt-1 text-xl font-bold">Google Ads performance</h2>
+                    <p className="mt-1 max-w-2xl text-sm text-slate-300">Campaign reporting from your linked Google Ads account for the last 30 days.</p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" onClick={loadGoogleAdsReport} disabled={isLoadingGoogleAds} className="inline-flex items-center gap-2 rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-xs font-semibold text-white transition hover:bg-white/15 disabled:opacity-50">
+                    <RefreshCw className={`h-3.5 w-3.5 ${isLoadingGoogleAds ? 'animate-spin' : ''}`} />Refresh report
+                  </button>
+                  <a href="https://ads.google.com/" target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-900 transition hover:bg-blue-50">
+                    Open Google Ads <Globe className="h-3.5 w-3.5" />
+                  </a>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          {googleAdsError && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{googleAdsError}</div>}
+          {isLoadingGoogleAds && !googleAdsReport && <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">Connecting securely to Google Ads…</div>}
+
+          {googleAdsReport?.configured === false && (
+            <section className="rounded-2xl border border-amber-200 bg-white p-5 shadow-sm sm:p-6">
+              <div className="flex items-start gap-3">
+                <span className="rounded-xl bg-amber-50 p-2.5 text-amber-700"><AlertCircle className="h-5 w-5" /></span>
+                <div>
+                  <h3 className="text-base font-semibold text-slate-900">Connect your Google Ads account</h3>
+                  <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">The reporting section is ready, but live campaign data is not available until these server-side environment variables are configured in Vercel. Their values are never sent to the browser.</p>
+                </div>
+              </div>
+              <ul className="mt-5 grid gap-2 sm:grid-cols-2">
+                {googleAdsReport.missingSettings.map((setting) => <li key={setting} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs text-slate-700">{setting}</li>)}
+              </ul>
+              <div className="mt-4 rounded-xl bg-slate-50 px-4 py-3 text-xs leading-5 text-slate-600">
+                Authorize the OAuth client with the <code className="rounded bg-white px-1.5 py-0.5 text-slate-800">https://www.googleapis.com/auth/adwords</code> scope. The Google Ads developer token and customer ID are also required. If the Ads account is accessed through a manager account, configure <code className="rounded bg-white px-1.5 py-0.5 text-slate-800">GOOGLE_ADS_LOGIN_CUSTOMER_ID</code>.
+              </div>
+              <a href="https://developers.google.com/google-ads/api/docs/get-started/oauth" target="_blank" rel="noreferrer" className="mt-4 inline-flex items-center gap-2 text-sm font-semibold text-blue-700 hover:text-blue-900">
+                Google Ads API OAuth setup guide <ChevronRight className="h-4 w-4" />
+              </a>
+            </section>
+          )}
+
+          {googleAdsReport?.configured && (
+            <>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs text-slate-500">Account <span className="font-semibold text-slate-700">{googleAdsReport.customerId}</span> · {googleAdsReport.dateRange}</p>
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-800"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />Connected</span>
+              </div>
+              <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+                {[
+                  ['Impressions', Number(googleAdsReport.totals.impressions).toLocaleString(), Eye, 'bg-blue-50 text-blue-700'],
+                  ['Clicks', Number(googleAdsReport.totals.clicks).toLocaleString(), MousePointerClick, 'bg-violet-50 text-violet-700'],
+                  ['Ad spend', googleAdsReport.currencyCode ? new Intl.NumberFormat(undefined, { style: 'currency', currency: googleAdsReport.currencyCode }).format(googleAdsReport.totals.cost) : `${Number(googleAdsReport.totals.cost).toLocaleString()} (currency unavailable)`, DollarSign, 'bg-amber-50 text-amber-700'],
+                  ['Conversions', Number(googleAdsReport.totals.conversions).toLocaleString(undefined, { maximumFractionDigits: 1 }), CheckCircle2, 'bg-emerald-50 text-emerald-700'],
+                ].map(([label, value, Icon, iconStyle]) => (
+                  <section key={label} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <div className="flex items-center justify-between gap-2"><span className="text-xs font-medium text-slate-500">{label}</span><span className={`rounded-lg p-2 ${iconStyle}`}><Icon className="h-4 w-4" /></span></div>
+                    <p className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">{value}</p>
+                    <p className="mt-1 text-[11px] text-slate-400">Last 30 days</p>
+                  </section>
+                ))}
+              </div>
+              <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
+                  <div><h3 className="text-base font-semibold text-slate-900">Campaigns</h3><p className="mt-1 text-xs text-slate-500">Campaign status and performance for the selected reporting period.</p></div>
+                  <span className="text-xs text-slate-500">{googleAdsReport.campaigns.length} campaigns</span>
+                </div>
+                {googleAdsReport.campaigns.length ? (
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[700px] text-left text-sm">
+                      <thead className="bg-slate-50 text-xs font-semibold text-slate-500"><tr><th className="px-5 py-3">Campaign</th><th className="px-4 py-3">Status</th><th className="px-4 py-3 text-right">Impressions</th><th className="px-4 py-3 text-right">Clicks</th><th className="px-4 py-3 text-right">Spend</th><th className="px-5 py-3 text-right">Conversions</th></tr></thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {googleAdsReport.campaigns.map((campaign) => (
+                          <tr key={campaign.id} className="hover:bg-slate-50">
+                            <td className="px-5 py-3 font-medium text-slate-900">{campaign.name}<span className="mt-0.5 block text-[10px] font-normal text-slate-400">ID {campaign.id}</span></td>
+                            <td className="px-4 py-3"><span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold ${campaign.status === 'ENABLED' ? 'bg-emerald-50 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}>{campaign.status.toLowerCase().replaceAll('_', ' ')}</span></td>
+                            <td className="px-4 py-3 text-right tabular-nums text-slate-700">{campaign.impressions.toLocaleString()}</td>
+                            <td className="px-4 py-3 text-right tabular-nums text-slate-700">{campaign.clicks.toLocaleString()}</td>
+                            <td className="px-4 py-3 text-right tabular-nums text-slate-700">{googleAdsReport.currencyCode ? new Intl.NumberFormat(undefined, { style: 'currency', currency: googleAdsReport.currencyCode }).format(campaign.cost) : campaign.cost.toLocaleString()}</td>
+                            <td className="px-5 py-3 text-right tabular-nums text-slate-700">{campaign.conversions.toLocaleString(undefined, { maximumFractionDigits: 1 })}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : <p className="p-8 text-center text-sm text-slate-500">No campaign activity was returned for the last 30 days.</p>}
+              </section>
+              <p className="text-xs leading-5 text-slate-500">Reporting is read-only. Create, edit, and manage budgets from Google Ads. Metrics are provided by Google Ads and may be delayed.</p>
+            </>
+          )}
         </div>
       )}
 

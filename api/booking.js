@@ -10,6 +10,13 @@ const GOOGLE_GMAIL_SENDER_EMAIL = process.env.GOOGLE_GMAIL_SENDER_EMAIL || '';
 const GOOGLE_OAUTH_CLIENT_ID = process.env.GOOGLE_OAUTH_CLIENT_ID || '';
 const GOOGLE_OAUTH_CLIENT_SECRET = process.env.GOOGLE_OAUTH_CLIENT_SECRET || '';
 const GOOGLE_OAUTH_REFRESH_TOKEN = process.env.GOOGLE_OAUTH_REFRESH_TOKEN || '';
+const GOOGLE_ADS_DEVELOPER_TOKEN = process.env.GOOGLE_ADS_DEVELOPER_TOKEN || '';
+const GOOGLE_ADS_CUSTOMER_ID = process.env.GOOGLE_ADS_CUSTOMER_ID || '';
+const GOOGLE_ADS_LOGIN_CUSTOMER_ID = process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID || '';
+const GOOGLE_ADS_CLIENT_ID = process.env.GOOGLE_ADS_CLIENT_ID || '';
+const GOOGLE_ADS_CLIENT_SECRET = process.env.GOOGLE_ADS_CLIENT_SECRET || '';
+const GOOGLE_ADS_REFRESH_TOKEN = process.env.GOOGLE_ADS_REFRESH_TOKEN || '';
+const GOOGLE_ADS_API_VERSION = process.env.GOOGLE_ADS_API_VERSION || 'v25';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
 const PATIENT_HISTORY_SPREADSHEET_ID = process.env.PATIENT_HISTORY_SPREADSHEET_ID || '1tNrhigAWrvAc6DiLi-W_NwG04bPiTZZEs6KwfYDUclA';
 const THERAPIST_SESSION_SECRET = process.env.THERAPIST_SESSION_SECRET || '';
@@ -1077,12 +1084,12 @@ export default async function handler(req, res) {
     }
 
     const view = String(req.query?.view || '');
-    const validGetViews = ['', 'calendar', 'patient-history', 'business-profile', 'therapist-dashboard', 'therapist-session', 'unsubscribe'];
+    const validGetViews = ['', 'calendar', 'patient-history', 'business-profile', 'google-ads-report', 'therapist-dashboard', 'therapist-session', 'unsubscribe'];
     if (req.method === 'GET' && !validGetViews.includes(view)) {
       return res.status(404).json({ message: 'Unknown booking view' });
     }
     const ownerOnlyRequest =
-      (req.method === 'GET' && ['', 'calendar', 'patient-history', 'business-profile'].includes(view)) ||
+      (req.method === 'GET' && ['', 'calendar', 'patient-history', 'business-profile', 'google-ads-report'].includes(view)) ||
       ['business-profile', 'mark-paid', 'issue-receipt', 'campaign-audience', 'campaign-generate', 'campaign-send'].includes(view);
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
     if (ownerOnlyRequest && !getOwnerSession(req)) {
@@ -1105,6 +1112,92 @@ export default async function handler(req, res) {
 
     const sheets = google.sheets({ version: 'v4', auth });
     const calendarApi = google.calendar({ version: 'v3', auth });
+
+    if (req.method === 'GET' && view === 'google-ads-report') {
+      res.setHeader('Cache-Control', 'no-store');
+      const missingSettings = [
+        ['GOOGLE_ADS_DEVELOPER_TOKEN', GOOGLE_ADS_DEVELOPER_TOKEN],
+        ['GOOGLE_ADS_CUSTOMER_ID', GOOGLE_ADS_CUSTOMER_ID],
+        ['GOOGLE_ADS_CLIENT_ID', GOOGLE_ADS_CLIENT_ID],
+        ['GOOGLE_ADS_CLIENT_SECRET', GOOGLE_ADS_CLIENT_SECRET],
+        ['GOOGLE_ADS_REFRESH_TOKEN', GOOGLE_ADS_REFRESH_TOKEN],
+      ].filter(([, value]) => !value).map(([setting]) => setting);
+      if (missingSettings.length) {
+        return res.status(200).json({ configured: false, missingSettings });
+      }
+
+      const customerId = GOOGLE_ADS_CUSTOMER_ID.replace(/\D/g, '');
+      const loginCustomerId = GOOGLE_ADS_LOGIN_CUSTOMER_ID.replace(/\D/g, '');
+      if (!/^\d{10}$/.test(customerId) || (GOOGLE_ADS_LOGIN_CUSTOMER_ID && !/^\d{10}$/.test(loginCustomerId))) {
+        return res.status(500).json({ message: 'Google Ads customer IDs must contain exactly 10 digits (hyphens are optional).' });
+      }
+      if (!/^v\d+$/.test(GOOGLE_ADS_API_VERSION)) {
+        return res.status(500).json({ message: 'GOOGLE_ADS_API_VERSION must use the format vNN.' });
+      }
+
+      const adsOAuthClient = new google.auth.OAuth2(GOOGLE_ADS_CLIENT_ID, GOOGLE_ADS_CLIENT_SECRET);
+      adsOAuthClient.setCredentials({ refresh_token: GOOGLE_ADS_REFRESH_TOKEN });
+      const { token } = await adsOAuthClient.getAccessToken();
+      if (!token) throw new Error('Google Ads OAuth did not return an access token');
+
+      const adsHeaders = {
+        Authorization: `Bearer ${token}`,
+        'developer-token': GOOGLE_ADS_DEVELOPER_TOKEN,
+        'Content-Type': 'application/json',
+      };
+      if (loginCustomerId) adsHeaders['login-customer-id'] = loginCustomerId;
+      const searchAds = async (query, pageToken) => {
+        const adsResponse = await fetch(
+          `https://googleads.googleapis.com/${GOOGLE_ADS_API_VERSION}/customers/${customerId}/googleAds:search`,
+          {
+            method: 'POST',
+            headers: adsHeaders,
+            body: JSON.stringify({ query, ...(pageToken ? { pageToken } : {}) }),
+          },
+        );
+        const adsData = await adsResponse.json();
+        if (!adsResponse.ok) {
+          const upstreamMessage = adsData.error?.message || 'Google Ads API request failed.';
+          const statusCode = adsResponse.status === 401 || adsResponse.status === 403 ? adsResponse.status : 502;
+          const error = new Error(upstreamMessage);
+          error.statusCode = statusCode;
+          throw error;
+        }
+        return adsData;
+      };
+
+      const query = "SELECT campaign.id, campaign.name, campaign.status, metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.conversions FROM campaign WHERE segments.date DURING LAST_30_DAYS AND campaign.status != 'REMOVED' ORDER BY metrics.impressions DESC";
+      const results = [];
+      let pageToken;
+      do {
+        const page = await searchAds(query, pageToken);
+        results.push(...(page.results || []));
+        pageToken = page.nextPageToken;
+      } while (pageToken);
+      const customerData = await searchAds('SELECT customer.currency_code FROM customer LIMIT 1');
+      const campaigns = results.map((result) => ({
+        id: String(result.campaign?.id || ''),
+        name: result.campaign?.name || 'Unnamed campaign',
+        status: result.campaign?.status || 'UNKNOWN',
+        impressions: Number(result.metrics?.impressions || 0),
+        clicks: Number(result.metrics?.clicks || 0),
+        cost: Number(result.metrics?.costMicros || 0) / 1_000_000,
+        conversions: Number(result.metrics?.conversions || 0),
+      }));
+      return res.status(200).json({
+        configured: true,
+        customerId,
+        currencyCode: customerData.results?.[0]?.customer?.currencyCode || null,
+        dateRange: 'Last 30 days',
+        campaigns,
+        totals: campaigns.reduce((totals, campaign) => ({
+          impressions: totals.impressions + campaign.impressions,
+          clicks: totals.clicks + campaign.clicks,
+          cost: totals.cost + campaign.cost,
+          conversions: totals.conversions + campaign.conversions,
+        }), { impressions: 0, clicks: 0, cost: 0, conversions: 0 }),
+      });
+    }
 
     if (req.method === 'POST' && req.query?.view === 'therapist-note') {
       res.setHeader('Cache-Control', 'no-store');
@@ -2103,6 +2196,6 @@ export default async function handler(req, res) {
     });
   } catch (error) {
     console.error('Google Sheets API Error:', error);
-    return res.status(500).json({ message: error.message || 'Internal Server Error' });
+    return res.status(error.statusCode || 500).json({ message: error.message || 'Internal Server Error' });
   }
 }

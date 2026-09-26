@@ -92,6 +92,29 @@ HTTP-only, same-site session that expires after eight hours. Owner-only
 booking reads, calendar, patient-history, and business-profile endpoints
 require this session; public customer booking submissions remain unchanged.
 
+The owner dashboard's **Google Ads** section provides read-only campaign
+reporting for the last 30 days. To enable live data, configure these additional
+server-side Vercel environment variables:
+
+- `GOOGLE_ADS_DEVELOPER_TOKEN` (developer token approved for the account's API
+  access level)
+- `GOOGLE_ADS_CUSTOMER_ID` (10-digit Ads customer ID; hyphens are optional)
+- `GOOGLE_ADS_CLIENT_ID`
+- `GOOGLE_ADS_CLIENT_SECRET`
+- `GOOGLE_ADS_REFRESH_TOKEN`
+- `GOOGLE_ADS_LOGIN_CUSTOMER_ID` (optional; 10-digit manager customer ID when
+  accessing the Ads customer through a manager account)
+- `GOOGLE_ADS_API_VERSION` (optional; defaults to `v25`)
+
+The Ads OAuth refresh token must be issued to the configured OAuth client with
+the `https://www.googleapis.com/auth/adwords` scope. Enable the Google Ads API
+for the associated Google Cloud project and use credentials that have access to
+the Ads customer. The Ads OAuth client and token are separate from the booking
+confirmation Gmail OAuth credentials. Keep all Ads credentials in Vercel
+Environment Variables; the browser only receives campaign metrics. The report
+automatically paginates campaign results and reads the account currency from
+Google Ads.
+
 The owner dashboard includes a **Business profile** section for editing the
 business name, optional legal name, description, email, phone, website, location,
 and optional GST/HST registration number for receipts. Profile values are saved
