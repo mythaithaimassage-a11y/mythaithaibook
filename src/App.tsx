@@ -6,7 +6,8 @@ import {
   Calendar as CalendarIcon, Clock, User, MapPin, CreditCard, CheckCircle2, Globe, Settings, 
   Plus, Edit, Trash2, Building, FileText, Phone, Mail, Search, Filter, 
   TrendingUp, ChevronRight, AlertCircle, Sparkles, ShieldCheck, Check, X,
-  DollarSign, Users, Award, Briefcase, RefreshCw, Layers, CheckSquare, Stethoscope, Link2, Send, Database
+  DollarSign, Users, Award, Briefcase, RefreshCw, Layers, CheckSquare, Stethoscope, Link2, Send, Database,
+  Menu, Home, CalendarDays, UserRound, BarChart3, CreditCard as CardIcon, ChevronRight as ChevronRightIcon
 } from 'lucide-react';
 
 const MOCK_BRANCHES = [
@@ -293,48 +294,46 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-stone-100 font-sans text-stone-800 flex flex-col justify-between">
-      {/* Top Universal Mode Switcher Bar */}
-      <header className="bg-stone-900 text-stone-200 px-4 py-2.5 shadow-md flex flex-wrap items-center justify-between text-xs sm:text-sm border-b border-stone-800">
+      <header className="sticky top-0 z-40 flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3 shadow-sm sm:px-6">
         <div className="flex items-center space-x-2 font-semibold tracking-wide">
-          <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
-          <span className="text-stone-100 uppercase tracking-wider">MY THAI THAI Platform</span>
-          <span className="text-stone-500 hidden sm:inline">|</span>
-          <span className="text-stone-400 font-normal hidden sm:inline">Ontario, Canada Jurisdiction</span>
+          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-950 text-xs font-black tracking-tight text-white shadow-sm">M</span>
+          <span className="text-lg font-bold tracking-tight text-slate-950">MedBook</span>
+          <span className="hidden rounded-full border border-emerald-100 bg-emerald-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-emerald-800 sm:inline-flex">Practice platform</span>
         </div>
-        <div className="flex items-center space-x-2">
+        <nav aria-label="Platform views" className="flex items-center gap-1.5">
           <button
             onClick={() => setViewMode('customer')}
             className={`px-3 py-1.5 rounded-md font-medium transition-all ${
-              viewMode === 'customer' 
-                ? 'bg-emerald-600 text-white shadow-sm' 
-                : 'bg-stone-800 text-stone-400 hover:text-stone-200'
+              viewMode === 'customer'
+                ? 'bg-emerald-950 text-white shadow-sm'
+                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
             }`}
           >
-            Customer Booking Portal
+            Booking portal
           </button>
           <button
             onClick={() => setViewMode('admin')}
             className={`px-3 py-1.5 rounded-md font-medium transition-all ${
-              viewMode === 'admin' 
-                ? 'bg-amber-600 text-white shadow-sm' 
-                : 'bg-stone-800 text-stone-400 hover:text-stone-200'
+              viewMode === 'admin'
+                ? 'bg-emerald-950 text-white shadow-sm'
+                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
             }`}
           >
-            Admin / Practice Dashboard
+            Owner dashboard
           </button>
           <button
             onClick={() => setViewMode('therapist')}
             className={`px-3 py-1.5 rounded-md font-medium transition-all ${
-              viewMode === 'therapist' ? 'bg-blue-600 text-white shadow-sm' : 'bg-stone-800 text-stone-400 hover:text-stone-200'
+              viewMode === 'therapist' ? 'bg-emerald-950 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
             }`}
           >
-            Therapist Login
+            Therapist
           </button>
-        </div>
+        </nav>
       </header>
 
       {/* Main View Switcher */}
-      <main className="flex-1 p-3 sm:p-6 max-w-7xl w-full mx-auto">
+      <main className={`flex-1 w-full ${viewMode === 'admin' ? 'p-0' : 'p-3 sm:p-6 max-w-7xl mx-auto'}`}>
         {viewMode === 'customer' ? (
           <CustomerPortal 
             branches={MOCK_BRANCHES} 
@@ -1708,6 +1707,7 @@ function AdminPortal({
   onUpdateWebhookUrl
 }) {
   const [activeTab, setActiveTab] = useState('schedule');
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [businessProfile, setBusinessProfile] = useState(DEFAULT_BUSINESS_PROFILE);
   const [hasLoadedBusinessProfile, setHasLoadedBusinessProfile] = useState(false);
   const [isLoadingBusinessProfile, setIsLoadingBusinessProfile] = useState(false);
@@ -1928,8 +1928,107 @@ function AdminPortal({
     }
   };
 
+  const adminNavigation = [
+    { id: 'schedule', label: 'Home', icon: Home, section: 'Workspace' },
+    { id: 'calendar', label: 'Booking Calendar', icon: CalendarDays, section: 'Workspace' },
+    { id: 'schedule', label: 'Events & bookings', icon: CalendarIcon, section: 'Workspace' },
+    { id: 'financials', label: 'Getting paid', icon: CardIcon, section: 'Workspace' },
+    { id: 'financials', label: 'Sales & reports', icon: BarChart3, section: 'Workspace' },
+    { id: 'services', label: 'Service catalogue', icon: Layers, section: 'Manage' },
+    { id: 'staff', label: 'Staff', icon: Users, section: 'Manage' },
+    { id: 'patient-history', label: 'Patients', icon: UserRound, section: 'Manage' },
+    { id: 'business-profile', label: 'Business profile', icon: Building, section: 'Manage' },
+    { id: 'sheets', label: 'Integrations', icon: Database, section: 'Manage' },
+    { id: 'business-profile', label: 'Settings', icon: Settings, section: 'Manage' },
+  ];
+  const pageTitle = {
+    schedule: t.schedule,
+    calendar: 'Booking Calendar',
+    financials: t.financials,
+    services: t.services,
+    staff: t.staff,
+    'patient-history': 'Patient Summary',
+    'business-profile': 'Business profile',
+    sheets: 'Integrations',
+  }[activeTab] || 'Owner dashboard';
+
   return (
-    <div className="space-y-6">
+    <div className="min-h-[calc(100vh-58px)] bg-[#f1f3f7] lg:flex">
+      <aside className="sticky top-[58px] hidden h-[calc(100vh-58px)] w-64 shrink-0 flex-col bg-[#111722] text-slate-300 lg:flex">
+        <div className="flex items-center gap-3 border-b border-white/10 px-5 py-5">
+          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-400 text-sm font-black text-slate-950">M</div>
+          <div>
+            <div className="text-base font-bold tracking-tight text-white">MedBook</div>
+            <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-slate-500">Practice manager</div>
+          </div>
+        </div>
+        <div className="px-4 py-4">
+          <div className="rounded-lg border border-white/10 bg-white/[0.06] px-3 py-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Quick actions <ChevronRightIcon className="float-right h-3.5 w-3.5 rotate-90" /></div>
+        </div>
+        <nav aria-label="Owner dashboard navigation" className="flex-1 overflow-y-auto px-3 pb-4">
+          {['Workspace', 'Manage'].map((section) => (
+            <div key={section} className="mb-5">
+              <p className="px-3 pb-2 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">{section}</p>
+              <div className="space-y-1">
+                {adminNavigation.filter((item) => item.section === section).map((item, index) => {
+                  const Icon = item.icon;
+                  const selected = activeTab === item.id && !adminNavigation.slice(0, adminNavigation.indexOf(item)).some((prior) => prior.id === item.id && prior.section === section);
+                  return (
+                    <button
+                      key={`${item.section}-${item.label}-${index}`}
+                      onClick={() => { setActiveTab(item.id); setMobileNavOpen(false); }}
+                      aria-current={selected ? 'page' : undefined}
+                      className={`group flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-xs font-medium transition ${selected ? 'bg-white/10 text-white shadow-sm' : 'text-slate-400 hover:bg-white/[0.06] hover:text-white'}`}
+                    >
+                      <Icon className={`h-4 w-4 shrink-0 ${selected ? 'text-emerald-300' : 'text-slate-500 group-hover:text-slate-300'}`} />
+                      <span className="flex-1">{item.label}</span>
+                      {selected && <span className="h-1.5 w-1.5 rounded-full bg-emerald-300" />}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </nav>
+        <div className="border-t border-white/10 p-4">
+          <div className="flex items-center gap-3 rounded-xl bg-white/[0.05] p-3">
+            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-100 text-xs font-bold text-emerald-950">MT</div>
+            <div className="min-w-0"><div className="truncate text-xs font-semibold text-white">Practice owner</div><div className="text-[10px] text-slate-500">Owner account</div></div>
+            <ShieldCheck className="ml-auto h-4 w-4 shrink-0 text-emerald-300" />
+          </div>
+        </div>
+      </aside>
+
+      <div className="min-w-0 flex-1">
+        <div className="sticky top-[58px] z-20 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur sm:px-6 lg:top-[58px]">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-3">
+              <button type="button" aria-label="Toggle dashboard menu" aria-expanded={mobileNavOpen} onClick={() => setMobileNavOpen((open) => !open)} className="rounded-lg border border-slate-200 p-2 text-slate-600 hover:bg-slate-50 lg:hidden"><Menu className="h-4 w-4" /></button>
+              <div className="min-w-0">
+                <p className="truncate text-sm font-bold text-slate-900">{businessProfile.businessName || 'MY THAI THAI'}</p>
+                <p className="hidden text-[11px] text-slate-500 sm:block">{pageTitle} <span className="px-1 text-slate-300">/</span> Owner workspace</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 sm:gap-3">
+              <span className="hidden items-center gap-1.5 text-[11px] font-medium text-slate-500 sm:inline-flex"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> Workspace active</span>
+              <div className="flex items-center rounded-lg border border-slate-200 p-0.5">
+                <button onClick={() => setLang('en')} className={`rounded-md px-2 py-1 text-[10px] font-bold ${lang === 'en' ? 'bg-slate-900 text-white' : 'text-slate-500'}`}>EN</button>
+                <button onClick={() => setLang('th')} className={`rounded-md px-2 py-1 text-[10px] font-bold ${lang === 'th' ? 'bg-slate-900 text-white' : 'text-slate-500'}`}>ไทย</button>
+              </div>
+              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-100 text-[10px] font-bold text-emerald-950">MT</div>
+            </div>
+          </div>
+          {mobileNavOpen && (
+            <nav aria-label="Mobile owner dashboard navigation" className="mt-3 grid grid-cols-2 gap-1 border-t border-slate-100 pt-3 sm:grid-cols-3">
+              {adminNavigation.map((item, index) => {
+                const Icon = item.icon;
+                return <button key={`${item.label}-${index}`} onClick={() => { setActiveTab(item.id); setMobileNavOpen(false); }} className={`flex items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-semibold ${activeTab === item.id ? 'bg-emerald-950 text-white' : 'text-slate-600 hover:bg-slate-100'}`}><Icon className="h-4 w-4" />{item.label}</button>;
+              })}
+            </nav>
+          )}
+        </div>
+
+        <main className="mx-auto max-w-[1600px] space-y-6 p-4 sm:p-6 xl:p-8">
       <section className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-slate-950 via-emerald-950 to-emerald-800 px-5 py-6 text-white shadow-xl shadow-emerald-950/10 sm:px-8 sm:py-8">
         <div aria-hidden="true" className="absolute -right-16 -top-28 h-72 w-72 rounded-full border border-white/10" />
         <div aria-hidden="true" className="absolute -right-2 -top-14 h-48 w-48 rounded-full border border-white/10" />
@@ -1989,35 +2088,6 @@ function AdminPortal({
           <div className="mt-3 text-2xl font-bold tracking-tight text-slate-900">${hstCollected.toFixed(2)}</div>
           <div className="mt-1 text-[11px] text-slate-400">Estimated Ontario HST</div>
         </div>
-      </div>
-
-      {/* Navigation Tabs */}
-      <div className="flex gap-1 overflow-x-auto rounded-2xl border border-slate-200/80 bg-white p-2 shadow-sm">
-        {[
-          { id: 'schedule', label: t.schedule, icon: CalendarIcon },
-          { id: 'calendar', label: 'Live Google Calendar', icon: CalendarIcon },
-          { id: 'services', label: t.services, icon: Layers },
-          { id: 'staff', label: t.staff, icon: Users },
-          { id: 'patient-history', label: 'Patient Summary', icon: FileText },
-          { id: 'financials', label: t.financials, icon: DollarSign },
-          { id: 'business-profile', label: 'Business profile', icon: Building }
-        ].map(tab => {
-          const Icon = tab.icon;
-          return (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`flex items-center gap-2 whitespace-nowrap rounded-xl px-3 py-2.5 text-xs font-semibold transition sm:px-4 sm:text-sm ${
-                activeTab === tab.id 
-                ? 'bg-emerald-950 text-white shadow-sm'
-                  : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'
-              }`}
-            >
-              <Icon className="h-4 w-4" />
-              <span>{tab.label}</span>
-            </button>
-          );
-        })}
       </div>
 
       {/* TAB CONTENT: SCHEDULE */}
@@ -2752,6 +2822,8 @@ export default async function handler(req, res) {
           </div>
         </div>
       )}
+        </main>
+      </div>
     </div>
   );
 }

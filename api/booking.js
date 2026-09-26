@@ -490,7 +490,12 @@ export default async function handler(req, res) {
     }
 
     const view = String(req.query?.view || '');
-    const ownerOnlyRequest = req.method === 'GET' || view === 'business-profile';
+    const validGetViews = ['', 'calendar', 'patient-history', 'business-profile', 'therapist-dashboard', 'therapist-session'];
+    if (req.method === 'GET' && !validGetViews.includes(view)) {
+      return res.status(404).json({ message: 'Unknown booking view' });
+    }
+    const ownerOnlyRequest = req.method === 'GET' && ['', 'calendar', 'patient-history', 'business-profile'].includes(view) ||
+      view === 'business-profile';
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
     if (ownerOnlyRequest && !getOwnerSession(req)) {
       return res.status(401).json({ message: 'Owner sign-in required' });
