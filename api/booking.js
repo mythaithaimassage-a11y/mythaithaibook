@@ -301,6 +301,47 @@ async function ensureTherapistProfilesSheet(sheets) {
   }
 }
 
+async function ensureTherapistNotesSheet(sheets) {
+  const spreadsheet = await sheets.spreadsheets.get({
+    spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+    fields: 'sheets.properties',
+  });
+  const exists = (spreadsheet.data.sheets || [])
+    .some((sheet) => sheet.properties?.title === 'TherapistNotes');
+  if (!exists) {
+    try {
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+        requestBody: { requests: [{ addSheet: { properties: { title: 'TherapistNotes' } } }] },
+      });
+    } catch (error) {
+      const refreshed = await sheets.spreadsheets.get({
+        spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+        fields: 'sheets.properties',
+      });
+      const createdByConcurrentRequest = (refreshed.data.sheets || [])
+        .some((sheet) => sheet.properties?.title === 'TherapistNotes');
+      if (!createdByConcurrentRequest) throw error;
+    }
+  }
+
+  const headers = ['Note ID', 'Therapist ID', 'Booking ID', 'Patient Name', 'Category', 'Note', 'Created At'];
+  const headerResult = await sheets.spreadsheets.values.get({
+    spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+    range: 'TherapistNotes!A1:G1',
+  });
+  if (!headerResult.data.values?.[0]?.length) {
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+      range: 'TherapistNotes!A1:G1',
+      valueInputOption: 'RAW',
+      requestBody: { values: [headers] },
+    });
+  } else if (headers.some((header, index) => headerResult.data.values[0][index] !== header)) {
+    throw new Error('TherapistNotes sheet has an unexpected header format');
+  }
+}
+
 async function ensureBusinessProfileSheet(sheets) {
   const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
   if (!spreadsheetId) throw new Error('GOOGLE_SPREADSHEET_ID is not configured');
@@ -1065,6 +1106,69 @@ export default async function handler(req, res) {
     const sheets = google.sheets({ version: 'v4', auth });
     const calendarApi = google.calendar({ version: 'v3', auth });
 
+    if (req.method === 'POST' && req.query?.view === 'therapist-note') {
+      res.setHeader('Cache-Control', 'no-store');
+      if (!isSameOriginRequest(req)) {
+        return res.status(403).json({ message: 'Note update origin is not allowed' });
+      }
+      const session = getTherapistSession(req);
+      if (!session) return res.status(401).json({ message: 'Therapist sign-in required' });
+      const bookingId = String(req.body?.bookingId || '').trim();
+      const category = String(req.body?.category || '').trim();
+      const note = String(req.body?.note || '').trim();
+      const allowedCategories = ['Treatment note', 'Progress update', 'Follow-up', 'Rebooking'];
+      if (!bookingId || !allowedCategories.includes(category) || !note || note.length > 3000) {
+        return res.status(400).json({ message: 'Choose a patient, note type, and enter a note of no more than 3,000 characters.' });
+      }
+
+      const [accountsResult, bookingResult] = await Promise.all([
+        sheets.spreadsheets.values.get({
+          spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+          range: 'TherapistAccounts!A:F',
+        }).catch((error) => {
+          if (error.code === 400) return { data: { values: [] } };
+          throw error;
+        }),
+        sheets.spreadsheets.values.get({
+          spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+          range: 'Sheet1!A:R',
+        }),
+      ]);
+      const sheetAccount = (accountsResult.data.values || []).slice(1)
+        .map((row) => ({ id: row[0], name: row[2], status: row[4] }))
+        .find((item) => item.id === session.therapistId);
+      if (sheetAccount && sheetAccount.status !== 'approved') {
+        return res.status(403).json({ message: 'Therapist account is not approved' });
+      }
+      const account = sheetAccount || getTherapistAccounts().find((item) => item.id === session.therapistId);
+      if (!account) return res.status(401).json({ message: 'Therapist account is not available' });
+      const assignedBooking = (bookingResult.data.values || [])
+        .find((row) => row[0] === bookingId && row[6] === account.name);
+      if (!assignedBooking) {
+        return res.status(404).json({ message: 'That appointment is not assigned to your therapist account.' });
+      }
+
+      await ensureTherapistNotesSheet(sheets);
+      const createdAt = new Date().toISOString();
+      const savedNote = {
+        noteId: crypto.randomUUID(),
+        bookingId,
+        patientName: assignedBooking[1] || '',
+        category,
+        note,
+        createdAt,
+      };
+      await sheets.spreadsheets.values.append({
+        spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+        range: 'TherapistNotes!A:G',
+        valueInputOption: 'RAW',
+        requestBody: {
+          values: [[savedNote.noteId, session.therapistId, bookingId, savedNote.patientName, category, note, createdAt]],
+        },
+      });
+      return res.status(201).json({ note: savedNote });
+    }
+
     if (req.method === 'POST' && req.query?.view === 'therapist-profile') {
       res.setHeader('Cache-Control', 'no-store');
       if (!isSameOriginRequest(req)) {
@@ -1358,8 +1462,25 @@ export default async function handler(req, res) {
       const professionalProfileRow = (professionalProfilesResult.data.values || [])
         .slice(1)
         .find((row) => row[0] === session.therapistId) || [];
+      await ensureTherapistNotesSheet(sheets);
+      const therapistNotesResult = await sheets.spreadsheets.values.get({
+        spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+        range: 'TherapistNotes!A:G',
+      });
+      const therapistNotes = (therapistNotesResult.data.values || []).slice(1)
+        .filter((row) => row[1] === session.therapistId && row[0])
+        .map((row) => ({
+          noteId: row[0],
+          bookingId: row[2] || '',
+          patientName: row[3] || '',
+          category: row[4] || 'Treatment note',
+          note: row[5] || '',
+          createdAt: row[6] || '',
+        }))
+        .sort((first, second) => second.createdAt.localeCompare(first.createdAt));
       const therapistBookings = bookings.filter((row) => row[6] === account.name);
       const upcoming = therapistBookings.filter((row) => row[7] >= new Date().toISOString().slice(0, 10))
+        .sort((first, second) => `${first[7]} ${first[8]}`.localeCompare(`${second[7]} ${second[8]}`))
         .map((row) => {
           const history = histories.find((candidate) => candidate[0] === row[0]);
           const conditionLabels = ['Heart condition', 'Blood pressure', 'Diabetes', 'Cancer', 'Headaches', 'Bone or joint concern', 'Broken bones', 'Osteoporosis', 'Allergies', 'Surgeries', 'Numbness', 'Skin sensitivity', 'Pregnancy', 'Medications'];
@@ -1390,8 +1511,37 @@ export default async function handler(req, res) {
           serviceName: row[5],
           branchName: row[4],
           durationMinutes: Number(row[12]) || 0,
+          phone: row[2] || '',
+          email: row[3] || '',
           status: 'Completed',
         }));
+      const patientIdentity = (row) => {
+        const email = String(row[3] || '').trim().toLowerCase();
+        const phone = String(row[2] || '').replace(/\D/g, '');
+        return email ? `email:${email}` : phone ? `phone:${phone}` : `name:${String(row[1] || '').trim().toLowerCase()}`;
+      };
+      const bookedPatientIdentities = new Set(
+        therapistBookings.filter((row) => row[7] >= new Date().toISOString().slice(0, 10)).map(patientIdentity),
+      );
+      const latestPastBookings = new Map();
+      attended.forEach((appointment) => {
+        const sourceRow = therapistBookings.find((row) => row[0] === appointment.bookingId);
+        if (!sourceRow) return;
+        const identity = patientIdentity(sourceRow);
+        const current = latestPastBookings.get(identity);
+        if (!current || `${appointment.date} ${appointment.time}` > `${current.date} ${current.time}`) {
+          latestPastBookings.set(identity, { ...appointment, phone: sourceRow[2] || '', email: sourceRow[3] || '' });
+        }
+      });
+      const todayUtc = new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`);
+      const rebookingReminders = [...latestPastBookings.entries()]
+        .filter(([identity]) => !bookedPatientIdentities.has(identity))
+        .map(([, appointment]) => ({
+          ...appointment,
+          daysSinceLastVisit: Math.floor((todayUtc.getTime() - new Date(`${appointment.date}T00:00:00Z`).getTime()) / 86400000),
+        }))
+        .filter((appointment) => Number.isFinite(appointment.daysSinceLastVisit) && appointment.daysSinceLastVisit >= 30)
+        .sort((first, second) => second.daysSinceLastVisit - first.daysSinceLastVisit);
       const branchNames = [...new Set(therapistBookings.map((row) => row[4]).filter(Boolean))];
       const attendedHours = attended.reduce((total, appointment) => total + appointment.durationMinutes, 0) / 60;
       const calendarDate = String(req.query.date || new Date().toISOString().slice(0, 10));
@@ -1432,6 +1582,8 @@ export default async function handler(req, res) {
           updatedAt: professionalProfileRow[6] || '',
         },
         appointments: upcoming,
+        patientNotes: therapistNotes,
+        rebookingReminders,
         calendarEvents,
         calendarDate,
         calendarView,

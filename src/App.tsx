@@ -340,11 +340,11 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-stone-100 font-sans text-stone-800 flex flex-col justify-between">
-      <header className="sticky top-0 z-40 flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-white px-4 py-3 shadow-sm sm:px-6">
+      <header className={`sticky top-0 z-40 flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3 shadow-sm sm:px-6 ${viewMode === 'therapist' ? 'border-slate-800 bg-black text-white' : 'border-slate-200 bg-white text-slate-900'}`}>
         <div className="flex items-center space-x-2 font-semibold tracking-wide">
           <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-950 text-xs font-black tracking-tight text-white shadow-sm">M</span>
-          <span className="text-lg font-bold tracking-tight text-slate-950">MedBook</span>
-          <span className="hidden rounded-full border border-emerald-100 bg-emerald-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider text-emerald-800 sm:inline-flex">Practice platform</span>
+          <span className={`text-lg font-bold tracking-tight ${viewMode === 'therapist' ? 'text-white' : 'text-slate-950'}`}>MedBook</span>
+          <span className={`hidden rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider sm:inline-flex ${viewMode === 'therapist' ? 'border border-slate-700 bg-slate-900 text-slate-300' : 'border border-emerald-100 bg-emerald-50 text-emerald-800'}`}>Practice platform</span>
         </div>
         <nav aria-label="Platform views" className="flex items-center gap-1.5">
           <button
@@ -352,7 +352,7 @@ export default function App() {
             className={`px-3 py-1.5 rounded-md font-medium transition-all ${
               viewMode === 'customer'
                 ? 'bg-emerald-950 text-white shadow-sm'
-                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
+                : viewMode === 'therapist' ? 'text-slate-300 hover:bg-slate-800 hover:text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
             }`}
           >
             Booking portal
@@ -362,7 +362,7 @@ export default function App() {
             className={`px-3 py-1.5 rounded-md font-medium transition-all ${
               viewMode === 'admin'
                 ? 'bg-emerald-950 text-white shadow-sm'
-                : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
+                : viewMode === 'therapist' ? 'text-slate-300 hover:bg-slate-800 hover:text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
             }`}
           >
             Owner dashboard
@@ -370,7 +370,7 @@ export default function App() {
           <button
             onClick={() => setViewMode('therapist')}
             className={`px-3 py-1.5 rounded-md font-medium transition-all ${
-              viewMode === 'therapist' ? 'bg-emerald-950 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
+              viewMode === 'therapist' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
             }`}
           >
             Therapist
@@ -420,6 +420,8 @@ export default function App() {
 function TherapistPortal() {
   const [therapist, setTherapist] = useState(null);
   const [appointments, setAppointments] = useState([]);
+  const [patientNotes, setPatientNotes] = useState([]);
+  const [rebookingReminders, setRebookingReminders] = useState([]);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -439,6 +441,10 @@ function TherapistPortal() {
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileError, setProfileError] = useState('');
   const [profileMessage, setProfileMessage] = useState('');
+  const [noteForm, setNoteForm] = useState({ bookingId: '', category: 'Treatment note', note: '' });
+  const [noteSaving, setNoteSaving] = useState(false);
+  const [noteError, setNoteError] = useState('');
+  const [noteMessage, setNoteMessage] = useState('');
   const [isSignup, setIsSignup] = useState(false);
   const [name, setName] = useState('');
   const [signupComplete, setSignupComplete] = useState('');
@@ -449,6 +455,8 @@ function TherapistPortal() {
     if (!response.ok) throw new Error(data.message || 'Unable to load therapist appointments');
     setTherapist(data.therapist);
     setAppointments(data.appointments || []);
+    setPatientNotes(data.patientNotes || []);
+    setRebookingReminders(data.rebookingReminders || []);
     setSelectedAppointment((current) => current || data.appointments?.[0] || null);
     setSummary(data.summary || { upcomingCount: (data.appointments || []).length, flaggedCount: 0 });
     setTherapistProfile(data.profile || { branchNames: [], attendedHours: 0, attendedClientCount: 0 });
@@ -463,6 +471,29 @@ function TherapistPortal() {
     });
     setAttendedClients(data.attended || []);
     setCalendarEvents(data.calendarEvents || []);
+  };
+
+  const savePatientNote = async (event) => {
+    event.preventDefault();
+    setNoteSaving(true);
+    setNoteError('');
+    setNoteMessage('');
+    try {
+      const response = await fetch('/api/booking?view=therapist-note', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(noteForm),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Unable to save patient note.');
+      setPatientNotes((current) => [data.note, ...current]);
+      setNoteForm((current) => ({ ...current, note: '' }));
+      setNoteMessage('Note saved to this patient’s therapist record.');
+    } catch (requestError) {
+      setNoteError(requestError.message || 'Unable to save patient note.');
+    } finally {
+      setNoteSaving(false);
+    }
   };
 
   const saveProfessionalProfile = async (event) => {
@@ -597,73 +628,93 @@ function TherapistPortal() {
     { label: 'Notes recorded', value: appointments.filter((appointment) => appointment.painAreas || appointment.additionalDetails || appointment.bodyAreas).length, color: '#4f8fe8' },
     { label: 'No notes recorded', value: appointments.filter((appointment) => !appointment.painAreas && !appointment.additionalDetails && !appointment.bodyAreas).length, color: '#a84bd1' },
   ];
+  const patientRecords = [...new Map(
+    [...appointments, ...attendedClients].map((patient) => [patient.bookingId, patient]),
+  ).values()];
+  const selectedNotePatient = patientRecords.find((patient) => patient.bookingId === noteForm.bookingId);
+  const pageTitle = {
+    dashboard: 'Dashboard',
+    appointments: 'Upcoming appointments',
+    notes: 'Patient notes',
+    reminders: 'Rebooking reminders',
+    profile: 'My profile',
+  }[workspaceView] || 'Dashboard';
 
   return (
     <div className="min-h-[calc(100vh-7rem)] bg-slate-100">
-      <header className="flex min-h-14 items-center justify-between gap-4 bg-blue-700 px-4 py-2 text-white shadow-sm sm:px-6">
+      <header className="flex min-h-14 items-center justify-between gap-4 bg-black px-4 py-2 text-white shadow-sm sm:px-6">
         <div className="flex items-center gap-3">
           <div className="grid h-9 w-9 place-items-center rounded-lg border border-white/40 bg-white/10 text-xs font-black">MT</div>
           <div><p className="text-sm font-black tracking-wide">MY THAI THAI</p><p className="text-[9px] uppercase tracking-[0.18em] text-blue-100">Therapist portal</p></div>
         </div>
         <div className="flex items-center gap-3">
           <span className="hidden text-xs text-blue-100 sm:inline">{new Date().toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })}</span>
-          <button type="button" onClick={async () => { setRefreshing(true); try { await loadAppointments(); } catch (refreshError) { setError(refreshError.message || 'Unable to refresh therapist data'); } finally { setRefreshing(false); } }} disabled={refreshing} aria-label="Refresh dashboard" className="rounded-lg p-2 transition hover:bg-blue-600 disabled:opacity-50">
+          <button type="button" onClick={async () => { setRefreshing(true); try { await loadAppointments(); } catch (refreshError) { setError(refreshError.message || 'Unable to refresh therapist data'); } finally { setRefreshing(false); } }} disabled={refreshing} aria-label="Refresh dashboard" className="rounded-lg p-2 transition hover:bg-slate-800 disabled:opacity-50">
             <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
           </button>
-          <button type="button" onClick={() => { setWorkspaceView('profile'); setProfileMenuOpen(true); }} aria-label="Open therapist profile" className="flex h-9 w-9 items-center justify-center rounded-full border-2 border-white/70 bg-blue-900 text-xs font-bold">
+          <button type="button" onClick={() => { setWorkspaceView('profile'); setProfileMenuOpen(true); }} aria-label="Open therapist profile" className="flex h-9 w-9 items-center justify-center rounded-full border-2 border-white/70 bg-slate-800 text-sm font-semibold">
             {(therapist.name || 'T').split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase()}
           </button>
         </div>
       </header>
       <div className="flex min-h-[calc(100vh-10.5rem)] flex-col lg:flex-row">
-      <aside className="w-full shrink-0 bg-blue-700 px-3 py-3 text-white lg:min-h-[calc(100vh-10.5rem)] lg:w-52 lg:px-3">
-        <div className="mb-4 flex items-center gap-3 rounded-xl bg-blue-800/70 px-3 py-3">
+      <aside className="w-full shrink-0 bg-black px-3 py-3 text-white lg:min-h-[calc(100vh-10.5rem)] lg:w-60 lg:px-3">
+        <div className="mb-4 flex items-center gap-3 rounded-xl bg-slate-900 px-3 py-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/20 text-sm font-black text-emerald-200">
             {(therapist.name || 'T').split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase()}
           </div>
           <div className="min-w-0">
             <p className="truncate text-sm font-bold">{therapist.name}</p>
-            <p className="text-[10px] text-blue-100">Therapist account</p>
+            <p className="text-xs text-slate-400">Therapist account</p>
           </div>
         </div>
         <nav aria-label="Therapist workspace" className="flex gap-1 overflow-x-auto lg:flex-col">
           <button
             type="button"
             onClick={() => setWorkspaceView('dashboard')}
-            className={`flex shrink-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold transition lg:w-full ${workspaceView === 'dashboard' ? 'bg-blue-900 text-white shadow-sm' : 'text-blue-50 hover:bg-blue-600'}`}
+            className={`flex shrink-0 items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium transition lg:w-full ${workspaceView === 'dashboard' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-300 hover:bg-slate-900 hover:text-white'}`}
           >
             <Home className="h-4 w-4" />
-            <span className="flex-1">Dashboard</span>
+            <span className="flex-1 whitespace-nowrap">Dashboard</span>
           </button>
           <button
             type="button"
-            onClick={() => { setWorkspaceView('appointments'); document.getElementById('therapist-calendar')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}
-            className={`flex shrink-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold transition lg:w-full ${workspaceView === 'appointments' ? 'bg-blue-900 text-white shadow-sm' : 'text-blue-50 hover:bg-blue-600'}`}
+            onClick={() => setWorkspaceView('appointments')}
+            className={`flex shrink-0 items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium transition lg:w-full ${workspaceView === 'appointments' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-300 hover:bg-slate-900 hover:text-white'}`}
           >
             <CalendarDays className="h-4 w-4" />
             <span className="flex-1">Appointments</span>
           </button>
           <button
             type="button"
-            onClick={() => { document.getElementById('therapist-patient-notes')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}
-            className="flex shrink-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-blue-50 transition hover:bg-blue-600 lg:w-full"
+            onClick={() => setWorkspaceView('notes')}
+            className={`flex shrink-0 items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium transition lg:w-full ${workspaceView === 'notes' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-300 hover:bg-slate-900 hover:text-white'}`}
           >
             <Stethoscope className="h-4 w-4" />
-            <span className="flex-1">Patient notes</span>
+            <span className="flex-1 whitespace-nowrap">Patient notes</span>
           </button>
-          <div className={`relative rounded-xl ${workspaceView === 'profile' ? 'bg-blue-900' : ''}`}>
+          <button
+            type="button"
+            onClick={() => setWorkspaceView('reminders')}
+            className={`flex shrink-0 items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium transition lg:w-full ${workspaceView === 'reminders' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-300 hover:bg-slate-900 hover:text-white'}`}
+          >
+            <Clock className="h-4 w-4" />
+            <span className="flex-1 whitespace-nowrap">Rebooking reminders</span>
+            {rebookingReminders.length > 0 && <span className="rounded-full bg-amber-400 px-1.5 py-0.5 text-[10px] font-bold text-slate-950">{rebookingReminders.length}</span>}
+          </button>
+          <div className={`relative rounded-lg ${workspaceView === 'profile' ? 'bg-slate-800' : ''}`}>
             <button
               type="button"
               aria-expanded={profileMenuOpen}
               onClick={() => setProfileMenuOpen((open) => !open)}
-              className={`flex shrink-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold transition lg:w-full ${workspaceView === 'profile' ? 'bg-blue-900 text-white' : 'text-blue-50 hover:bg-blue-600'}`}
+              className={`flex shrink-0 items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium transition lg:w-full ${workspaceView === 'profile' ? 'bg-slate-800 text-white' : 'text-slate-300 hover:bg-slate-900 hover:text-white'}`}
             >
               <UserRound className="h-4 w-4" />
               <span className="flex-1 whitespace-nowrap">My profile</span>
               <ChevronRight className={`h-4 w-4 transition-transform ${profileMenuOpen ? 'rotate-90' : ''}`} />
             </button>
             {profileMenuOpen && (
-              <div className="absolute z-20 mt-1 rounded-xl bg-blue-800 p-2 shadow-lg lg:static lg:mb-2 lg:ml-5 lg:border-l lg:border-blue-400 lg:bg-transparent lg:pl-3 lg:shadow-none">
+              <div className="absolute z-20 mt-1 rounded-xl bg-slate-900 p-2 shadow-lg lg:static lg:mb-2 lg:ml-5 lg:border-l lg:border-slate-700 lg:bg-transparent lg:pl-3 lg:shadow-none">
                 <button
                   type="button"
                   onClick={() => {
@@ -671,24 +722,24 @@ function TherapistPortal() {
                     setProfileError('');
                     setProfileMessage('');
                   }}
-                  className={`w-full whitespace-nowrap rounded-lg px-3 py-2 text-left text-xs font-semibold ${workspaceView === 'profile' ? 'bg-blue-600 text-white' : 'text-blue-50 hover:bg-blue-700'}`}
+                  className={`w-full whitespace-nowrap rounded-lg px-3 py-2.5 text-left text-sm font-medium ${workspaceView === 'profile' ? 'bg-slate-700 text-white' : 'text-slate-300 hover:bg-slate-800 hover:text-white'}`}
                 >
                   {hasProfessionalProfile ? 'Edit professional profile' : 'Create professional profile'}
                 </button>
-                <p className="px-3 pt-2 text-[10px] leading-4 text-blue-200">
+                <p className="px-3 pt-2 text-xs leading-5 text-slate-400">
                   {hasProfessionalProfile ? 'Update your contact and practice details.' : 'Add your contact and practice details.'}
                 </p>
               </div>
             )}
           </div>
         </nav>
-        <div className="mt-3 hidden border-t border-blue-500 px-3 pt-3 lg:block">
+        <div className="mt-3 hidden border-t border-slate-800 px-3 pt-3 lg:block">
           <div className={`text-[10px] font-bold uppercase tracking-wide ${hasProfessionalProfile ? 'text-emerald-200' : 'text-amber-200'}`}>
             {hasProfessionalProfile ? 'Profile added' : 'Profile setup needed'}
           </div>
-          <p className="mt-1 truncate text-xs text-blue-100">{professionalProfile.specialties || 'Add your professional details'}</p>
+          <p className="mt-1 truncate text-xs text-slate-400">{professionalProfile.specialties || 'Add your professional details'}</p>
         </div>
-        <button type="button" onClick={async () => { await fetch('/api/booking?view=therapist-logout', { method: 'POST' }); setTherapist(null); setAppointments([]); }} className="mt-1 flex shrink-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold text-blue-50 transition hover:bg-blue-600 lg:mt-5 lg:w-full">
+        <button type="button" onClick={async () => { await fetch('/api/booking?view=therapist-logout', { method: 'POST' }); setTherapist(null); setAppointments([]); setPatientNotes([]); }} className="mt-1 flex shrink-0 items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium text-slate-300 transition hover:bg-slate-900 hover:text-white lg:mt-5 lg:w-full">
           <X className="h-4 w-4" /><span>Sign out</span>
         </button>
       </aside>
@@ -775,17 +826,171 @@ function TherapistPortal() {
             </div>
           </form>
         </section>
+      ) : workspaceView === 'notes' ? (
+        <section className="space-y-5">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Clinical workspace</p>
+            <h1 className="mt-1 text-2xl font-semibold tracking-tight text-slate-950">Patient notes</h1>
+            <p className="mt-1 text-sm text-slate-600">Create and review private notes linked to an appointment assigned to you.</p>
+          </div>
+          <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]">
+            <form onSubmit={savePatientNote} className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+              <div className="flex items-center gap-3 border-b border-slate-100 pb-4">
+                <span className="grid h-10 w-10 place-items-center rounded-xl bg-slate-100 text-slate-800"><FileText className="h-5 w-5" /></span>
+                <div><h2 className="text-base font-semibold text-slate-900">Add a patient note</h2><p className="text-xs text-slate-500">Saved to your therapist record for this appointment.</p></div>
+              </div>
+              <label className="block text-sm font-medium text-slate-700">
+                Patient / appointment
+                <select
+                  required
+                  value={noteForm.bookingId}
+                  onChange={(event) => setNoteForm((current) => ({ ...current, bookingId: event.target.value }))}
+                  className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-slate-700 focus:ring-2 focus:ring-slate-200"
+                >
+                  <option value="">Select an assigned patient</option>
+                  {patientRecords.map((patient) => (
+                    <option key={patient.bookingId} value={patient.bookingId}>
+                      {patient.patientName} — {patient.date} {patient.time} ({patient.bookingId})
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {selectedNotePatient && (
+                <div className="rounded-lg bg-slate-50 px-3 py-2.5 text-xs text-slate-600">
+                  <span className="font-semibold text-slate-800">{selectedNotePatient.serviceName}</span>
+                  <span> · {selectedNotePatient.branchName || 'Branch not recorded'}</span>
+                </div>
+              )}
+              <label className="block text-sm font-medium text-slate-700">
+                Note type
+                <select
+                  value={noteForm.category}
+                  onChange={(event) => setNoteForm((current) => ({ ...current, category: event.target.value }))}
+                  className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-slate-700 focus:ring-2 focus:ring-slate-200"
+                >
+                  {['Treatment note', 'Progress update', 'Follow-up', 'Rebooking'].map((category) => <option key={category}>{category}</option>)}
+                </select>
+              </label>
+              <label className="block text-sm font-medium text-slate-700">
+                Note
+                <textarea
+                  required
+                  rows={7}
+                  maxLength={3000}
+                  value={noteForm.note}
+                  onChange={(event) => setNoteForm((current) => ({ ...current, note: event.target.value }))}
+                  placeholder="Add relevant treatment observations or follow-up details."
+                  className="mt-1.5 w-full resize-y rounded-lg border border-slate-300 px-3 py-2.5 text-sm leading-6 outline-none focus:border-slate-700 focus:ring-2 focus:ring-slate-200"
+                />
+                <span className="mt-1 block text-right text-xs text-slate-400">{noteForm.note.length}/3000</span>
+              </label>
+              <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs leading-5 text-amber-900">Keep notes professional and relevant to care. Do not include information that is not needed for treatment.</p>
+              {noteError && <p role="alert" className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2.5 text-sm text-rose-800">{noteError}</p>}
+              {noteMessage && <p role="status" className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm text-emerald-800">{noteMessage}</p>}
+              <button type="submit" disabled={noteSaving || !patientRecords.length} className="inline-flex items-center gap-2 rounded-lg bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50">
+                <Plus className="h-4 w-4" />{noteSaving ? 'Saving note…' : 'Save patient note'}
+              </button>
+              {!patientRecords.length && <p className="text-xs text-slate-500">No assigned appointments are available to attach a note to.</p>}
+            </form>
+            <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+              <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
+                <div><h2 className="text-base font-semibold text-slate-900">Recent notes</h2><p className="mt-1 text-xs text-slate-500">Notes you have saved for your assigned patients.</p></div>
+                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">{patientNotes.length}</span>
+              </div>
+              {patientNotes.length ? (
+                <div className="max-h-[700px] divide-y divide-slate-100 overflow-y-auto">
+                  {patientNotes.map((patientNote) => (
+                    <article key={patientNote.noteId} className="p-4 sm:p-5">
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div><h3 className="text-sm font-semibold text-slate-900">{patientNote.patientName}</h3><p className="mt-1 text-xs text-slate-500">{patientNote.category} · {patientNote.bookingId}</p></div>
+                        <time className="text-xs text-slate-400">{patientNote.createdAt ? new Date(patientNote.createdAt).toLocaleString() : 'Date not recorded'}</time>
+                      </div>
+                      <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">{patientNote.note}</p>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <div className="p-8 text-center">
+                  <FileText className="mx-auto h-8 w-8 text-slate-300" />
+                  <p className="mt-3 text-sm font-medium text-slate-700">No therapist notes yet</p>
+                  <p className="mt-1 text-xs text-slate-500">Notes you save will appear here.</p>
+                </div>
+              )}
+            </section>
+          </div>
+        </section>
+      ) : workspaceView === 'reminders' ? (
+        <section className="space-y-5">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Patient retention</p>
+            <h1 className="mt-1 text-2xl font-semibold tracking-tight text-slate-950">Rebooking reminders</h1>
+            <p className="mt-1 text-sm text-slate-600">Patients last seen at least 30 days ago who do not have another upcoming appointment.</p>
+          </div>
+          <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm leading-5 text-blue-900">
+            These are suggested follow-ups based on appointment history. No message is sent automatically.
+          </div>
+          {rebookingReminders.length ? (
+            <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+              <div className="grid grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)_auto] gap-3 border-b border-slate-100 bg-slate-50 px-5 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                <span>Patient</span><span>Last appointment</span><span>Contact</span><span>Action</span>
+              </div>
+              <div className="divide-y divide-slate-100">
+                {rebookingReminders.map((reminder) => (
+                  <article key={reminder.bookingId} className="grid grid-cols-1 items-center gap-3 px-5 py-4 sm:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_minmax(0,1fr)_auto]">
+                    <div><h2 className="text-sm font-semibold text-slate-900">{reminder.patientName}</h2><p className="mt-1 text-xs text-slate-500">{reminder.serviceName} · {reminder.branchName}</p><span className="mt-2 inline-flex rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-900">{reminder.daysSinceLastVisit} days since visit</span></div>
+                    <p className="text-sm text-slate-700">{reminder.date}<span className="block text-xs text-slate-500">{reminder.time}</span></p>
+                    <div className="space-y-1 text-sm">
+                      {reminder.phone ? <a className="block text-slate-700 underline decoration-slate-300 underline-offset-2" href={`tel:${reminder.phone}`}>{reminder.phone}</a> : <span className="block text-xs text-slate-400">No phone recorded</span>}
+                      {reminder.email ? <a className="block break-all text-xs text-slate-600 underline decoration-slate-300 underline-offset-2" href={`mailto:${reminder.email}`}>{reminder.email}</a> : <span className="block text-xs text-slate-400">No email recorded</span>}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNoteForm({ bookingId: reminder.bookingId, category: 'Rebooking', note: '' });
+                        setNoteMessage('');
+                        setNoteError('');
+                        setWorkspaceView('notes');
+                      }}
+                      className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-800 transition hover:bg-slate-50"
+                    >
+                      <FileText className="h-3.5 w-3.5" />Add follow-up note
+                    </button>
+                  </article>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-xl border border-slate-200 bg-white p-10 text-center shadow-sm">
+              <Clock className="mx-auto h-8 w-8 text-slate-300" />
+              <h2 className="mt-3 text-sm font-semibold text-slate-800">No follow-ups due</h2>
+              <p className="mt-1 text-sm text-slate-500">Patients with a visit at least 30 days ago and no future booking will appear here.</p>
+            </div>
+          )}
+          <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div className="border-b border-slate-100 px-5 py-4"><h2 className="text-base font-semibold text-slate-900">Recent patient history</h2><p className="mt-1 text-xs text-slate-500">Past appointments assigned to you.</p></div>
+            {attendedClients.length ? (
+              <div className="divide-y divide-slate-100">
+                {attendedClients.slice(0, 8).map((patient) => (
+                  <div key={`history-${patient.bookingId}`} className="flex flex-wrap items-center justify-between gap-3 px-5 py-3">
+                    <div><p className="text-sm font-medium text-slate-800">{patient.patientName}</p><p className="mt-1 text-xs text-slate-500">{patient.date} · {patient.serviceName}</p></div>
+                    <span className="text-xs text-slate-500">{patient.branchName} · {patient.durationMinutes} min</span>
+                  </div>
+                ))}
+              </div>
+            ) : <p className="p-5 text-sm text-slate-500">No past appointments are available.</p>}
+          </section>
+        </section>
       ) : (
         <>
       <div className="mb-1 flex flex-wrap items-center justify-between gap-3">
         <div>
-          <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-blue-700">Therapist workspace</p>
-          <h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-900">{workspaceView === 'appointments' ? 'Appointments' : 'Dashboard'}</h1>
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Therapist workspace</p>
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-slate-950">{pageTitle}</h1>
         </div>
-        <button type="button" onClick={() => { setWorkspaceView('appointments'); document.getElementById('therapist-calendar')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} className="inline-flex items-center gap-2 rounded-lg bg-blue-700 px-4 py-2.5 text-xs font-bold text-white shadow-sm transition hover:bg-blue-800">
-          <CalendarDays className="h-4 w-4" /> View schedule
-        </button>
+        {workspaceView === 'dashboard' && <button type="button" onClick={() => setWorkspaceView('appointments')} className="inline-flex items-center gap-2 rounded-lg bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800"><CalendarDays className="h-4 w-4" /> View schedule</button>}
       </div>
+      {workspaceView === 'dashboard' && (
+      <>
       <div className="grid items-start gap-4 xl:grid-cols-[270px_minmax(0,1fr)]">
         <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
           <header className="flex items-center gap-4 border-b border-slate-100 p-4">
@@ -805,7 +1010,7 @@ function TherapistPortal() {
               <button
                 key={`rail-${appointment.bookingId}`}
                 type="button"
-                onClick={() => setSelectedAppointment(appointment)}
+                onClick={() => { setSelectedAppointment(appointment); setWorkspaceView('appointments'); }}
                 className={`flex w-full items-start gap-3 p-3 text-left transition hover:bg-blue-50 ${selectedAppointment?.bookingId === appointment.bookingId ? 'bg-blue-50' : ''}`}
               >
                 <span className={`grid h-8 w-8 shrink-0 place-items-center rounded-full text-[10px] font-bold text-white ${['bg-rose-500', 'bg-slate-800', 'bg-purple-600', 'bg-blue-700'][index % 4]}`}>
@@ -844,36 +1049,30 @@ function TherapistPortal() {
           </div>
           <div className="grid gap-4 md:grid-cols-2">
             <TherapistDonutCard
-              title="Appointment tracker"
-              subtitle="Upcoming and attended visits"
-              segments={[
-                { label: 'Upcoming', value: appointments.length, color: '#f2a900' },
-                { label: 'Attended', value: attendedClients.length, color: '#4f8fe8' },
-              ]}
-              centerValue={appointments.length + attendedClients.length}
-              centerLabel="appointments"
-            />
-            <TherapistDonutCard
               title="Treatment mix"
               subtitle="Upcoming assigned appointments"
               segments={treatmentSegments}
               centerValue={appointments.length}
               centerLabel="appointments"
             />
-            <TherapistDonutCard
-              title="Pressure preference"
-              subtitle="Patient-reported preferences"
-              segments={pressureSegments}
-              centerValue={pressureSegments.reduce((sum, segment) => sum + segment.value, 0)}
-              centerLabel="recorded"
-            />
-            <TherapistDonutCard
-              title="Preparation notes"
-              subtitle="Upcoming patient intake coverage"
-              segments={notesSegments}
-              centerValue={appointments.length}
-              centerLabel="appointments"
-            />
+            <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="flex items-start justify-between">
+                <div><h3 className="text-sm font-semibold text-slate-900">Treatment preparation</h3><p className="mt-1 text-xs text-slate-500">Patient-reported pressure preferences</p></div>
+                <Stethoscope className="h-4 w-4 text-slate-500" />
+              </div>
+              <div className="mt-4 space-y-3">
+                {pressureSegments.map((segment) => (
+                  <div key={segment.label}>
+                    <div className="mb-1 flex justify-between text-xs"><span className="text-slate-600">{segment.label}</span><span className="font-medium text-slate-800">{segment.value}</span></div>
+                    <div className="h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full" style={{ width: `${appointments.length ? (segment.value / appointments.length) * 100 : 0}%`, backgroundColor: segment.color }} /></div>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 border-t border-slate-100 pt-3">
+                <div className="flex justify-between text-xs"><span className="text-slate-600">Intake details recorded</span><span className="font-semibold text-slate-800">{notesSegments[0].value}/{appointments.length}</span></div>
+                <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-emerald-500" style={{ width: `${appointments.length ? (notesSegments[0].value / appointments.length) * 100 : 0}%` }} /></div>
+              </div>
+            </section>
           </div>
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-[11px] text-amber-900">
             <span>Patient information is private. Review only what you need for treatment preparation.</span>
@@ -881,8 +1080,12 @@ function TherapistPortal() {
           </div>
         </div>
       </div>
+      </>
+      )}
+      {workspaceView === 'appointments' && (
+      <>
       <div id="therapist-calendar" className="scroll-mt-5 bg-white rounded-2xl border border-stone-200 shadow-sm overflow-hidden">
-        <div className="bg-gradient-to-r from-slate-900 to-blue-900 px-5 py-4 text-white">
+        <div className="bg-black px-5 py-4 text-white">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div><h2 className="text-lg font-bold">Google Calendar</h2><p className="text-xs text-blue-200 mt-1">Live schedule for {therapist.name}</p></div>
             <div className="flex rounded-xl bg-white/10 p-1">
@@ -923,7 +1126,33 @@ function TherapistPortal() {
           )}
         </div>
       </div>
-      {appointments.length === 0 && <div className="bg-white rounded-2xl p-8 text-center border border-stone-200 text-sm text-stone-500">No upcoming appointments assigned to you.</div>}
+      <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
+          <div><h2 className="text-base font-semibold text-slate-900">Upcoming appointments</h2><p className="mt-1 text-xs text-slate-500">Select a patient to review their treatment preparation details.</p></div>
+          <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">{appointments.length} scheduled</span>
+        </div>
+        {appointments.length ? (
+          <div className="divide-y divide-slate-100">
+            {appointments.map((appointment) => (
+              <button
+                key={`appointment-list-${appointment.bookingId}`}
+                type="button"
+                onClick={() => setSelectedAppointment(appointment)}
+                className={`grid w-full grid-cols-1 gap-2 px-5 py-3 text-left transition hover:bg-slate-50 sm:grid-cols-[120px_minmax(0,1.1fr)_minmax(0,1.4fr)_auto] sm:items-center ${selectedAppointment?.bookingId === appointment.bookingId ? 'bg-slate-50' : ''}`}
+              >
+                <span className="text-sm font-semibold text-slate-900">{appointment.date}<span className="ml-2 text-slate-500">{appointment.time}</span></span>
+                <span className="text-sm font-medium text-slate-800">{appointment.patientName}<span className="block text-xs font-normal text-slate-500">{appointment.branchName}</span></span>
+                <span className="text-sm text-slate-600">{appointment.serviceName}<span className="block text-xs text-slate-400">{appointment.durationMinutes || '—'} minutes</span></span>
+                <span className="flex flex-wrap gap-1.5 sm:justify-end">
+                  {appointment.hasReportedConditions && <span className="rounded-full bg-rose-100 px-2 py-1 text-[10px] font-semibold text-rose-800">Health flags</span>}
+                  {appointment.allergiesToOil && <span className="rounded-full bg-amber-100 px-2 py-1 text-[10px] font-semibold text-amber-800">Oil allergy</span>}
+                  {!appointment.hasReportedConditions && !appointment.allergiesToOil && <span className="rounded-full bg-emerald-50 px-2 py-1 text-[10px] font-semibold text-emerald-800">Ready to review</span>}
+                </span>
+              </button>
+            ))}
+          </div>
+        ) : <p className="p-8 text-center text-sm text-slate-500">No upcoming appointments assigned to you.</p>}
+      </section>
       {appointments.length > 0 && (
         <div id="therapist-patient-notes" className="scroll-mt-5 bg-white rounded-2xl border border-stone-200 shadow-sm overflow-hidden">
             <div className="min-h-[360px]">
@@ -955,32 +1184,8 @@ function TherapistPortal() {
             </div>
         </div>
       )}
-      <div className="bg-white rounded-2xl border border-stone-200 shadow-sm overflow-hidden">
-        <div className="p-5 border-b border-stone-200">
-          <h2 className="text-lg font-bold text-stone-900">Historical bookings</h2>
-          <p className="text-xs text-stone-500 mt-1">All past bookings assigned to you, including service duration and branch.</p>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
-            <thead className="bg-stone-50 text-stone-500 uppercase tracking-wide">
-              <tr><th className="px-5 py-3">Date</th><th className="px-5 py-3">Client</th><th className="px-5 py-3">Service</th><th className="px-5 py-3">Branch</th><th className="px-5 py-3">Duration</th><th className="px-5 py-3">Booking ID</th></tr>
-            </thead>
-            <tbody className="divide-y divide-stone-100">
-              {attendedClients.map((client) => (
-                <tr key={`table-${client.bookingId}`} className="hover:bg-stone-50">
-                  <td className="px-5 py-3 whitespace-nowrap">{client.date} {client.time}</td>
-                  <td className="px-5 py-3 font-bold text-stone-800">{client.patientName}</td>
-                  <td className="px-5 py-3">{client.serviceName}</td>
-                  <td className="px-5 py-3">{client.branchName}</td>
-                  <td className="px-5 py-3">{client.durationMinutes} min</td>
-                  <td className="px-5 py-3 font-mono">{client.bookingId}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {attendedClients.length === 0 && <div className="p-6 text-sm text-stone-500">No historical bookings are available.</div>}
-        </div>
-      </div>
+      </>
+      )}
         </>
       )}
       </div>
