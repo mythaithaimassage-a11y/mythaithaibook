@@ -189,7 +189,9 @@ async function sendBookingToGoogleSheets(apiUrl, bookingPayload) {
         marketingConsentSaved: result.marketingConsentSaved !== false,
         marketingConsentReason: result.marketingConsentError || '',
         patientHistorySaved: result.patientHistorySaved !== false,
-        patientHistoryReason: result.patientHistoryError || ''
+        patientHistoryReason: result.patientHistoryError || '',
+        loyaltyEnrollmentSaved: result.loyaltyEnrollmentSaved !== false,
+        loyaltyEnrollmentReason: result.loyaltyEnrollmentError || ''
       };
     } else {
       const errData = await response.json().catch(() => ({}));
@@ -1308,6 +1310,8 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
   const [sheetsSyncStatus, setSheetsSyncStatus] = useState(null);
   const [sheetsSyncReason, setSheetsSyncReason] = useState('');
   const [showExistingPatientChoice, setShowExistingPatientChoice] = useState(false);
+  const [loyaltyProgram, setLoyaltyProgram] = useState(null);
+  const [loyaltyProgramError, setLoyaltyProgramError] = useState('');
   
   const [bookingData, setBookingData] = useState({
     branch: branches[0],
@@ -1316,6 +1320,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
     date: new Date().toISOString().split('T')[0],
     time: null,
     marketingOptIn: false,
+    loyaltyOptIn: false,
     customer: { firstName: '', lastName: '', email: '', phone: '' },
     intake: {
       pressure: 'Medium',
@@ -1349,6 +1354,20 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
   });
 
   const categories = ['All', 'Thai Traditional', 'Thai Combo Swedish', 'Hot Stone Combo', 'Add-On & Packages', 'RMT Healthcare'];
+
+  useEffect(() => {
+    let isCurrent = true;
+    fetch('/api/booking?view=loyalty-program')
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+        if (isCurrent) setLoyaltyProgram(data);
+      })
+      .catch((error) => {
+        if (isCurrent) setLoyaltyProgramError(error.message || 'Loyalty program information is unavailable.');
+      });
+    return () => { isCurrent = false; };
+  }, []);
 
   const filteredServices = useMemo(() => {
     if (selectedCategory === 'All') return services;
@@ -1414,6 +1433,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
       phone: bookingData.customer.phone,
       email: bookingData.customer.email,
       marketingOptIn: bookingData.marketingOptIn,
+      loyaltyOptIn: bookingData.loyaltyOptIn,
       branchName: bookingData.branch.name,
       serviceName: bookingData.service.name,
       therapistName: bookingData.therapist?.name || 'Any Available',
@@ -1444,10 +1464,10 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
     };
 
     // Use the Vercel route by default; retain support for a configured webhook.
-    const syncResult = await sendBookingToGoogleSheets(bookingData.marketingOptIn ? '' : sheetsWebhookUrl, payloadForSheets);
+    const syncResult = await sendBookingToGoogleSheets(bookingData.marketingOptIn || bookingData.loyaltyOptIn ? '' : sheetsWebhookUrl, payloadForSheets);
     const syncSuccess = syncResult.success;
-    if (!syncSuccess || syncResult.emailSent === false || syncResult.patientHistorySaved === false || (bookingData.marketingOptIn && syncResult.marketingConsentSaved === false)) {
-      setSheetsSyncReason(syncResult.reason || syncResult.emailReason || syncResult.patientHistoryReason || syncResult.marketingConsentReason || 'The booking sync failed.');
+    if (!syncSuccess || syncResult.emailSent === false || syncResult.patientHistorySaved === false || (bookingData.marketingOptIn && syncResult.marketingConsentSaved === false) || (bookingData.loyaltyOptIn && syncResult.loyaltyEnrollmentSaved === false)) {
+      setSheetsSyncReason(syncResult.reason || syncResult.emailReason || syncResult.patientHistoryReason || syncResult.marketingConsentReason || syncResult.loyaltyEnrollmentReason || 'The booking sync failed.');
     }
 
     const newRecord = {
@@ -1471,7 +1491,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
     onNewBooking(newRecord);
     setBookingData(prev => ({ ...prev, confirmationCode: code }));
     setSheetsSyncStatus(syncSuccess
-      ? (syncResult.emailSent === false ? 'email_failed' : (syncResult.patientHistorySaved === false ? 'patient_history_failed' : (bookingData.marketingOptIn && syncResult.marketingConsentSaved === false ? 'marketing_consent_failed' : 'success')))
+      ? (syncResult.emailSent === false ? 'email_failed' : (syncResult.patientHistorySaved === false ? 'patient_history_failed' : (bookingData.marketingOptIn && syncResult.marketingConsentSaved === false ? 'marketing_consent_failed' : (bookingData.loyaltyOptIn && syncResult.loyaltyEnrollmentSaved === false ? 'loyalty_enrollment_failed' : 'success'))))
       : 'failed');
     setIsSubmitting(false);
     setStep(5);
@@ -1837,6 +1857,22 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                 />
                 <span>I agree to receive occasional promotional emails from MY THAI THAI. I can unsubscribe at any time. This is optional and is not required for booking or treatment.</span>
               </label>
+              {loyaltyProgram?.enabled && (
+                <label className="mt-3 flex cursor-pointer items-start gap-3 rounded-xl border border-indigo-200 bg-indigo-50/70 p-3.5 text-xs leading-5 text-indigo-950">
+                  <input
+                    type="checkbox"
+                    checked={bookingData.loyaltyOptIn}
+                    onChange={(event) => updateBooking('loyaltyOptIn', event.target.checked)}
+                    className="mt-0.5 h-4 w-4 rounded border-indigo-300 text-indigo-700 focus:ring-indigo-600"
+                  />
+                  <span>
+                    <strong className="block text-sm">Join MY THAI THAI Rewards</strong>
+                    <span className="block mt-0.5">Earn {loyaltyProgram.pointsPerDollar} point{loyaltyProgram.pointsPerDollar === 1 ? '' : 's'} per $1 paid. Redeem {loyaltyProgram.redemptionPoints} points for ${Number(loyaltyProgram.redemptionValue).toFixed(2)} off in clinic. Membership is optional and separate from marketing emails.</span>
+                    <span className="mt-1 block text-indigo-700">Tiers: {loyaltyProgram.tiers.map((tier) => tier.name).join(' · ')}</span>
+                  </span>
+                </label>
+              )}
+              {loyaltyProgramError && <p role="status" className="mt-2 text-xs text-amber-800">Rewards enrollment details are temporarily unavailable. You can still complete your booking.</p>}
             </div>
 
             <div className="pt-4 border-t border-stone-200">
@@ -2176,6 +2212,12 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                 {sheetsSyncReason && <span>{sheetsSyncReason}</span>}
               </div>
             )}
+            {sheetsSyncStatus === 'loyalty_enrollment_failed' && (
+              <div role="alert" className="inline-flex flex-col items-center space-y-1 rounded-xl border border-amber-300 bg-amber-50 px-4 py-2 text-xs text-amber-900">
+                <span className="font-semibold">Booking saved, but your Rewards enrollment could not be recorded. Please contact the clinic to enroll.</span>
+                {sheetsSyncReason && <span>{sheetsSyncReason}</span>}
+              </div>
+            )}
 
             <div className="bg-stone-50 border border-stone-200 rounded-2xl p-5 max-w-md mx-auto text-left space-y-2 text-xs sm:text-sm">
               <div className="flex justify-between border-b pb-2">
@@ -2207,6 +2249,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                     date: new Date().toISOString().split('T')[0],
                     time: null,
                     marketingOptIn: false,
+                    loyaltyOptIn: false,
                     customer: { firstName: '', lastName: '', email: '', phone: '' },
                     intake: {
                       pressure: 'Medium', focusAreas: '', injuries: '', agreeTerms: false,
@@ -2279,6 +2322,27 @@ function AdminPortal({
   const [googleAdsCampaignSearch, setGoogleAdsCampaignSearch] = useState('');
   const [googleAdsCampaignStatus, setGoogleAdsCampaignStatus] = useState('all');
   const [googleAdsCampaignSort, setGoogleAdsCampaignSort] = useState('impressions');
+  const [loyaltyDashboard, setLoyaltyDashboard] = useState(null);
+  const [loyaltySettings, setLoyaltySettings] = useState({
+    enabled: true,
+    pointsPerDollar: 1,
+    redemptionPoints: 100,
+    redemptionValue: 5,
+    tiers: [
+      { name: 'Member', threshold: 0 },
+      { name: 'Silver', threshold: 500 },
+      { name: 'Gold', threshold: 1500 },
+    ],
+  });
+  const [isLoadingLoyalty, setIsLoadingLoyalty] = useState(false);
+  const [isSavingLoyalty, setIsSavingLoyalty] = useState(false);
+  const [loyaltyError, setLoyaltyError] = useState('');
+  const [loyaltyNotice, setLoyaltyNotice] = useState('');
+  const [loyaltyActionId, setLoyaltyActionId] = useState('');
+  const [loyaltyMemberSearch, setLoyaltyMemberSearch] = useState('');
+  const [selectedLoyaltyMember, setSelectedLoyaltyMember] = useState(null);
+  const [loyaltyRedeemPoints, setLoyaltyRedeemPoints] = useState('');
+  const [loyaltyRedeemReference, setLoyaltyRedeemReference] = useState('');
   const [campaignSubject, setCampaignSubject] = useState('');
   const [campaignPreview, setCampaignPreview] = useState('');
   const [campaignMessage, setCampaignMessage] = useState('');
@@ -2365,6 +2429,100 @@ function AdminPortal({
     if (activeTab === 'google-ads') loadGoogleAdsReport();
   }, [activeTab]);
 
+  const loadLoyaltyDashboard = async () => {
+    setIsLoadingLoyalty(true);
+    setLoyaltyError('');
+    try {
+      const response = await fetch('/api/booking?view=loyalty-dashboard');
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+      setLoyaltyDashboard(data);
+      setLoyaltySettings(data.settings);
+    } catch (error) {
+      setLoyaltyError(error.message || 'Unable to load the loyalty program.');
+    } finally {
+      setIsLoadingLoyalty(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'loyalty') loadLoyaltyDashboard();
+  }, [activeTab]);
+
+  const saveLoyaltySettings = async (event) => {
+    event.preventDefault();
+    setIsSavingLoyalty(true);
+    setLoyaltyError('');
+    setLoyaltyNotice('');
+    try {
+      const response = await fetch('/api/booking?view=loyalty-settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ settings: loyaltySettings }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+      setLoyaltySettings(data.settings);
+      setLoyaltyNotice('Rewards program settings saved.');
+      await loadLoyaltyDashboard();
+    } catch (error) {
+      setLoyaltyError(error.message || 'Unable to save loyalty settings.');
+    } finally {
+      setIsSavingLoyalty(false);
+    }
+  };
+
+  const awardLoyaltyPoints = async (booking) => {
+    setLoyaltyActionId(booking.id);
+    setLoyaltyError('');
+    setLoyaltyNotice('');
+    try {
+      const response = await fetch('/api/booking?view=loyalty-award', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bookingId: booking.id }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+      setLoyaltyNotice(data.alreadyAwarded ? 'Points were already awarded for this booking.' : `${data.points} points awarded to ${booking.customerName}.`);
+      await loadLoyaltyDashboard();
+    } catch (error) {
+      setLoyaltyError(error.message || 'Unable to award loyalty points.');
+    } finally {
+      setLoyaltyActionId('');
+    }
+  };
+
+  const redeemLoyaltyPoints = async (event) => {
+    event.preventDefault();
+    if (!selectedLoyaltyMember) return;
+    setLoyaltyActionId(selectedLoyaltyMember.email);
+    setLoyaltyError('');
+    setLoyaltyNotice('');
+    try {
+      const response = await fetch('/api/booking?view=loyalty-redeem', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: selectedLoyaltyMember.email,
+          points: Number(loyaltyRedeemPoints),
+          reference: loyaltyRedeemReference,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+      setLoyaltyNotice(`${data.redeemedPoints} points redeemed for $${Number(data.rewardValue).toFixed(2)} off. Apply the discount to the customer's in-clinic purchase.`);
+      setSelectedLoyaltyMember(null);
+      setLoyaltyRedeemPoints('');
+      setLoyaltyRedeemReference('');
+      await loadLoyaltyDashboard();
+    } catch (error) {
+      setLoyaltyError(error.message || 'Unable to redeem loyalty points.');
+    } finally {
+      setLoyaltyActionId('');
+    }
+  };
+
   const applyGoogleAdsPreset = (days) => {
     const end = new Date();
     const start = new Date(end);
@@ -2390,6 +2548,14 @@ function AdminPortal({
       : Number(b[googleAdsCampaignSort] || 0) - Number(a[googleAdsCampaignSort] || 0));
     return campaigns;
   }, [googleAdsReport, googleAdsCampaignSearch, googleAdsCampaignStatus, googleAdsCampaignSort]);
+
+  const recentLoyaltyTransactions = useMemo(() => (loyaltyDashboard?.members || [])
+    .flatMap((member) => member.transactions.map((transaction) => ({
+      ...transaction,
+      memberName: member.name || member.email,
+    })))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    .slice(0, 10), [loyaltyDashboard]);
 
   const saveBusinessProfile = async (event) => {
     event.preventDefault();
@@ -2742,6 +2908,7 @@ function AdminPortal({
     { id: 'staff', label: 'Staff', icon: Users, section: 'Manage' },
     { id: 'patient-history', label: 'Patients', icon: UserRound, section: 'Manage' },
     { id: 'business-profile', label: 'Business profile', icon: Building, section: 'Manage' },
+    { id: 'loyalty', label: 'Loyalty program', icon: Award, section: 'Grow' },
     { id: 'marketing', label: 'Email marketing', icon: Megaphone, section: 'Grow' },
     { id: 'google-ads', label: 'Google Ads', icon: TrendingUp, section: 'Grow' },
   ];
@@ -2750,6 +2917,7 @@ function AdminPortal({
     schedule: t.schedule,
     calendar: 'Booking Calendar',
     reports: 'Sales & reports',
+    loyalty: 'Loyalty program',
     marketing: 'Email marketing',
     'google-ads': 'Google Ads',
     services: t.services,
@@ -3344,6 +3512,181 @@ function AdminPortal({
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {activeTab === 'loyalty' && (
+        <div className="space-y-5">
+          <section className="overflow-hidden rounded-2xl border border-indigo-200 bg-white shadow-sm">
+            <div className="bg-gradient-to-r from-indigo-950 via-indigo-800 to-blue-700 px-5 py-6 text-white sm:px-7">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div className="flex items-start gap-4">
+                  <span className="rounded-xl bg-white/10 p-3 text-indigo-100"><Award className="h-5 w-5" /></span>
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-indigo-200">Reward your regulars</p>
+                    <h2 className="mt-1 text-xl font-bold">MY THAI THAI Rewards</h2>
+                    <p className="mt-1 max-w-2xl text-sm text-indigo-100">Manage member tiers, award points for completed visits, and record in-clinic reward redemptions.</p>
+                  </div>
+                </div>
+                <button type="button" onClick={loadLoyaltyDashboard} disabled={isLoadingLoyalty} className="inline-flex items-center gap-2 rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-xs font-semibold text-white transition hover:bg-white/15 disabled:opacity-50">
+                  <RefreshCw className={`h-3.5 w-3.5 ${isLoadingLoyalty ? 'animate-spin' : ''}`} />Refresh
+                </button>
+              </div>
+            </div>
+          </section>
+
+          {loyaltyError && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{loyaltyError}</div>}
+          {loyaltyNotice && <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{loyaltyNotice}</div>}
+          {isLoadingLoyalty && !loyaltyDashboard && <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">Loading loyalty members and rewards…</div>}
+
+          {loyaltyDashboard && (
+            <>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                {[
+                  ['Members', loyaltyDashboard.summary.members.toLocaleString(), Users, 'bg-blue-50 text-blue-700'],
+                  ['Points outstanding', loyaltyDashboard.summary.availablePoints.toLocaleString(), Sparkles, 'bg-indigo-50 text-indigo-700'],
+                  ['Visits ready to award', loyaltyDashboard.summary.pendingVisits.toLocaleString(), CheckCircle2, 'bg-emerald-50 text-emerald-700'],
+                ].map(([label, value, Icon, style]) => (
+                  <section key={label} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                    <div className="flex items-center justify-between"><span className="text-xs font-medium text-slate-500">{label}</span><span className={`rounded-lg p-2 ${style}`}><Icon className="h-4 w-4" /></span></div>
+                    <p className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">{value}</p>
+                  </section>
+                ))}
+              </div>
+
+              <form onSubmit={saveLoyaltySettings} className="space-y-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
+                <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 pb-4">
+                  <div>
+                    <h3 className="text-base font-semibold text-slate-900">Program settings</h3>
+                    <p className="mt-1 text-xs leading-5 text-slate-500">Update how members earn, redeem, and move through tiers. Changes affect future awards; existing points stay in member ledgers.</p>
+                  </div>
+                  <label className="inline-flex cursor-pointer items-center gap-2 text-xs font-semibold text-slate-700">
+                    <input type="checkbox" checked={loyaltySettings.enabled} onChange={(event) => setLoyaltySettings((current) => ({ ...current, enabled: event.target.checked }))} className="h-4 w-4 rounded border-slate-300 text-indigo-700 focus:ring-indigo-600" />
+                    Program accepting members
+                  </label>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <label className="text-xs font-semibold text-slate-600">Points per $1 paid
+                    <input type="number" min="0.01" max="100" step="0.01" required value={loyaltySettings.pointsPerDollar} onChange={(event) => setLoyaltySettings((current) => ({ ...current, pointsPerDollar: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900" />
+                  </label>
+                  <label className="text-xs font-semibold text-slate-600">Points per reward
+                    <input type="number" min="1" max="1000000" step="1" required value={loyaltySettings.redemptionPoints} onChange={(event) => setLoyaltySettings((current) => ({ ...current, redemptionPoints: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900" />
+                  </label>
+                  <label className="text-xs font-semibold text-slate-600">Reward value ($)
+                    <input type="number" min="0.01" max="10000" step="0.01" required value={loyaltySettings.redemptionValue} onChange={(event) => setLoyaltySettings((current) => ({ ...current, redemptionValue: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900" />
+                  </label>
+                </div>
+                <div>
+                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                    <div><h4 className="text-sm font-semibold text-slate-900">Member tiers</h4><p className="mt-0.5 text-[11px] text-slate-500">Tier level is based on lifetime points earned. The first tier must begin at 0 points.</p></div>
+                    <button type="button" disabled={loyaltySettings.tiers.length >= 6} onClick={() => setLoyaltySettings((current) => ({ ...current, tiers: [...current.tiers, { name: `Tier ${current.tiers.length + 1}`, threshold: Number(current.tiers[current.tiers.length - 1]?.threshold || 0) + 500 }] }))} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40">Add tier</button>
+                  </div>
+                  <div className="space-y-2">
+                    {loyaltySettings.tiers.map((tier, index) => (
+                      <div key={`tier-${index}`} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-2">
+                        <label className="sr-only" htmlFor={`loyalty-tier-name-${index}`}>Tier {index + 1} name</label>
+                        <input id={`loyalty-tier-name-${index}`} required maxLength={40} value={tier.name} onChange={(event) => setLoyaltySettings((current) => ({ ...current, tiers: current.tiers.map((item, itemIndex) => itemIndex === index ? { ...item, name: event.target.value } : item) }))} className="min-w-0 rounded-lg border border-slate-200 px-3 py-2 text-xs" placeholder="Tier name" />
+                        <label className="sr-only" htmlFor={`loyalty-tier-points-${index}`}>Tier {index + 1} points threshold</label>
+                        <input id={`loyalty-tier-points-${index}`} type="number" min={index === 0 ? 0 : 1} step="1" required value={tier.threshold} disabled={index === 0} onChange={(event) => setLoyaltySettings((current) => ({ ...current, tiers: current.tiers.map((item, itemIndex) => itemIndex === index ? { ...item, threshold: event.target.value } : item) }))} className="min-w-0 rounded-lg border border-slate-200 px-3 py-2 text-xs disabled:bg-slate-50" placeholder="Points threshold" />
+                        <button type="button" aria-label={`Remove tier ${tier.name || index + 1}`} disabled={index === 0} onClick={() => setLoyaltySettings((current) => ({ ...current, tiers: current.tiers.filter((_, itemIndex) => itemIndex !== index) }))} className="rounded-lg border border-slate-200 px-3 text-slate-500 hover:border-rose-200 hover:text-rose-700 disabled:cursor-not-allowed disabled:opacity-30"><X className="h-4 w-4" /></button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
+                  <p className="text-[11px] leading-5 text-slate-500">Example reward: {loyaltySettings.redemptionPoints || 0} points = ${Number(loyaltySettings.redemptionValue || 0).toFixed(2)} off in clinic.</p>
+                  <button type="submit" disabled={isSavingLoyalty || isLoadingLoyalty} className="inline-flex items-center gap-2 rounded-lg bg-indigo-950 px-4 py-2.5 text-xs font-semibold text-white hover:bg-indigo-800 disabled:opacity-50">{isSavingLoyalty ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}Save program settings</button>
+                </div>
+              </form>
+
+              <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <div className="border-b border-slate-100 px-5 py-4">
+                  <h3 className="text-base font-semibold text-slate-900">Confirm completed visits</h3>
+                  <p className="mt-1 text-xs leading-5 text-slate-500">Only member appointments whose treatment time has passed and are fully paid appear here. Confirming a visit records points once and cannot be repeated.</p>
+                </div>
+                {loyaltyDashboard.eligibleBookings.length ? (
+                  <div className="overflow-x-auto">
+                    <table className="w-full min-w-[680px] text-left text-sm">
+                      <thead className="bg-slate-50 text-xs font-semibold text-slate-500"><tr><th className="px-5 py-3">Member</th><th className="px-4 py-3">Visit</th><th className="px-4 py-3 text-right">Paid</th><th className="px-5 py-3 text-right">Points</th><th className="px-5 py-3 text-right">Action</th></tr></thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {loyaltyDashboard.eligibleBookings.map((booking) => (
+                          <tr key={booking.id}>
+                            <td className="px-5 py-3 font-medium text-slate-900">{booking.customerName}<span className="mt-0.5 block text-[10px] font-normal text-slate-500">{booking.email}</span></td>
+                            <td className="px-4 py-3 text-slate-700">{booking.date}<span className="mt-0.5 block text-[10px] text-slate-500">{booking.serviceName} · {booking.id}</span></td>
+                            <td className="px-4 py-3 text-right tabular-nums text-slate-700">${booking.paidAmount.toFixed(2)}</td>
+                            <td className="px-5 py-3 text-right font-semibold text-indigo-800">+{booking.points}</td>
+                            <td className="px-5 py-3 text-right"><button type="button" disabled={loyaltyActionId === booking.id || !loyaltySettings.enabled} onClick={() => awardLoyaltyPoints(booking)} className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-950 px-3 py-2 text-[11px] font-semibold text-white hover:bg-indigo-800 disabled:opacity-50"><CheckCircle2 className="h-3.5 w-3.5" />{loyaltyActionId === booking.id ? 'Awarding…' : 'Confirm & award'}</button></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : <p className="p-6 text-center text-sm text-slate-500">No fully paid, completed member visits are waiting for points.</p>}
+              </section>
+
+              <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
+                  <div><h3 className="text-base font-semibold text-slate-900">Members & balances</h3><p className="mt-1 text-xs text-slate-500">Redeem a reward in clinic and apply the shown discount to the customer's purchase.</p></div>
+                  <label className="relative w-full sm:w-64"><Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" /><input type="search" value={loyaltyMemberSearch} onChange={(event) => setLoyaltyMemberSearch(event.target.value)} placeholder="Search members" aria-label="Search loyalty members" className="w-full rounded-lg border border-slate-200 py-2 pl-9 pr-3 text-xs outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100" /></label>
+                </div>
+                {(() => {
+                  const filteredMembers = loyaltyDashboard.members.filter((member) => [member.name, member.email, member.phone].some((value) => value.toLowerCase().includes(loyaltyMemberSearch.trim().toLowerCase())));
+                  return filteredMembers.length ? (
+                    <div className="overflow-x-auto">
+                      <table className="w-full min-w-[640px] text-left text-sm">
+                        <thead className="bg-slate-50 text-xs font-semibold text-slate-500"><tr><th className="px-5 py-3">Member</th><th className="px-4 py-3">Tier</th><th className="px-4 py-3 text-right">Balance</th><th className="px-4 py-3 text-right">Lifetime earned</th><th className="px-5 py-3 text-right">Reward</th></tr></thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {filteredMembers.map((member) => (
+                            <tr key={member.email} className="hover:bg-slate-50">
+                              <td className="px-5 py-3 font-medium text-slate-900">{member.name || 'Member'}<span className="mt-0.5 block text-[10px] font-normal text-slate-500">{member.email}{member.phone ? ` · ${member.phone}` : ''}</span></td>
+                              <td className="px-4 py-3"><span className="rounded-full bg-indigo-50 px-2.5 py-1 text-[10px] font-semibold text-indigo-800">{member.tier}</span></td>
+                              <td className="px-4 py-3 text-right font-semibold tabular-nums text-slate-800">{member.pointsBalance.toLocaleString()} pts</td>
+                              <td className="px-4 py-3 text-right tabular-nums text-slate-600">{member.lifetimePoints.toLocaleString()} pts</td>
+                              <td className="px-5 py-3 text-right"><button type="button" disabled={!loyaltySettings.enabled || member.pointsBalance < loyaltySettings.redemptionPoints} onClick={() => { setSelectedLoyaltyMember(member); setLoyaltyRedeemPoints(String(loyaltySettings.redemptionPoints)); setLoyaltyRedeemReference(''); }} className="rounded-lg border border-indigo-200 px-3 py-2 text-[11px] font-semibold text-indigo-800 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-40">Redeem reward</button></td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : <p className="p-8 text-center text-sm text-slate-500">{loyaltyDashboard.members.length ? 'No members match your search.' : 'No members yet. Customers can join Rewards during online booking.'}</p>;
+                })()}
+              </section>
+
+              <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <h3 className="text-base font-semibold text-slate-900">Recent rewards activity</h3>
+                <div className="mt-3 divide-y divide-slate-100">
+                  {recentLoyaltyTransactions.length ? (
+                    recentLoyaltyTransactions.map((transaction) => (
+                        <div key={transaction.id} className="flex flex-wrap items-center justify-between gap-2 py-3 text-xs">
+                          <div><p className="font-semibold text-slate-800">{transaction.memberName}</p><p className="mt-0.5 text-slate-500">{transaction.description} · {transaction.createdAt ? new Date(transaction.createdAt).toLocaleDateString() : ''}</p></div>
+                          <span className={`font-bold tabular-nums ${transaction.points >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{transaction.points > 0 ? '+' : ''}{transaction.points} pts</span>
+                        </div>
+                      ))
+                  ) : <p className="py-4 text-sm text-slate-500">No reward activity recorded yet.</p>}
+                </div>
+              </section>
+            </>
+          )}
+
+          {selectedLoyaltyMember && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedLoyaltyMember(null); }}>
+              <form onSubmit={redeemLoyaltyPoints} className="w-full max-w-md space-y-4 rounded-2xl bg-white p-5 shadow-2xl sm:p-6" role="dialog" aria-modal="true" aria-labelledby="redeem-loyalty-title">
+                <div className="flex items-start justify-between gap-3">
+                  <div><p className="text-[10px] font-bold uppercase tracking-wider text-indigo-700">In-clinic reward</p><h3 id="redeem-loyalty-title" className="mt-1 text-lg font-bold text-slate-900">Redeem points</h3><p className="mt-1 text-xs text-slate-500">{selectedLoyaltyMember.name} · {selectedLoyaltyMember.email}</p></div>
+                  <button type="button" onClick={() => setSelectedLoyaltyMember(null)} aria-label="Close redemption dialog" className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700"><X className="h-4 w-4" /></button>
+                </div>
+                <p className="rounded-xl bg-indigo-50 p-3 text-xs leading-5 text-indigo-900">Available: <strong>{selectedLoyaltyMember.pointsBalance.toLocaleString()} points</strong>. Every {loyaltySettings.redemptionPoints} points gives ${Number(loyaltySettings.redemptionValue).toFixed(2)} off.</p>
+                <label className="block text-xs font-semibold text-slate-600">Points to redeem
+                  <input type="number" min={loyaltySettings.redemptionPoints} max={selectedLoyaltyMember.pointsBalance} step={loyaltySettings.redemptionPoints} required value={loyaltyRedeemPoints} onChange={(event) => setLoyaltyRedeemPoints(event.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900" />
+                </label>
+                <label className="block text-xs font-semibold text-slate-600">Optional sale / receipt reference
+                  <input maxLength={100} value={loyaltyRedeemReference} onChange={(event) => setLoyaltyRedeemReference(event.target.value)} placeholder="e.g. receipt number" className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900" />
+                </label>
+                <div className="flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-xs"><span className="text-slate-600">Discount to apply</span><strong className="text-lg text-indigo-900">${((Number(loyaltyRedeemPoints) / loyaltySettings.redemptionPoints) * loyaltySettings.redemptionValue || 0).toFixed(2)}</strong></div>
+                <div className="flex justify-end gap-2 pt-1"><button type="button" onClick={() => setSelectedLoyaltyMember(null)} className="rounded-lg border border-slate-200 px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">Cancel</button><button type="submit" disabled={!!loyaltyActionId || !Number.isInteger(Number(loyaltyRedeemPoints)) || Number(loyaltyRedeemPoints) < loyaltySettings.redemptionPoints || Number(loyaltyRedeemPoints) > selectedLoyaltyMember.pointsBalance || Number(loyaltyRedeemPoints) % loyaltySettings.redemptionPoints !== 0} className="rounded-lg bg-indigo-950 px-4 py-2.5 text-xs font-semibold text-white hover:bg-indigo-800 disabled:opacity-50">{loyaltyActionId ? 'Recording…' : 'Confirm redemption'}</button></div>
+              </form>
+            </div>
+          )}
         </div>
       )}
 

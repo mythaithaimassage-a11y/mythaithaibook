@@ -35,6 +35,22 @@ const DEFAULT_BUSINESS_PROFILE = {
   address: 'Ontario, Canada',
   taxRegistrationNumber: '',
 };
+const DEFAULT_LOYALTY_SETTINGS = {
+  enabled: true,
+  pointsPerDollar: 1,
+  redemptionPoints: 100,
+  redemptionValue: 5,
+  tiers: [
+    { name: 'Member', threshold: 0 },
+    { name: 'Silver', threshold: 500 },
+    { name: 'Gold', threshold: 1500 },
+  ],
+};
+const LOYALTY_SHEETS = {
+  LoyaltySettings: ['Settings JSON', 'Updated At'],
+  LoyaltyMembers: ['Email', 'Name', 'Phone', 'Enrolled At', 'Updated At'],
+  LoyaltyLedger: ['Transaction ID', 'Email', 'Booking ID', 'Type', 'Points', 'Reward Value', 'Description', 'Created At'],
+};
 const RECEIPT_HEADERS = ['Receipt No.', 'Receipt Issued At', 'Receipt Email Status'];
 const MARKETING_CONTACT_HEADERS = [
   'Email',
@@ -420,6 +436,185 @@ async function getBusinessProfile(sheets) {
     field,
     row[index] === undefined ? DEFAULT_BUSINESS_PROFILE[field] : row[index],
   ]));
+}
+
+async function ensureLoyaltySheets(sheets) {
+  const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
+  if (!spreadsheetId) throw new Error('GOOGLE_SPREADSHEET_ID is not configured');
+  let spreadsheet = await sheets.spreadsheets.get({
+    spreadsheetId,
+    fields: 'sheets.properties',
+  });
+  let existingTitles = new Set((spreadsheet.data.sheets || []).map((sheet) => sheet.properties?.title));
+  const missing = Object.keys(LOYALTY_SHEETS).filter((title) => !existingTitles.has(title));
+  if (missing.length) {
+    try {
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: { requests: missing.map((title) => ({ addSheet: { properties: { title } } })) },
+      });
+    } catch (error) {
+      spreadsheet = await sheets.spreadsheets.get({
+        spreadsheetId,
+        fields: 'sheets.properties',
+      });
+      existingTitles = new Set((spreadsheet.data.sheets || []).map((sheet) => sheet.properties?.title));
+      if (missing.some((title) => !existingTitles.has(title))) throw error;
+    }
+  }
+
+  for (const [title, headers] of Object.entries(LOYALTY_SHEETS)) {
+    const endColumn = String.fromCharCode(64 + headers.length);
+    const result = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: `${title}!A1:${endColumn}1`,
+    });
+    const current = result.data.values?.[0] || [];
+    if (!current.length) {
+      await sheets.spreadsheets.values.update({
+        spreadsheetId,
+        range: `${title}!A1:${endColumn}1`,
+        valueInputOption: 'RAW',
+        requestBody: { values: [headers] },
+      });
+    } else if (headers.some((header, index) => current[index] !== header)) {
+      throw new Error(`${title} sheet has an unexpected header format`);
+    }
+  }
+}
+
+function validateLoyaltySettings(input) {
+  const settings = {
+    enabled: input?.enabled !== false,
+    pointsPerDollar: Number(input?.pointsPerDollar),
+    redemptionPoints: Number(input?.redemptionPoints),
+    redemptionValue: Number(input?.redemptionValue),
+    tiers: Array.isArray(input?.tiers) ? input.tiers.map((tier) => ({
+      name: String(tier?.name || '').trim(),
+      threshold: Number(tier?.threshold),
+    })) : [],
+  };
+  if (
+    !Number.isFinite(settings.pointsPerDollar) || settings.pointsPerDollar <= 0 || settings.pointsPerDollar > 100 ||
+    !Number.isInteger(settings.redemptionPoints) || settings.redemptionPoints < 1 || settings.redemptionPoints > 1000000 ||
+    !Number.isFinite(settings.redemptionValue) || settings.redemptionValue <= 0 || settings.redemptionValue > 10000 ||
+    settings.tiers.length < 1 || settings.tiers.length > 6
+  ) {
+    throw new Error('Enter valid earning and redemption values, and configure between one and six loyalty tiers.');
+  }
+  const names = new Set();
+  let previousThreshold = -1;
+  settings.tiers.forEach((tier, index) => {
+    const normalizedName = tier.name.toLowerCase();
+    if (
+      !tier.name || tier.name.length > 40 || names.has(normalizedName) ||
+      !Number.isInteger(tier.threshold) || tier.threshold < 0 ||
+      (index === 0 && tier.threshold !== 0) || tier.threshold <= previousThreshold
+    ) {
+      throw new Error('Tier names must be unique. Set the first tier to zero points and later thresholds to increasing whole numbers.');
+    }
+    names.add(normalizedName);
+    previousThreshold = tier.threshold;
+  });
+  return settings;
+}
+
+async function getLoyaltySettings(sheets) {
+  await ensureLoyaltySheets(sheets);
+  const result = await sheets.spreadsheets.values.get({
+    spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+    range: 'LoyaltySettings!A1:B2',
+  });
+  const settingsValue = result.data.values?.[1]?.[0];
+  if (!settingsValue) return DEFAULT_LOYALTY_SETTINGS;
+  let settings;
+  try {
+    settings = JSON.parse(settingsValue);
+  } catch {
+    throw new Error('LoyaltySettings contains invalid settings data; please save the loyalty settings again.');
+  }
+  return validateLoyaltySettings(settings);
+}
+
+async function getPublicLoyaltySettings(sheets) {
+  const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
+  if (!spreadsheetId) throw new Error('GOOGLE_SPREADSHEET_ID is not configured');
+  const spreadsheet = await sheets.spreadsheets.get({
+    spreadsheetId,
+    fields: 'sheets.properties',
+  });
+  const hasSettings = (spreadsheet.data.sheets || [])
+    .some((sheet) => sheet.properties?.title === 'LoyaltySettings');
+  if (!hasSettings) return DEFAULT_LOYALTY_SETTINGS;
+  const result = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: 'LoyaltySettings!A1:B2',
+  });
+  const settingsValue = result.data.values?.[1]?.[0];
+  if (!settingsValue) return DEFAULT_LOYALTY_SETTINGS;
+  let settings;
+  try {
+    settings = JSON.parse(settingsValue);
+  } catch {
+    throw new Error('Loyalty program settings are temporarily unavailable.');
+  }
+  return validateLoyaltySettings(settings);
+}
+
+function normalizeLoyaltyEmail(email) {
+  return String(email || '').trim().toLowerCase();
+}
+
+function isAppointmentCompleteByTime(date, time, durationMinutes = 60) {
+  try {
+    const localParts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+      timeZone: CALENDAR_TIME_ZONE,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(new Date()).map((part) => [part.type, part.value]));
+    const currentLocalDateTime = `${localParts.year}-${localParts.month}-${localParts.day}T${localParts.hour}:${localParts.minute}:00`;
+    const appointmentEnd = addMinutes(parseBookingDateTime(date, time), Number(durationMinutes) || 60);
+    return appointmentEnd <= currentLocalDateTime;
+  } catch {
+    return false;
+  }
+}
+
+async function enrollLoyaltyMember(sheets, payload) {
+  const email = normalizeLoyaltyEmail(payload.email);
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new Error('A valid email is required to enroll in the loyalty program.');
+  }
+  const result = await sheets.spreadsheets.values.get({
+    spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+    range: 'LoyaltyMembers!A:E',
+  });
+  const rows = result.data.values || [];
+  const existingIndex = rows.findIndex((row, index) => index > 0 && normalizeLoyaltyEmail(row[0]) === email);
+  const now = new Date().toISOString();
+  const memberName = String(payload.customerName || '').trim().slice(0, 120);
+  const phone = String(payload.phone || '').trim().slice(0, 50);
+  if (existingIndex >= 0) {
+    const rowNumber = existingIndex + 1;
+    const row = rows[existingIndex];
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+      range: `LoyaltyMembers!B${rowNumber}:E${rowNumber}`,
+      valueInputOption: 'RAW',
+      requestBody: { values: [[memberName || row[1] || '', phone || row[2] || '', row[3] || now, now]] },
+    });
+    return;
+  }
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+    range: 'LoyaltyMembers!A:E',
+    valueInputOption: 'RAW',
+    requestBody: { values: [[email, memberName, phone, now, now]] },
+  });
 }
 
 async function ensureReceiptHeaders(sheets) {
@@ -1084,18 +1279,18 @@ export default async function handler(req, res) {
     }
 
     const view = String(req.query?.view || '');
-    const validGetViews = ['', 'calendar', 'patient-history', 'business-profile', 'google-ads-report', 'therapist-dashboard', 'therapist-session', 'unsubscribe'];
+    const validGetViews = ['', 'calendar', 'patient-history', 'business-profile', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'therapist-dashboard', 'therapist-session', 'unsubscribe'];
     if (req.method === 'GET' && !validGetViews.includes(view)) {
       return res.status(404).json({ message: 'Unknown booking view' });
     }
     const ownerOnlyRequest =
-      (req.method === 'GET' && ['', 'calendar', 'patient-history', 'business-profile', 'google-ads-report'].includes(view)) ||
-      ['business-profile', 'mark-paid', 'issue-receipt', 'campaign-audience', 'campaign-generate', 'campaign-send'].includes(view);
+      (req.method === 'GET' && ['', 'calendar', 'patient-history', 'business-profile', 'google-ads-report', 'loyalty-dashboard'].includes(view)) ||
+      ['business-profile', 'mark-paid', 'issue-receipt', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-award', 'loyalty-redeem'].includes(view);
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
     if (ownerOnlyRequest && !getOwnerSession(req)) {
       return res.status(401).json({ message: 'Owner sign-in required' });
     }
-    if (['business-profile', 'mark-paid', 'issue-receipt', 'campaign-audience', 'campaign-generate', 'campaign-send'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
+    if (['business-profile', 'mark-paid', 'issue-receipt', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-award', 'loyalty-redeem'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
       return res.status(403).json({ message: 'Profile update origin is not allowed' });
     }
 
@@ -1112,6 +1307,194 @@ export default async function handler(req, res) {
 
     const sheets = google.sheets({ version: 'v4', auth });
     const calendarApi = google.calendar({ version: 'v3', auth });
+
+    if (req.method === 'GET' && view === 'loyalty-program') {
+      res.setHeader('Cache-Control', 'no-store');
+      const settings = await getPublicLoyaltySettings(sheets);
+      return res.status(200).json({
+        enabled: settings.enabled,
+        pointsPerDollar: settings.pointsPerDollar,
+        redemptionPoints: settings.redemptionPoints,
+        redemptionValue: settings.redemptionValue,
+        tiers: settings.tiers,
+      });
+    }
+
+    if (req.method === 'GET' && view === 'loyalty-dashboard') {
+      res.setHeader('Cache-Control', 'no-store');
+      const settings = await getLoyaltySettings(sheets);
+      const [membersResult, ledgerResult, bookingsResult] = await Promise.all([
+        sheets.spreadsheets.values.get({
+          spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+          range: 'LoyaltyMembers!A:E',
+        }),
+        sheets.spreadsheets.values.get({
+          spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+          range: 'LoyaltyLedger!A:H',
+        }),
+        sheets.spreadsheets.values.get({
+          spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+          range: 'Sheet1!A:U',
+        }),
+      ]);
+      const memberRows = (membersResult.data.values || []).slice(1).filter((row) => row[0]);
+      const ledgerRows = (ledgerResult.data.values || []).slice(1).filter((row) => row[0]);
+      const transactions = ledgerRows.map((row) => ({
+        id: row[0] || '',
+        email: normalizeLoyaltyEmail(row[1]),
+        bookingId: row[2] || '',
+        type: row[3] || '',
+        points: Number(row[4]) || 0,
+        rewardValue: Number(row[5]) || 0,
+        description: row[6] || '',
+        createdAt: row[7] || '',
+      }));
+      const transactionByEmail = new Map();
+      transactions.forEach((transaction) => {
+        const existing = transactionByEmail.get(transaction.email) || [];
+        existing.push(transaction);
+        transactionByEmail.set(transaction.email, existing);
+      });
+      const getTier = (lifetimePoints) => settings.tiers
+        .filter((tier) => lifetimePoints >= tier.threshold)
+        .at(-1)?.name || settings.tiers[0].name;
+      const members = memberRows.map((row) => {
+        const email = normalizeLoyaltyEmail(row[0]);
+        const memberTransactions = transactionByEmail.get(email) || [];
+        const lifetimePoints = memberTransactions
+          .filter((transaction) => transaction.type === 'EARN')
+          .reduce((sum, transaction) => sum + Math.max(0, transaction.points), 0);
+        const pointsBalance = memberTransactions.reduce((sum, transaction) => sum + transaction.points, 0);
+        return {
+          email,
+          name: row[1] || '',
+          phone: row[2] || '',
+          enrolledAt: row[3] || '',
+          pointsBalance,
+          lifetimePoints,
+          tier: getTier(lifetimePoints),
+          transactions: memberTransactions.sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 10),
+        };
+      });
+      const membersByEmail = new Map(members.map((member) => [member.email, member]));
+      const earnedBookingIds = new Set(transactions.filter((item) => item.type === 'EARN' && item.bookingId).map((item) => `${item.email}:${item.bookingId}`));
+      const bookingRows = bookingsResult.data.values || [];
+      const bookingDataRows = bookingRows[0]?.[0] === 'Booking ID' ? bookingRows.slice(1) : bookingRows;
+      const eligibleBookings = bookingDataRows.filter((row) => {
+        const email = normalizeLoyaltyEmail(row[3]);
+        const total = Number(row[11]) || 0;
+        const paidAmount = Number(row[10]) || 0;
+        return email && membersByEmail.has(email) && isAppointmentCompleteByTime(row[7], row[8], row[12]) && total > 0 &&
+          paidAmount + 0.005 >= total && !earnedBookingIds.has(`${email}:${String(row[0] || '')}`);
+      }).map((row) => ({
+        id: String(row[0] || ''),
+        email: normalizeLoyaltyEmail(row[3]),
+        customerName: row[1] || '',
+        date: row[7] || '',
+        serviceName: row[5] || '',
+        paidAmount: Number(row[10]) || 0,
+        points: Math.floor((Number(row[10]) || 0) * settings.pointsPerDollar),
+      })).filter((booking) => booking.points > 0)
+        .sort((a, b) => b.date.localeCompare(a.date));
+      return res.status(200).json({
+        settings,
+        members: members.sort((a, b) => a.name.localeCompare(b.name)),
+        eligibleBookings,
+        summary: {
+          members: members.length,
+          availablePoints: members.reduce((sum, member) => sum + member.pointsBalance, 0),
+          pendingVisits: eligibleBookings.length,
+        },
+      });
+    }
+
+    if (req.method === 'POST' && view === 'loyalty-settings') {
+      const settings = validateLoyaltySettings(req.body?.settings);
+      await ensureLoyaltySheets(sheets);
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: 'LoyaltySettings!A2:B2',
+        valueInputOption: 'RAW',
+        requestBody: { values: [[JSON.stringify(settings), new Date().toISOString()]] },
+      });
+      return res.status(200).json({ settings });
+    }
+
+    if (req.method === 'POST' && view === 'loyalty-award') {
+      const bookingId = String(req.body?.bookingId || '').trim();
+      if (!bookingId || bookingId.length > 100) {
+        return res.status(400).json({ message: 'A valid booking ID is required.' });
+      }
+      const settings = await getLoyaltySettings(sheets);
+      if (!settings.enabled) return res.status(409).json({ message: 'The loyalty program is currently paused.' });
+      const [membersResult, ledgerResult, bookingsResult] = await Promise.all([
+        sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'LoyaltyMembers!A:E' }),
+        sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'LoyaltyLedger!A:H' }),
+        sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'Sheet1!A:U' }),
+      ]);
+      const bookingRows = bookingsResult.data.values || [];
+      const hasHeader = bookingRows[0]?.[0] === 'Booking ID';
+      const rowIndex = bookingRows.findIndex((row, index) => index >= (hasHeader ? 1 : 0) && String(row[0] || '') === bookingId);
+      if (rowIndex < 0) return res.status(404).json({ message: 'Booking was not found.' });
+      const booking = bookingRows[rowIndex];
+      const email = normalizeLoyaltyEmail(booking[3]);
+      const memberExists = (membersResult.data.values || []).slice(1).some((row) => normalizeLoyaltyEmail(row[0]) === email);
+      if (!memberExists) return res.status(409).json({ message: 'This customer is not enrolled in the loyalty program.' });
+      const ledgerRows = (ledgerResult.data.values || []).slice(1);
+      if (ledgerRows.some((row) => row[3] === 'EARN' && normalizeLoyaltyEmail(row[1]) === email && String(row[2] || '') === bookingId)) {
+        return res.status(200).json({ alreadyAwarded: true, bookingId });
+      }
+      const total = Number(booking[11]) || 0;
+      const paidAmount = Number(booking[10]) || 0;
+      if (!isAppointmentCompleteByTime(booking[7], booking[8], booking[12])) {
+        return res.status(409).json({ message: 'Points can only be awarded after the appointment treatment time has passed.' });
+      }
+      if (total <= 0 || paidAmount + 0.005 < total) {
+        return res.status(409).json({ message: 'Record full payment before awarding points for this visit.' });
+      }
+      const points = Math.floor(paidAmount * settings.pointsPerDollar);
+      if (points < 1) return res.status(409).json({ message: 'This visit does not qualify for loyalty points.' });
+      await sheets.spreadsheets.values.append({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: 'LoyaltyLedger!A:H',
+        valueInputOption: 'RAW',
+        requestBody: { values: [[crypto.randomUUID(), email, bookingId, 'EARN', points, 0, `Completed visit: ${booking[5] || 'massage service'}`, new Date().toISOString()]] },
+      });
+      return res.status(200).json({ awarded: true, points, bookingId, email });
+    }
+
+    if (req.method === 'POST' && view === 'loyalty-redeem') {
+      const email = normalizeLoyaltyEmail(req.body?.email);
+      const points = Number(req.body?.points);
+      const reference = String(req.body?.reference || '').trim().slice(0, 100);
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return res.status(400).json({ message: 'A valid member email is required.' });
+      }
+      const settings = await getLoyaltySettings(sheets);
+      if (!settings.enabled) return res.status(409).json({ message: 'The loyalty program is currently paused.' });
+      if (!Number.isInteger(points) || points < settings.redemptionPoints || points > 1000000 || points % settings.redemptionPoints !== 0) {
+        return res.status(400).json({ message: `Redeem points in multiples of ${settings.redemptionPoints}.` });
+      }
+      const [membersResult, ledgerResult] = await Promise.all([
+        sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'LoyaltyMembers!A:E' }),
+        sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'LoyaltyLedger!A:H' }),
+      ]);
+      const member = (membersResult.data.values || []).slice(1)
+        .find((row) => normalizeLoyaltyEmail(row[0]) === email);
+      if (!member) return res.status(404).json({ message: 'Loyalty member was not found.' });
+      const memberTransactions = (ledgerResult.data.values || []).slice(1)
+        .filter((row) => normalizeLoyaltyEmail(row[1]) === email);
+      const balance = memberTransactions.reduce((sum, row) => sum + (Number(row[4]) || 0), 0);
+      if (points > balance) return res.status(409).json({ message: `Insufficient points. Available balance: ${balance}.` });
+      const rewardValue = (points / settings.redemptionPoints) * settings.redemptionValue;
+      await sheets.spreadsheets.values.append({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: 'LoyaltyLedger!A:H',
+        valueInputOption: 'RAW',
+        requestBody: { values: [[crypto.randomUUID(), email, '', 'REDEEM', -points, rewardValue, `Redeemed for $${rewardValue.toFixed(2)}${reference ? ` · ${reference}` : ''}`, new Date().toISOString()]] },
+      });
+      return res.status(200).json({ email, redeemedPoints: points, rewardValue, remainingPoints: balance - points });
+    }
 
     if (req.method === 'GET' && view === 'google-ads-report') {
       res.setHeader('Cache-Control', 'no-store');
@@ -2116,6 +2499,20 @@ export default async function handler(req, res) {
       },
     });
 
+    let loyaltyEnrollmentSaved = !payload.loyaltyOptIn;
+    let loyaltyEnrollmentError = '';
+    if (payload.loyaltyOptIn === true) {
+      try {
+        const loyaltySettings = await getLoyaltySettings(sheets);
+        if (!loyaltySettings.enabled) throw new Error('The loyalty program is currently paused.');
+        await enrollLoyaltyMember(sheets, payload);
+        loyaltyEnrollmentSaved = true;
+      } catch (error) {
+        loyaltyEnrollmentError = error.message || 'Loyalty enrollment could not be saved';
+        console.error('Loyalty enrollment spreadsheet error:', error);
+      }
+    }
+
     let marketingConsentSaved = !payload.marketingOptIn;
     let marketingConsentError = '';
     if (payload.marketingOptIn === true) {
@@ -2201,6 +2598,8 @@ export default async function handler(req, res) {
       therapistName,
       patientHistorySaved,
       patientHistoryError,
+      loyaltyEnrollmentSaved,
+      loyaltyEnrollmentError,
       marketingConsentSaved,
       marketingConsentError,
     });

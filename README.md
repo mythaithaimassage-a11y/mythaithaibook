@@ -89,8 +89,9 @@ uses server-side password verification. Set `OWNER_ADMIN_PASSWORD` and
 changes. Use a unique password of at least 16 characters and generate the
 session secret with `openssl rand -hex 32`. The owner sign-in creates an
 HTTP-only, same-site session that expires after eight hours. Owner-only
-booking reads, calendar, patient-history, and business-profile endpoints
-require this session; public customer booking submissions remain unchanged.
+booking reads, calendar, patient-history, business-profile, and loyalty
+management endpoints require this session; public customer booking submissions
+remain unchanged.
 
 The owner dashboard's **Google Ads** section provides read-only campaign
 reporting for a selected date range, with campaign search, status filters, and
@@ -115,6 +116,24 @@ confirmation Gmail OAuth credentials. Keep all Ads credentials in Vercel
 Environment Variables; the browser only receives campaign metrics. The report
 automatically paginates campaign results and reads the account currency from
 Google Ads.
+
+The owner dashboard's **Loyalty program** section lets the owner enable or pause
+Rewards, configure points earned per dollar paid, set the points-to-discount
+conversion, and edit member-tier names and lifetime-point thresholds. The
+program's default is 1 point per dollar paid, 100 points for a $5 in-clinic
+discount, and Member/Silver/Gold tiers at 0/500/1,500 lifetime points. Customers
+can separately opt into Rewards while booking; this consent is independent of
+marketing email consent. Members and the transaction ledger are stored in the
+owner's `GOOGLE_SPREADSHEET_ID` in `LoyaltySettings`, `LoyaltyMembers`, and
+`LoyaltyLedger` tabs, which the API creates as needed. The service account needs
+Editor access to this spreadsheet.
+
+After a member's appointment treatment time has passed and the booking is fully
+paid, owner staff can confirm the visit and award points. Booking IDs are
+recorded in the ledger so an already-awarded visit cannot be credited again. Staff can
+redeem points in person from the member list; the dashboard records the
+redemption and the discount value, which staff apply to the sale. Rewards are
+not automatically applied online, and no reward emails are sent.
 
 The owner dashboard includes a **Business profile** section for editing the
 business name, optional legal name, description, email, phone, website, location,
