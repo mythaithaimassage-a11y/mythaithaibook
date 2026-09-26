@@ -2270,6 +2270,15 @@ function AdminPortal({
   const [googleAdsReport, setGoogleAdsReport] = useState(null);
   const [isLoadingGoogleAds, setIsLoadingGoogleAds] = useState(false);
   const [googleAdsError, setGoogleAdsError] = useState('');
+  const [googleAdsStartDate, setGoogleAdsStartDate] = useState(() => {
+    const date = new Date();
+    date.setDate(date.getDate() - 29);
+    return date.toISOString().slice(0, 10);
+  });
+  const [googleAdsEndDate, setGoogleAdsEndDate] = useState(new Date().toISOString().slice(0, 10));
+  const [googleAdsCampaignSearch, setGoogleAdsCampaignSearch] = useState('');
+  const [googleAdsCampaignStatus, setGoogleAdsCampaignStatus] = useState('all');
+  const [googleAdsCampaignSort, setGoogleAdsCampaignSort] = useState('impressions');
   const [campaignSubject, setCampaignSubject] = useState('');
   const [campaignPreview, setCampaignPreview] = useState('');
   const [campaignMessage, setCampaignMessage] = useState('');
@@ -2332,11 +2341,16 @@ function AdminPortal({
     if (activeTab === 'business-profile') loadBusinessProfile();
   }, [activeTab]);
 
-  const loadGoogleAdsReport = async () => {
+  const loadGoogleAdsReport = async (startDate = googleAdsStartDate, endDate = googleAdsEndDate) => {
     setIsLoadingGoogleAds(true);
     setGoogleAdsError('');
     try {
-      const response = await fetch('/api/booking?view=google-ads-report');
+      const query = new URLSearchParams({
+        view: 'google-ads-report',
+        startDate,
+        endDate,
+      });
+      const response = await fetch(`/api/booking?${query}`);
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || `Google Ads returned status ${response.status}`);
       setGoogleAdsReport(data);
@@ -2350,6 +2364,32 @@ function AdminPortal({
   useEffect(() => {
     if (activeTab === 'google-ads') loadGoogleAdsReport();
   }, [activeTab]);
+
+  const applyGoogleAdsPreset = (days) => {
+    const end = new Date();
+    const start = new Date(end);
+    start.setDate(start.getDate() - days + 1);
+    const formatDate = (date) => [
+      date.getFullYear(),
+      String(date.getMonth() + 1).padStart(2, '0'),
+      String(date.getDate()).padStart(2, '0'),
+    ].join('-');
+    const startDate = formatDate(start);
+    const endDate = formatDate(end);
+    setGoogleAdsStartDate(startDate);
+    setGoogleAdsEndDate(endDate);
+    loadGoogleAdsReport(startDate, endDate);
+  };
+
+  const visibleGoogleAdsCampaigns = useMemo(() => {
+    const campaigns = [...(googleAdsReport?.campaigns || [])]
+      .filter((campaign) => googleAdsCampaignStatus === 'all' || campaign.status === googleAdsCampaignStatus)
+      .filter((campaign) => campaign.name.toLowerCase().includes(googleAdsCampaignSearch.trim().toLowerCase()));
+    campaigns.sort((a, b) => googleAdsCampaignSort === 'name'
+      ? a.name.localeCompare(b.name)
+      : Number(b[googleAdsCampaignSort] || 0) - Number(a[googleAdsCampaignSort] || 0));
+    return campaigns;
+  }, [googleAdsReport, googleAdsCampaignSearch, googleAdsCampaignStatus, googleAdsCampaignSort]);
 
   const saveBusinessProfile = async (event) => {
     event.preventDefault();
@@ -3317,7 +3357,7 @@ function AdminPortal({
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-[0.16em] text-blue-200">Grow your practice</p>
                     <h2 className="mt-1 text-xl font-bold">Google Ads performance</h2>
-                    <p className="mt-1 max-w-2xl text-sm text-slate-300">Campaign reporting from your linked Google Ads account for the last 30 days.</p>
+                    <p className="mt-1 max-w-2xl text-sm text-slate-300">Explore campaign results over a date range you choose.</p>
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -3332,28 +3372,29 @@ function AdminPortal({
             </div>
           </section>
 
+          <section className="flex flex-wrap items-end justify-between gap-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="flex flex-wrap items-end gap-3">
+              <label className="block text-[11px] font-semibold text-slate-500">From
+                <input type="date" value={googleAdsStartDate} max={googleAdsEndDate} onChange={(event) => setGoogleAdsStartDate(event.target.value)} className="mt-1 block rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-800" />
+              </label>
+              <label className="block text-[11px] font-semibold text-slate-500">To
+                <input type="date" value={googleAdsEndDate} min={googleAdsStartDate} max={new Date().toISOString().slice(0, 10)} onChange={(event) => setGoogleAdsEndDate(event.target.value)} className="mt-1 block rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-800" />
+              </label>
+              <button type="button" onClick={() => loadGoogleAdsReport()} disabled={isLoadingGoogleAds || !googleAdsStartDate || !googleAdsEndDate || googleAdsStartDate > googleAdsEndDate} className="rounded-lg bg-slate-950 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-slate-800 disabled:opacity-50">Apply range</button>
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="mr-1 text-[11px] font-semibold text-slate-500">Quick range</span>
+              {[7, 30, 90].map((days) => (
+                <button key={days} type="button" onClick={() => applyGoogleAdsPreset(days)} disabled={isLoadingGoogleAds} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 transition hover:border-slate-400 hover:bg-slate-50 disabled:opacity-50">Last {days} days</button>
+              ))}
+            </div>
+          </section>
+
           {googleAdsError && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{googleAdsError}</div>}
           {isLoadingGoogleAds && !googleAdsReport && <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">Connecting securely to Google Ads…</div>}
 
           {googleAdsReport?.configured === false && (
-            <section className="rounded-2xl border border-amber-200 bg-white p-5 shadow-sm sm:p-6">
-              <div className="flex items-start gap-3">
-                <span className="rounded-xl bg-amber-50 p-2.5 text-amber-700"><AlertCircle className="h-5 w-5" /></span>
-                <div>
-                  <h3 className="text-base font-semibold text-slate-900">Connect your Google Ads account</h3>
-                  <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">The reporting section is ready, but live campaign data is not available until these server-side environment variables are configured in Vercel. Their values are never sent to the browser.</p>
-                </div>
-              </div>
-              <ul className="mt-5 grid gap-2 sm:grid-cols-2">
-                {googleAdsReport.missingSettings.map((setting) => <li key={setting} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs text-slate-700">{setting}</li>)}
-              </ul>
-              <div className="mt-4 rounded-xl bg-slate-50 px-4 py-3 text-xs leading-5 text-slate-600">
-                Authorize the OAuth client with the <code className="rounded bg-white px-1.5 py-0.5 text-slate-800">https://www.googleapis.com/auth/adwords</code> scope. The Google Ads developer token and customer ID are also required. If the Ads account is accessed through a manager account, configure <code className="rounded bg-white px-1.5 py-0.5 text-slate-800">GOOGLE_ADS_LOGIN_CUSTOMER_ID</code>.
-              </div>
-              <a href="https://developers.google.com/google-ads/api/docs/get-started/oauth" target="_blank" rel="noreferrer" className="mt-4 inline-flex items-center gap-2 text-sm font-semibold text-blue-700 hover:text-blue-900">
-                Google Ads API OAuth setup guide <ChevronRight className="h-4 w-4" />
-              </a>
-            </section>
+            <div role="alert" className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"><AlertCircle className="h-4 w-4 shrink-0" />Google Ads reporting is unavailable. Check the server integration settings and refresh.</div>
           )}
 
           {googleAdsReport?.configured && (
@@ -3372,21 +3413,41 @@ function AdminPortal({
                   <section key={label} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                     <div className="flex items-center justify-between gap-2"><span className="text-xs font-medium text-slate-500">{label}</span><span className={`rounded-lg p-2 ${iconStyle}`}><Icon className="h-4 w-4" /></span></div>
                     <p className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">{value}</p>
-                    <p className="mt-1 text-[11px] text-slate-400">Last 30 days</p>
+                    <p className="mt-1 text-[11px] text-slate-400">{googleAdsReport.dateRange}</p>
                   </section>
                 ))}
               </div>
               <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
-                  <div><h3 className="text-base font-semibold text-slate-900">Campaigns</h3><p className="mt-1 text-xs text-slate-500">Campaign status and performance for the selected reporting period.</p></div>
-                  <span className="text-xs text-slate-500">{googleAdsReport.campaigns.length} campaigns</span>
+                  <div><h3 className="text-base font-semibold text-slate-900">Campaigns</h3><p className="mt-1 text-xs text-slate-500">Search, filter and sort results for the selected reporting period.</p></div>
+                  <span className="text-xs text-slate-500">{visibleGoogleAdsCampaigns.length} of {googleAdsReport.campaigns.length} campaigns</span>
                 </div>
-                {googleAdsReport.campaigns.length ? (
+                <div className="flex flex-wrap gap-2 border-b border-slate-100 bg-slate-50/70 px-5 py-3">
+                  <label className="relative min-w-[190px] flex-1">
+                    <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+                    <input type="search" value={googleAdsCampaignSearch} onChange={(event) => setGoogleAdsCampaignSearch(event.target.value)} placeholder="Search campaigns" aria-label="Search campaigns" className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-xs outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100" />
+                  </label>
+                  <label className="sr-only" htmlFor="google-ads-status">Campaign status</label>
+                  <select id="google-ads-status" value={googleAdsCampaignStatus} onChange={(event) => setGoogleAdsCampaignStatus(event.target.value)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700">
+                    <option value="all">All statuses</option>
+                    <option value="ENABLED">Enabled</option>
+                    <option value="PAUSED">Paused</option>
+                  </select>
+                  <label className="sr-only" htmlFor="google-ads-sort">Sort campaigns by</label>
+                  <select id="google-ads-sort" value={googleAdsCampaignSort} onChange={(event) => setGoogleAdsCampaignSort(event.target.value)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700">
+                    <option value="impressions">Sort: Impressions</option>
+                    <option value="clicks">Sort: Clicks</option>
+                    <option value="cost">Sort: Spend</option>
+                    <option value="conversions">Sort: Conversions</option>
+                    <option value="name">Sort: Name</option>
+                  </select>
+                </div>
+                {visibleGoogleAdsCampaigns.length ? (
                   <div className="overflow-x-auto">
                     <table className="w-full min-w-[700px] text-left text-sm">
                       <thead className="bg-slate-50 text-xs font-semibold text-slate-500"><tr><th className="px-5 py-3">Campaign</th><th className="px-4 py-3">Status</th><th className="px-4 py-3 text-right">Impressions</th><th className="px-4 py-3 text-right">Clicks</th><th className="px-4 py-3 text-right">Spend</th><th className="px-5 py-3 text-right">Conversions</th></tr></thead>
                       <tbody className="divide-y divide-slate-100">
-                        {googleAdsReport.campaigns.map((campaign) => (
+                        {visibleGoogleAdsCampaigns.map((campaign) => (
                           <tr key={campaign.id} className="hover:bg-slate-50">
                             <td className="px-5 py-3 font-medium text-slate-900">{campaign.name}<span className="mt-0.5 block text-[10px] font-normal text-slate-400">ID {campaign.id}</span></td>
                             <td className="px-4 py-3"><span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold ${campaign.status === 'ENABLED' ? 'bg-emerald-50 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}>{campaign.status.toLowerCase().replaceAll('_', ' ')}</span></td>
@@ -3399,7 +3460,7 @@ function AdminPortal({
                       </tbody>
                     </table>
                   </div>
-                ) : <p className="p-8 text-center text-sm text-slate-500">No campaign activity was returned for the last 30 days.</p>}
+                ) : <p className="p-8 text-center text-sm text-slate-500">{googleAdsReport.campaigns.length ? 'No campaigns match the current search and filters.' : 'No campaigns were returned for the selected dates.'}</p>}
               </section>
               <p className="text-xs leading-5 text-slate-500">Reporting is read-only. Create, edit, and manage budgets from Google Ads. Metrics are provided by Google Ads and may be delayed.</p>
             </>

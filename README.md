@@ -93,8 +93,9 @@ booking reads, calendar, patient-history, and business-profile endpoints
 require this session; public customer booking submissions remain unchanged.
 
 The owner dashboard's **Google Ads** section provides read-only campaign
-reporting for the last 30 days. To enable live data, configure these additional
-server-side Vercel environment variables:
+reporting for a selected date range, with campaign search, status filters, and
+sorting. To enable live data, configure these additional server-side Vercel
+environment variables:
 
 - `GOOGLE_ADS_DEVELOPER_TOKEN` (developer token approved for the account's API
   access level)

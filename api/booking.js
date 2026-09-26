@@ -1134,6 +1134,16 @@ export default async function handler(req, res) {
       if (!/^v\d+$/.test(GOOGLE_ADS_API_VERSION)) {
         return res.status(500).json({ message: 'GOOGLE_ADS_API_VERSION must use the format vNN.' });
       }
+      const isValidDate = (value) => {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(value || '')) return false;
+        const parsedDate = new Date(`${value}T00:00:00Z`);
+        return Number.isFinite(parsedDate.getTime()) && parsedDate.toISOString().slice(0, 10) === value;
+      };
+      const startDate = String(req.query.startDate || '');
+      const endDate = String(req.query.endDate || '');
+      if (!isValidDate(startDate) || !isValidDate(endDate) || startDate > endDate || endDate > new Date().toISOString().slice(0, 10)) {
+        return res.status(400).json({ message: 'Choose a valid start and end date for the Google Ads report.' });
+      }
 
       const adsOAuthClient = new google.auth.OAuth2(GOOGLE_ADS_CLIENT_ID, GOOGLE_ADS_CLIENT_SECRET);
       adsOAuthClient.setCredentials({ refresh_token: GOOGLE_ADS_REFRESH_TOKEN });
@@ -1166,7 +1176,7 @@ export default async function handler(req, res) {
         return adsData;
       };
 
-      const query = "SELECT campaign.id, campaign.name, campaign.status, metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.conversions FROM campaign WHERE segments.date DURING LAST_30_DAYS AND campaign.status != 'REMOVED' ORDER BY metrics.impressions DESC";
+      const query = `SELECT campaign.id, campaign.name, campaign.status, metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.conversions FROM campaign WHERE segments.date BETWEEN '${startDate}' AND '${endDate}' AND campaign.status != 'REMOVED' ORDER BY metrics.impressions DESC`;
       const results = [];
       let pageToken;
       do {
@@ -1188,7 +1198,7 @@ export default async function handler(req, res) {
         configured: true,
         customerId,
         currencyCode: customerData.results?.[0]?.customer?.currencyCode || null,
-        dateRange: 'Last 30 days',
+        dateRange: `${startDate} to ${endDate}`,
         campaigns,
         totals: campaigns.reduce((totals, campaign) => ({
           impressions: totals.impressions + campaign.impressions,
