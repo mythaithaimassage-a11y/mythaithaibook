@@ -55,7 +55,7 @@ const DEFAULT_LOYALTY_SETTINGS = {
 };
 const LOYALTY_SHEETS = {
   LoyaltySettings: ['Settings JSON', 'Updated At'],
-  LoyaltyMembers: ['Email', 'Name', 'Phone', 'Enrolled At', 'Updated At', 'Membership Type', 'Organization', 'Paid Through', 'Company ID'],
+  LoyaltyMembers: ['Email', 'Name', 'Phone', 'Enrolled At', 'Updated At', 'Membership Type', 'Organization', 'Paid Through', 'Company ID', 'Company Contact Email'],
   LoyaltyLedger: ['Transaction ID', 'Email', 'Booking ID', 'Type', 'Points', 'Reward Value', 'Description', 'Created At', 'Hours', 'Receipt No.'],
 };
 const RECEIPT_HEADERS = ['Receipt No.', 'Receipt Issued At', 'Receipt Email Status'];
@@ -667,11 +667,25 @@ async function enrollLoyaltyMember(sheets, payload) {
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     throw new Error('A valid email is required to enroll in the loyalty program.');
   }
+  const platinumEnrollment = payload.platinumEnrollment === true;
+  const organization = String(payload.companyName || '').trim().slice(0, 120);
+  const companyId = String(payload.companyId || '').trim().slice(0, 120);
+  let companyContactEmail = '';
+  if (platinumEnrollment && !organization) {
+    throw new Error('Enter the company name to request Platinum enrollment.');
+  }
   const result = await sheets.spreadsheets.values.get({
     spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-    range: 'LoyaltyMembers!A:I',
+    range: 'LoyaltyMembers!A:J',
   });
   const rows = result.data.values || [];
+  if (platinumEnrollment && !companyContactEmail) {
+    companyContactEmail = normalizeLoyaltyEmail(rows.slice(1).find((row) =>
+      String(row[5] || '').toLowerCase() === 'platinum' &&
+      String(row[6] || '').trim().toLowerCase() === organization.toLowerCase() &&
+      row[9],
+    )?.[9]);
+  }
   const existingIndex = rows.findIndex((row, index) => index > 0 && normalizeLoyaltyEmail(row[0]) === email);
   const now = new Date().toISOString();
   const memberName = String(payload.customerName || '').trim().slice(0, 120);
@@ -679,20 +693,56 @@ async function enrollLoyaltyMember(sheets, payload) {
   if (existingIndex >= 0) {
     const rowNumber = existingIndex + 1;
     const row = rows[existingIndex];
+    const existingType = String(row[5] || 'regular').toLowerCase();
+    const existingOrganization = String(row[6] || '').trim();
+    if (platinumEnrollment && !['regular', 'platinum'].includes(existingType)) {
+      throw new Error(`This email is already enrolled in the ${existingType} plan. Contact the clinic to change memberships.`);
+    }
+    if (platinumEnrollment && existingType === 'platinum' && existingOrganization &&
+        existingOrganization.toLowerCase() !== organization.toLowerCase()) {
+      throw new Error('This email is already linked to a different company. Contact the clinic to update it.');
+    }
     await sheets.spreadsheets.values.update({
       spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-      range: `LoyaltyMembers!B${rowNumber}:E${rowNumber}`,
+      range: `LoyaltyMembers!B${rowNumber}:J${rowNumber}`,
       valueInputOption: 'RAW',
-      requestBody: { values: [[memberName || row[1] || '', phone || row[2] || '', row[3] || now, now]] },
+      requestBody: { values: [[
+        memberName || row[1] || '',
+        phone || row[2] || '',
+        row[3] || now,
+        now,
+        platinumEnrollment ? 'platinum' : existingType,
+        platinumEnrollment ? organization : row[6] || '',
+        row[7] || '',
+        platinumEnrollment ? companyId || row[8] || '' : row[8] || '',
+        platinumEnrollment ? companyContactEmail || row[9] || '' : row[9] || '',
+      ]] },
     });
-    return;
+    const ledgerRows = platinumEnrollment
+      ? (await sheets.spreadsheets.values.get({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: 'LoyaltyLedger!A:J',
+      })).data.values?.slice(1) || []
+      : [];
+    return {
+      created: false,
+      membershipType: platinumEnrollment ? 'platinum' : existingType,
+      companyContactEmail: platinumEnrollment ? companyContactEmail || row[9] || '' : '',
+      hoursBalance: platinumEnrollment ? loyaltyHoursBalance(ledgerRows, email) : 0,
+    };
   }
   await sheets.spreadsheets.values.append({
     spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-    range: 'LoyaltyMembers!A:I',
+    range: 'LoyaltyMembers!A:J',
     valueInputOption: 'RAW',
-    requestBody: { values: [[email, memberName, phone, now, now, 'regular', '', '']] },
+    requestBody: { values: [[email, memberName, phone, now, now, platinumEnrollment ? 'platinum' : 'regular', platinumEnrollment ? organization : '', '', platinumEnrollment ? companyId : '', platinumEnrollment ? companyContactEmail : '']] },
   });
+  return {
+    created: true,
+    membershipType: platinumEnrollment ? 'platinum' : 'regular',
+    companyContactEmail: platinumEnrollment ? companyContactEmail : '',
+    hoursBalance: 0,
+  };
 }
 
 function isValidMembershipDate(value) {
@@ -746,7 +796,7 @@ async function getMemberBenefit(sheets, email, settings) {
   const [membersResult, ledgerResult] = await Promise.all([
     sheets.spreadsheets.values.get({
       spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-      range: 'LoyaltyMembers!A:I',
+      range: 'LoyaltyMembers!A:J',
     }),
     sheets.spreadsheets.values.get({
       spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
@@ -975,7 +1025,7 @@ async function resolveMarketingAudience(sheets, query) {
   const [contacts, bookingResult, membersResult] = await Promise.all([
     getMarketingContactRows(sheets),
     sheets.spreadsheets.values.get({ spreadsheetId, range: 'Sheet1!A:U' }),
-    sheets.spreadsheets.values.get({ spreadsheetId, range: 'LoyaltyMembers!A:H' }).catch((error) => {
+    sheets.spreadsheets.values.get({ spreadsheetId, range: 'LoyaltyMembers!A:J' }).catch((error) => {
       if (error.code === 400) return { data: { values: [] } };
       throw error;
     }),
@@ -1217,7 +1267,48 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
-async function sendMembershipEmail(gmail, member, settings, businessProfile, event) {
+async function sendFormattedLoyaltyEmail(gmail, { email, ccEmail, name, subject, businessName, heading, intro, details, note }) {
+  const recipient = normalizeLoyaltyEmail(email);
+  if (!/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(recipient)) {
+    throw new Error('A valid loyalty member email is required for notifications.');
+  }
+  const ccRecipient = normalizeLoyaltyEmail(ccEmail);
+  if (ccRecipient && !/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(ccRecipient)) {
+    throw new Error('A valid company contact email is required for notifications.');
+  }
+  const safeBusinessName = String(businessName || 'MY THAI THAI').replace(/[\r\n"]/g, '');
+  const greeting = name ? `Hello ${name},` : 'Hello,';
+  const text = [greeting, '', intro, ...details.map(({ label, value }) => `${label}: ${value}`), '', note, '', safeBusinessName].join('\n');
+  const detailRows = details.map(({ label, value }) =>
+    `<tr><td style="padding:10px 0;border-bottom:1px solid #e8eeeb;color:#64716b">${escapeHtml(label)}</td><td align="right" style="padding:10px 0;border-bottom:1px solid #e8eeeb;color:#18251f;font-weight:600">${escapeHtml(value)}</td></tr>`,
+  ).join('');
+  const html = `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>${escapeHtml(heading)}</title></head><body style="margin:0;background:#f3f5f4;padding:28px 12px;font-family:Arial,Helvetica,sans-serif;color:#18251f"><div style="display:none;max-height:0;overflow:hidden">${escapeHtml(intro)}</div><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td align="center"><table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width:600px;width:100%;background:#fff;border:1px solid #e2e9e5;border-radius:14px;overflow:hidden"><tr><td style="padding:26px 32px;background:#073d32;color:#fff"><p style="margin:0 0 8px;font-size:12px;letter-spacing:2px">${escapeHtml(safeBusinessName).toUpperCase()}</p><h1 style="margin:0;font-size:24px">${escapeHtml(heading)}</h1></td></tr><tr><td style="padding:28px 32px"><p style="margin:0 0 14px">${escapeHtml(greeting)}</p><p style="margin:0 0 20px;line-height:1.6">${escapeHtml(intro)}</p><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse">${detailRows}</table><p style="margin:22px 0 0;padding:14px;background:#f3f7f5;border-radius:8px;color:#5f6d66;font-size:13px;line-height:1.5">${escapeHtml(note)}</p></td></tr><tr><td style="padding:16px 32px;background:#f8faf9;color:#718078;font-size:12px">${escapeHtml(safeBusinessName)}</td></tr></table></td></tr></table></body></html>`;
+  const boundary = `loyalty_${crypto.randomBytes(12).toString('hex')}`;
+  const encode = (value) => Buffer.from(value).toString('base64').match(/.{1,76}/g).join('\r\n');
+  const raw = [
+    `From: "${safeBusinessName}" <${GOOGLE_GMAIL_SENDER_EMAIL}>`,
+    `To: ${recipient}`,
+    ...(ccRecipient && ccRecipient !== recipient ? [`Cc: ${ccRecipient}`] : []),
+    `Subject: =?UTF-8?B?${Buffer.from(subject).toString('base64')}?=`,
+    'MIME-Version: 1.0',
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    '',
+    `--${boundary}`,
+    'Content-Type: text/plain; charset=UTF-8',
+    'Content-Transfer-Encoding: base64',
+    '',
+    encode(text),
+    `--${boundary}`,
+    'Content-Type: text/html; charset=UTF-8',
+    'Content-Transfer-Encoding: base64',
+    '',
+    encode(html),
+    `--${boundary}--`,
+  ].join('\r\n');
+  await gmail.users.messages.send({ userId: 'me', requestBody: { raw: Buffer.from(raw).toString('base64url') } });
+}
+
+async function sendMembershipEmail(gmail, member, settings, businessProfile, event, companyContactEmail = '') {
   const recipient = normalizeLoyaltyEmail(member.email);
   if (!/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(recipient)) {
     throw new Error('A valid member email is required for membership notifications.');
@@ -1228,41 +1319,46 @@ async function sendMembershipEmail(gmail, member, settings, businessProfile, eve
   const monthlyFee = plan?.monthlyFee || 0;
   const discountPercent = plan?.discountPercent || 0;
   const businessName = businessProfile.businessName || 'MY THAI THAI';
-  const details = event === 'payment'
+  const details = event === 'topup'
+    ? `Your Platinum top-up payment has been recorded. Your prepaid-hour balance is now ${Number(member.hoursBalance || 0).toFixed(2)} hours.`
+    : event === 'payment'
     ? `Your ${title} payment has been recorded through ${member.paidThrough}. You are eligible for ${discountPercent}% off eligible services while your membership is active.`
     : type === 'regular'
       ? `You are enrolled in the points rewards program. Earn ${settings.pointsPerDollar} points per $1 actually paid, with ${settings.firstSessionMultiplier}x points on your first single-session purchase. Redeem ${settings.redemptionPoints} points for $${settings.redemptionValue} off.`
       : type === 'platinum'
         ? `Your Platinum company membership has been recorded for ${member.organization || 'your company'}${member.companyId ? ` (company ID ${member.companyId})` : ''}. Each confirmed $${settings.membershipPlans.platinum.topUpPrice} top-up adds ${settings.membershipPlans.platinum.includedHours} prepaid hours. Active benefits include ${settings.membershipPlans.platinum.discountPercent}% off services and $${settings.membershipPlans.platinum.hotStoneDiscount} off each Hot Stone add-on. The owner must confirm each top-up payment before hours are added.`
         : `Your ${title} has been recorded. The monthly fee is $${monthlyFee.toFixed(2)} and the benefit is ${discountPercent}% off services${type === 'gold' ? `, ${plan.pointsMultiplier}x points, and ${plan.freeHotStonePerMonth} free Hot Stone add-on(s) per month` : ` for up to ${settings.membershipPlans.silver.maxEmployees} employees at ${member.organization || 'your organization'}`}. Eligibility is active through ${member.paidThrough || 'only after an owner records payment'}.`;
-  const subject = event === 'payment' ? `${businessName} membership payment recorded` : `${businessName} rewards membership details`;
-  const greeting = member.name ? `Hello ${member.name},` : 'Hello,';
-  const text = `${greeting}\n\n${details}\n\nMembership fees are recorded by the business and are not automatically charged. Contact ${businessName} with questions.\n\n${businessName}`;
-  const escape = (value) => String(value ?? '')
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-  const html = `<!doctype html><html lang="en"><meta charset="utf-8"><body style="font:15px Arial,sans-serif;color:#18251f"><main style="max-width:560px;margin:32px auto;padding:28px;border:1px solid #e2e9e5;border-radius:14px"><h1 style="color:#073d32">${escape(businessName)}</h1><p>${escape(greeting)}</p><p>${escape(details)}</p><p style="color:#64716b">Membership fees are recorded by the business and are not automatically charged. Contact ${escape(businessName)} with questions.</p></main></body></html>`;
-  const boundary = `membership_${crypto.randomBytes(12).toString('hex')}`;
-  const raw = [
-    `From: "${String(businessName).replace(/[\r\n"]/g, '')}" <${GOOGLE_GMAIL_SENDER_EMAIL}>`,
-    `To: ${recipient}`,
-    `Subject: =?UTF-8?B?${Buffer.from(subject).toString('base64')}?=`,
-    'MIME-Version: 1.0',
-    `Content-Type: multipart/alternative; boundary="${boundary}"`,
-    '',
-    `--${boundary}`,
-    'Content-Type: text/plain; charset=UTF-8',
-    'Content-Transfer-Encoding: base64',
-    '',
-    Buffer.from(text).toString('base64'),
-    `--${boundary}`,
-    'Content-Type: text/html; charset=UTF-8',
-    'Content-Transfer-Encoding: base64',
-    '',
-    Buffer.from(html).toString('base64'),
-    `--${boundary}--`,
-  ].join('\r\n');
-  await gmail.users.messages.send({ userId: 'me', requestBody: { raw: Buffer.from(raw).toString('base64url') } });
+  const isTopUp = event === 'topup';
+  const isPayment = event === 'payment';
+  const intro = event === 'welcome' && type === 'platinum'
+    ? `Your Platinum company request is recorded for ${member.organization || 'your company'}${member.companyId ? ` (employee/company ID ${member.companyId})` : ''}. The clinic will verify the company and confirm payment before activating hours and booking benefits.`
+    : details;
+  const emailDetails = isTopUp
+    ? [
+      { label: 'Top-up payment', value: `$${settings.membershipPlans.platinum.topUpPrice.toFixed(2)}` },
+      { label: 'Hours added', value: `${settings.membershipPlans.platinum.includedHours} hours` },
+      { label: 'Prepaid-hour balance', value: `${Number(member.hoursBalance || 0).toFixed(2)} hours` },
+    ]
+    : type === 'platinum'
+      ? [
+        { label: 'Company', value: member.organization || 'Pending verification' },
+        ...(member.companyId ? [{ label: 'Employee/company ID', value: member.companyId }] : []),
+        { label: 'Prepaid-hour balance', value: `${Number(member.hoursBalance || 0).toFixed(2)} hours` },
+        { label: 'Top-up', value: `$${settings.membershipPlans.platinum.topUpPrice.toFixed(2)} adds ${settings.membershipPlans.platinum.includedHours} hours` },
+        { label: 'Benefits after verification/payment', value: `${settings.membershipPlans.platinum.discountPercent}% off services and $${settings.membershipPlans.platinum.hotStoneDiscount.toFixed(2)} off Hot Stone add-ons` },
+      ]
+      : [{ label: title, value: details }];
+  await sendFormattedLoyaltyEmail(gmail, {
+    email: member.email,
+    ccEmail: ['welcome', 'topup'].includes(event) && type === 'platinum' ? companyContactEmail : '',
+    name: member.name,
+    subject: isTopUp ? `${businessName} Platinum balance updated` : isPayment ? `${businessName} membership payment recorded` : `${businessName} rewards membership details`,
+    businessName,
+    heading: isTopUp ? 'Platinum balance updated' : isPayment ? 'Membership payment recorded' : 'Rewards membership details',
+    intro,
+    details: emailDetails,
+    note: 'Membership and top-up payments are recorded by the business and are not automatically charged. Contact the clinic if any details need correction.',
+  });
 }
 
 async function sendReceiptEmail(gmail, booking, receipt, businessProfile) {
@@ -1319,45 +1415,21 @@ async function sendReceiptEmail(gmail, booking, receipt, businessProfile) {
 }
 
 async function sendLoyaltyRedemptionEmail(gmail, member, redemption, businessProfile) {
-  const recipient = normalizeLoyaltyEmail(member.email);
-  if (!/^[^\s<>@]+@[^\s<>@]+\.[^\s@]+$/.test(recipient)) {
-    throw new Error('A valid loyalty member email is required for redemption confirmation.');
-  }
-  const subject = `${businessProfile.businessName} rewards redemption confirmation`;
-  const text = [
-    `Hello ${member.name || 'there'},`,
-    '',
-    `You redeemed ${redemption.points.toLocaleString()} points for $${redemption.rewardValue.toFixed(2)} off your purchase.`,
-    `Booking: ${redemption.bookingId}`,
-    `Points remaining: ${redemption.pointsBalance.toLocaleString()}`,
-    `Current balance value: $${redemption.balanceValue.toFixed(2)} at the configured reward rate.`,
-    `Receipt number: pending; it will be emailed and linked when the receipt is issued.`,
-    '',
-    businessProfile.businessName,
-  ].join('\n');
-  const html = `<!doctype html><html lang="en"><meta charset="utf-8"><body style="font:15px Arial,sans-serif;color:#18251f"><main style="max-width:560px;margin:32px auto;padding:28px;border:1px solid #e2e9e5;border-radius:14px"><h1 style="color:#073d32">${escapeHtml(businessProfile.businessName)} Rewards</h1><p>Hello ${escapeHtml(member.name || 'there')},</p><p>You redeemed <strong>${redemption.points.toLocaleString()} points</strong> for <strong>$${redemption.rewardValue.toFixed(2)} off</strong> your purchase.</p><p>Booking: ${escapeHtml(redemption.bookingId)}<br>Points remaining: <strong>${redemption.pointsBalance.toLocaleString()}</strong><br>Current balance value: $${redemption.balanceValue.toFixed(2)} at the configured reward rate.<br>Receipt number: pending; it will be emailed and linked when the receipt is issued.</p></main></body></html>`;
-  const boundary = `loyalty_${crypto.randomBytes(12).toString('hex')}`;
-  const encode = (value) => Buffer.from(value).toString('base64').match(/.{1,76}/g).join('\r\n');
-  const raw = [
-    `From: ${GOOGLE_GMAIL_SENDER_EMAIL}`,
-    `To: ${recipient}`,
-    `Subject: =?UTF-8?B?${Buffer.from(subject).toString('base64')}?=`,
-    'MIME-Version: 1.0',
-    `Content-Type: multipart/alternative; boundary="${boundary}"`,
-    '',
-    `--${boundary}`,
-    'Content-Type: text/plain; charset=UTF-8',
-    'Content-Transfer-Encoding: base64',
-    '',
-    encode(text),
-    `--${boundary}`,
-    'Content-Type: text/html; charset=UTF-8',
-    'Content-Transfer-Encoding: base64',
-    '',
-    encode(html),
-    `--${boundary}--`,
-  ].join('\r\n');
-  await gmail.users.messages.send({ userId: 'me', requestBody: { raw: Buffer.from(raw).toString('base64url') } });
+  await sendFormattedLoyaltyEmail(gmail, {
+    email: member.email,
+    name: member.name,
+    subject: `${businessProfile.businessName} rewards redemption confirmation`,
+    businessName: businessProfile.businessName,
+    heading: 'Rewards redemption confirmed',
+    intro: `You redeemed ${redemption.points.toLocaleString()} points for $${redemption.rewardValue.toFixed(2)} off your purchase.`,
+    details: [
+      { label: 'Booking', value: redemption.bookingId },
+      { label: 'Points remaining', value: redemption.pointsBalance.toLocaleString() },
+      { label: 'Remaining reward value', value: `$${redemption.balanceValue.toFixed(2)}` },
+      { label: 'Receipt number', value: 'Pending receipt issuance' },
+    ],
+    note: 'The discount is linked to this booking and will appear on the receipt when the clinic issues it.',
+  });
 }
 
 function validateBusinessProfile(input) {
@@ -1665,7 +1737,7 @@ export default async function handler(req, res) {
       const [membersResult, ledgerResult, bookingsResult] = await Promise.all([
         sheets.spreadsheets.values.get({
           spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-          range: 'LoyaltyMembers!A:I',
+          range: 'LoyaltyMembers!A:J',
         }),
         sheets.spreadsheets.values.get({
           spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
@@ -1729,6 +1801,7 @@ export default async function handler(req, res) {
           organization: row[6] || '',
           paidThrough: row[7] || '',
           companyId: row[8] || '',
+          companyContactEmail: row[9] || '',
           prepaidHoursBalance: hoursBalance,
           membershipActive,
           membershipDiscountPercent: membershipActive
@@ -1866,11 +1939,19 @@ export default async function handler(req, res) {
       const organization = String(req.body?.organization || '').trim().slice(0, 120);
       const paidThrough = String(req.body?.paidThrough || '').trim();
       const companyId = String(req.body?.companyId || '').trim().slice(0, 120);
+      let companyContactEmail = normalizeLoyaltyEmail(req.body?.companyContactEmail);
+      const initialTopUpPaid = req.body?.initialTopUpPaid === true;
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !name || !['regular', 'gold', 'platinum', 'silver'].includes(membershipType)) {
         return res.status(400).json({ message: 'Enter a valid email, member name, and membership type.' });
       }
       if (['silver', 'platinum'].includes(membershipType) && !organization) {
         return res.status(400).json({ message: 'Enter the company name for a corporate member.' });
+      }
+      if (companyContactEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(companyContactEmail)) {
+        return res.status(400).json({ message: 'Enter a valid company contact email address.' });
+      }
+      if (initialTopUpPaid && membershipType !== 'platinum') {
+        return res.status(400).json({ message: 'An initial top-up can only be recorded for a Platinum member.' });
       }
       if (paidThrough && !isValidMembershipDate(paidThrough)) {
         return res.status(400).json({ message: 'Paid-through date must be a valid YYYY-MM-DD date.' });
@@ -1880,10 +1961,17 @@ export default async function handler(req, res) {
       await ensureLoyaltySheets(sheets);
       const membersResult = await sheets.spreadsheets.values.get({
         spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'LoyaltyMembers!A:I',
+        range: 'LoyaltyMembers!A:J',
       });
       const rows = membersResult.data.values || [];
       const existingIndex = rows.findIndex((row, index) => index > 0 && normalizeLoyaltyEmail(row[0]) === email);
+      if (membershipType === 'platinum' && !companyContactEmail) {
+        companyContactEmail = normalizeLoyaltyEmail(rows.slice(1).find((row) =>
+          String(row[5] || '').toLowerCase() === 'platinum' &&
+          String(row[6] || '').trim().toLowerCase() === organization.toLowerCase() &&
+          row[9],
+        )?.[9]);
+      }
       if (membershipType === 'silver') {
         const employeeCount = rows.slice(1).filter((row, index) =>
           index + 1 !== existingIndex &&
@@ -1905,33 +1993,74 @@ export default async function handler(req, res) {
         organization: ['silver', 'platinum'].includes(membershipType) ? organization : '',
         paidThrough: membershipType === 'regular' ? '' : paidThrough,
         companyId: membershipType === 'platinum' ? companyId : '',
+        companyContactEmail: membershipType === 'platinum' ? companyContactEmail : '',
       };
-      const values = [email, name, phone, member.enrolledAt, now, member.membershipType, member.organization, member.paidThrough, member.companyId];
+      const values = [email, name, phone, member.enrolledAt, now, member.membershipType, member.organization, member.paidThrough, member.companyId, member.companyContactEmail];
       if (existingIndex >= 1) {
         await sheets.spreadsheets.values.update({
           spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-          range: `LoyaltyMembers!A${existingIndex + 1}:I${existingIndex + 1}`,
+          range: `LoyaltyMembers!A${existingIndex + 1}:J${existingIndex + 1}`,
           valueInputOption: 'RAW',
           requestBody: { values: [values] },
         });
       } else {
         await sheets.spreadsheets.values.append({
           spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-          range: 'LoyaltyMembers!A:I',
+          range: 'LoyaltyMembers!A:J',
           valueInputOption: 'RAW',
           requestBody: { values: [values] },
         });
       }
+      if (membershipType === 'platinum' && companyContactEmail) {
+        for (const [index, row] of rows.slice(1).entries()) {
+          if (
+            String(row[5] || '').toLowerCase() === 'platinum' &&
+            String(row[6] || '').trim().toLowerCase() === organization.toLowerCase() &&
+            normalizeLoyaltyEmail(row[9]) !== companyContactEmail
+          ) {
+            const rowNumber = index + 2;
+            await sheets.spreadsheets.values.update({
+              spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+              range: `LoyaltyMembers!J${rowNumber}`,
+              valueInputOption: 'RAW',
+              requestBody: { values: [[companyContactEmail]] },
+            });
+          }
+        }
+      }
+      let hoursBalance = 0;
+      if (initialTopUpPaid) {
+        await sheets.spreadsheets.values.append({
+          spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+          range: 'LoyaltyLedger!A:J',
+          valueInputOption: 'RAW',
+          requestBody: { values: [[
+            crypto.randomUUID(), email, '', 'TOPUP', 0, 0,
+            `Platinum top-up: $${settings.membershipPlans.platinum.topUpPrice.toFixed(2)} for ${settings.membershipPlans.platinum.includedHours} hours`,
+            now, settings.membershipPlans.platinum.includedHours,
+          ]] },
+        });
+      }
+      if (membershipType === 'platinum') {
+        hoursBalance = loyaltyHoursBalance(
+          (await sheets.spreadsheets.values.get({
+            spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+            range: 'LoyaltyLedger!A:J',
+          })).data.values?.slice(1) || [],
+          email,
+        );
+      }
+      member.hoursBalance = hoursBalance;
       let emailSent = false;
       let emailError = '';
       try {
-        await sendMembershipEmail(createGmailApi(), member, settings, await getBusinessProfile(sheets), 'welcome');
+        await sendMembershipEmail(createGmailApi(), member, settings, await getBusinessProfile(sheets), initialTopUpPaid ? 'topup' : 'welcome', companyContactEmail);
         emailSent = true;
       } catch (error) {
         emailError = error.message || 'Membership email could not be sent.';
         console.error('Membership onboarding email error:', emailError);
       }
-      return res.status(200).json({ member, emailSent, emailError });
+      return res.status(200).json({ member, emailSent, emailError, hoursBalance });
     }
 
     if (req.method === 'POST' && view === 'loyalty-topup') {
@@ -1943,7 +2072,7 @@ export default async function handler(req, res) {
       if (!settings.enabled) return res.status(409).json({ message: 'The loyalty program is currently paused.' });
       const membersResult = await sheets.spreadsheets.values.get({
         spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'LoyaltyMembers!A:I',
+        range: 'LoyaltyMembers!A:J',
       });
       const member = (membersResult.data.values || []).slice(1)
         .find((row) => normalizeLoyaltyEmail(row[0]) === email && String(row[5] || '').toLowerCase() === 'platinum');
@@ -1958,16 +2087,33 @@ export default async function handler(req, res) {
           new Date().toISOString(), settings.membershipPlans.platinum.includedHours,
         ]] },
       });
+      const ledgerResult = await sheets.spreadsheets.values.get({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: 'LoyaltyLedger!A:J',
+      });
+      const hoursBalance = loyaltyHoursBalance(ledgerResult.data.values?.slice(1) || [], email);
+      let emailSent = false;
+      let emailError = '';
+      try {
+        await sendMembershipEmail(createGmailApi(), {
+          email: member[0],
+          name: member[1],
+          membershipType: 'platinum',
+          organization: member[6],
+          companyId: member[8],
+          hoursBalance,
+        }, settings, await getBusinessProfile(sheets), 'topup');
+        emailSent = true;
+      } catch (error) {
+        emailError = error.message || 'Platinum balance email could not be sent.';
+        console.error('Platinum top-up email error:', emailError);
+      }
       return res.status(200).json({
         email,
         hoursAdded: settings.membershipPlans.platinum.includedHours,
-        hoursBalance: loyaltyHoursBalance(
-          (await sheets.spreadsheets.values.get({
-            spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-            range: 'LoyaltyLedger!A:J',
-          })).data.values?.slice(1) || [],
-          email,
-        ),
+        hoursBalance,
+        emailSent,
+        emailError,
       });
     }
 
@@ -1981,7 +2127,7 @@ export default async function handler(req, res) {
       const settings = await getLoyaltySettings(sheets);
       const membersResult = await sheets.spreadsheets.values.get({
         spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'LoyaltyMembers!A:H',
+        range: 'LoyaltyMembers!A:J',
       });
       const rows = membersResult.data.values || [];
       const matches = rows.slice(1).map((row, index) => ({ row, rowNumber: index + 2 }))
@@ -2035,7 +2181,7 @@ export default async function handler(req, res) {
       const settings = await getLoyaltySettings(sheets);
       if (!settings.enabled) return res.status(409).json({ message: 'The loyalty program is currently paused.' });
       const [membersResult, ledgerResult, bookingsResult] = await Promise.all([
-        sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'LoyaltyMembers!A:I' }),
+        sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'LoyaltyMembers!A:J' }),
         sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'LoyaltyLedger!A:J' }),
         sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'Sheet1!A:U' }),
       ]);
@@ -2116,7 +2262,34 @@ export default async function handler(req, res) {
       if (!points && !hoursUsed && !freeHotStone) {
         return res.status(409).json({ message: 'This visit does not qualify for points or prepaid hours.' });
       }
-      return res.status(200).json({ awarded: points > 0, points, hoursUsed, freeHotStone, bookingId, email });
+      let balanceEmailSent = true;
+      let balanceEmailError = '';
+      try {
+        const businessProfile = await getBusinessProfile(sheets);
+        const pointsBalance = ledgerRows
+          .filter((row) => normalizeLoyaltyEmail(row[1]) === email)
+          .reduce((sum, row) => sum + (Number(row[4]) || 0), 0) + points;
+        const hoursBalance = loyaltyHoursBalance([...ledgerRows, ...ledgerEntries], email);
+        await sendFormattedLoyaltyEmail(createGmailApi(), {
+          email,
+          name: member[1] || '',
+          subject: `${businessProfile.businessName} rewards balance updated`,
+          businessName: businessProfile.businessName,
+          heading: 'Rewards balance updated',
+          intro: `Your completed visit has been recorded${points ? ` and earned ${points.toLocaleString()} points` : ''}.`,
+          details: [
+            { label: 'Points balance', value: pointsBalance.toLocaleString() },
+            ...(isPlatinum ? [{ label: 'Prepaid hours balance', value: `${hoursBalance.toFixed(2)} hours` }] : []),
+            { label: 'Booking reference', value: bookingId },
+          ],
+          note: 'Your visit rewards and eligible prepaid-hour usage are now reflected in your account.',
+        });
+      } catch (error) {
+        balanceEmailSent = false;
+        balanceEmailError = error.message || 'Loyalty balance email could not be sent.';
+        console.error('Loyalty award email error:', balanceEmailError);
+      }
+      return res.status(200).json({ awarded: points > 0, points, hoursUsed, freeHotStone, bookingId, email, balanceEmailSent, balanceEmailError });
     }
 
     if (req.method === 'POST' && view === 'loyalty-redeem') {
@@ -2132,7 +2305,7 @@ export default async function handler(req, res) {
         return res.status(400).json({ message: `Redeem points in multiples of ${settings.redemptionPoints}.` });
       }
       const [membersResult, ledgerResult, bookingsResult] = await Promise.all([
-        sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'LoyaltyMembers!A:I' }),
+        sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'LoyaltyMembers!A:J' }),
         sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'LoyaltyLedger!A:J' }),
         sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'Sheet1!A:U' }),
       ]);
@@ -3062,7 +3235,7 @@ export default async function handler(req, res) {
       });
       const loyaltyMembersResult = await sheets.spreadsheets.values.get({
         spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'LoyaltyMembers!A:I',
+        range: 'LoyaltyMembers!A:J',
       });
       const loyaltyRows = (loyaltyLedgerResult.data.values || []).slice(1);
       const loyaltyMember = (loyaltyMembersResult.data.values || []).slice(1)
@@ -3293,14 +3466,40 @@ export default async function handler(req, res) {
       },
     });
 
-    let loyaltyEnrollmentSaved = !payload.loyaltyOptIn;
+    const hasLoyaltyEnrollmentRequest = payload.loyaltyOptIn === true || payload.platinumEnrollment === true;
+    let loyaltyEnrollmentSaved = !hasLoyaltyEnrollmentRequest;
     let loyaltyEnrollmentError = '';
-    if (payload.loyaltyOptIn === true) {
+    let loyaltyEnrollmentEmailSent = true;
+    let loyaltyEnrollmentEmailError = '';
+    let loyaltyCompanyEmailNotified = false;
+    if (hasLoyaltyEnrollmentRequest) {
       try {
         const loyaltySettings = await getLoyaltySettings(sheets);
         if (!loyaltySettings.enabled) throw new Error('The loyalty program is currently paused.');
-        await enrollLoyaltyMember(sheets, payload);
+        const enrollment = await enrollLoyaltyMember(sheets, payload);
         loyaltyEnrollmentSaved = true;
+        if (enrollment.created || payload.platinumEnrollment === true) {
+          try {
+            await sendMembershipEmail(createGmailApi(), {
+              email: payload.email,
+              name: payload.customerName,
+              membershipType: enrollment.membershipType,
+              organization: payload.companyName || '',
+              companyId: payload.companyId || '',
+              companyContactEmail: enrollment.companyContactEmail || '',
+              hoursBalance: enrollment.hoursBalance,
+              paidThrough: '',
+            }, loyaltySettings, await getBusinessProfile(sheets), 'welcome', enrollment.companyContactEmail || '');
+            loyaltyCompanyEmailNotified = Boolean(
+              enrollment.companyContactEmail &&
+              normalizeLoyaltyEmail(enrollment.companyContactEmail) !== normalizeLoyaltyEmail(payload.email),
+            );
+          } catch (error) {
+            loyaltyEnrollmentEmailSent = false;
+            loyaltyEnrollmentEmailError = error.message || 'Loyalty membership email could not be sent.';
+            console.error('Booking loyalty enrollment email error:', loyaltyEnrollmentEmailError);
+          }
+        }
       } catch (error) {
         loyaltyEnrollmentError = error.message || 'Loyalty enrollment could not be saved';
         console.error('Loyalty enrollment spreadsheet error:', error);
@@ -3399,6 +3598,9 @@ export default async function handler(req, res) {
       patientHistoryError,
       loyaltyEnrollmentSaved,
       loyaltyEnrollmentError,
+      loyaltyEnrollmentEmailSent,
+      loyaltyEnrollmentEmailError,
+      loyaltyCompanyEmailNotified,
       marketingConsentSaved,
       marketingConsentError,
     });

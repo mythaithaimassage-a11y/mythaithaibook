@@ -138,7 +138,15 @@ Members and the transaction ledger are stored in the owner's
 account needs Editor access to this spreadsheet. The owner can search recent
 booking customers by name, email, or phone when enrolling them. Platinum
 employees are associated with a company name and optional company ID; the
-enrolled email is their booking identifier.
+enrolled work email is their booking identifier. At booking, an employee can
+request Platinum with their company name and employee/company ID. Staff records
+the company's registration/contact email during onboarding; claim emails go to
+the employee and copy that registered contact. For subsequent employees, the
+stored contact is reused for the matching company. A claim is pending: the
+clinic must verify eligibility and record payment before prepaid hours or
+Platinum booking benefits are activated. Staff can onboard the employee from
+the searchable customer directory and, when payment is confirmed, select
+**Payment confirmed** to add the initial top-up hours in the same action.
 
 After a member's appointment treatment time has passed, staff can confirm an
 eligible visit from the dashboard. Standard/Gold point awards are based on the
@@ -153,9 +161,11 @@ is applied to the receipt total, tax is recalculated on the discounted amount,
 and the receipt number is saved on the loyalty ledger entry. The customer gets
 a redemption email with the points balance and a receipt email with the receipt
 number, discount, points redeemed, and updated points balance. Loyalty receipt
-discounts cannot be attached after a receipt has already been issued.
-Platinum top-ups are manually recorded after the owner confirms payment,
-adding the configured hours to that employee's balance.
+discounts cannot be attached after a receipt has already been issued. Branded
+loyalty emails share the same responsive format and include membership details,
+points or prepaid-hour balances, and redemption or top-up confirmations.
+Platinum top-ups are recorded only after the owner confirms payment, add the
+configured hours to that employee's balance, and email the updated balance.
 
 The owner dashboard includes a **Business profile** section for editing the
 business name, optional legal name, description, email, phone, website, location,

@@ -244,7 +244,10 @@ async function sendBookingToGoogleSheets(apiUrl, bookingPayload) {
         patientHistorySaved: result.patientHistorySaved !== false,
         patientHistoryReason: result.patientHistoryError || '',
         loyaltyEnrollmentSaved: result.loyaltyEnrollmentSaved !== false,
-        loyaltyEnrollmentReason: result.loyaltyEnrollmentError || ''
+        loyaltyEnrollmentReason: result.loyaltyEnrollmentError || '',
+        loyaltyEnrollmentEmailSent: result.loyaltyEnrollmentEmailSent !== false,
+        loyaltyEnrollmentEmailError: result.loyaltyEnrollmentEmailError || '',
+        loyaltyCompanyEmailNotified: result.loyaltyCompanyEmailNotified === true
       };
     } else {
       const errData = await response.json().catch(() => ({}));
@@ -1364,6 +1367,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [sheetsSyncStatus, setSheetsSyncStatus] = useState(null);
   const [sheetsSyncReason, setSheetsSyncReason] = useState('');
+  const [loyaltyCompanyEmailNotified, setLoyaltyCompanyEmailNotified] = useState(false);
   const [showExistingPatientChoice, setShowExistingPatientChoice] = useState(false);
   const [loyaltyProgram, setLoyaltyProgram] = useState(null);
   const [loyaltyProgramError, setLoyaltyProgramError] = useState('');
@@ -1378,6 +1382,9 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
     time: null,
     marketingOptIn: false,
     loyaltyOptIn: false,
+    platinumEnrollment: false,
+    companyName: '',
+    companyId: '',
     customer: { firstName: '', lastName: '', email: '', phone: '' },
     intake: {
       pressure: 'Medium',
@@ -1537,6 +1544,9 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
       email: bookingData.customer.email,
       marketingOptIn: bookingData.marketingOptIn,
       loyaltyOptIn: bookingData.loyaltyOptIn,
+      platinumEnrollment: bookingData.platinumEnrollment,
+      companyName: bookingData.companyName,
+      companyId: bookingData.companyId,
       subtotalAmount: financials.base.toFixed(2),
       taxRate: bookingData.service.taxRate || 0,
       expectedDiscountPercent: financials.discountPercent,
@@ -1571,12 +1581,14 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
 
     // Use the Vercel route by default; retain support for a configured webhook.
     const syncResult = await sendBookingToGoogleSheets(
-      bookingData.marketingOptIn || bookingData.loyaltyOptIn || membershipBenefit ? '' : sheetsWebhookUrl,
+      bookingData.marketingOptIn || bookingData.loyaltyOptIn || bookingData.platinumEnrollment || membershipBenefit ? '' : sheetsWebhookUrl,
       payloadForSheets,
     );
     const syncSuccess = syncResult.success;
-    if (!syncSuccess || syncResult.emailSent === false || syncResult.patientHistorySaved === false || (bookingData.marketingOptIn && syncResult.marketingConsentSaved === false) || (bookingData.loyaltyOptIn && syncResult.loyaltyEnrollmentSaved === false)) {
-      setSheetsSyncReason(syncResult.reason || syncResult.emailReason || syncResult.patientHistoryReason || syncResult.marketingConsentReason || syncResult.loyaltyEnrollmentReason || 'The booking sync failed.');
+    setLoyaltyCompanyEmailNotified(syncResult.loyaltyCompanyEmailNotified === true);
+    const hasLoyaltyRequest = bookingData.loyaltyOptIn || bookingData.platinumEnrollment;
+    if (!syncSuccess || syncResult.emailSent === false || syncResult.patientHistorySaved === false || (bookingData.marketingOptIn && syncResult.marketingConsentSaved === false) || (hasLoyaltyRequest && syncResult.loyaltyEnrollmentSaved === false) || (hasLoyaltyRequest && syncResult.loyaltyEnrollmentEmailSent === false)) {
+      setSheetsSyncReason(syncResult.reason || syncResult.emailReason || syncResult.patientHistoryReason || syncResult.marketingConsentReason || syncResult.loyaltyEnrollmentReason || syncResult.loyaltyEnrollmentEmailError || 'The booking sync failed.');
     }
 
     const newRecord = {
@@ -1600,7 +1612,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
     onNewBooking(newRecord);
     setBookingData(prev => ({ ...prev, confirmationCode: code }));
     setSheetsSyncStatus(syncSuccess
-      ? (syncResult.emailSent === false ? 'email_failed' : (syncResult.patientHistorySaved === false ? 'patient_history_failed' : (bookingData.marketingOptIn && syncResult.marketingConsentSaved === false ? 'marketing_consent_failed' : (bookingData.loyaltyOptIn && syncResult.loyaltyEnrollmentSaved === false ? 'loyalty_enrollment_failed' : 'success'))))
+      ? (syncResult.emailSent === false ? 'email_failed' : (syncResult.patientHistorySaved === false ? 'patient_history_failed' : (bookingData.marketingOptIn && syncResult.marketingConsentSaved === false ? 'marketing_consent_failed' : (hasLoyaltyRequest && (syncResult.loyaltyEnrollmentSaved === false || syncResult.loyaltyEnrollmentEmailSent === false) ? 'loyalty_enrollment_failed' : 'success'))))
       : 'failed');
     setIsSubmitting(false);
     setStep(5);
@@ -1975,6 +1987,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                   <input
                     type="checkbox"
                     checked={bookingData.loyaltyOptIn}
+                    disabled={bookingData.platinumEnrollment}
                     onChange={(event) => updateBooking('loyaltyOptIn', event.target.checked)}
                     className="mt-0.5 h-4 w-4 rounded border-indigo-300 text-indigo-700 focus:ring-indigo-600"
                   />
@@ -1985,6 +1998,48 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                     <span className="mt-1 block text-indigo-700">Tiers: {loyaltyProgram.tiers.map((tier) => tier.name).join(' · ')}</span>
                   </span>
                 </label>
+              )}
+              {loyaltyProgram?.enabled && (
+                <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50/70 p-3.5 text-xs leading-5 text-amber-950">
+                  <label className="flex cursor-pointer items-start gap-3">
+                    <input
+                      type="checkbox"
+                      checked={bookingData.platinumEnrollment}
+                      onChange={(event) => {
+                        updateBooking('platinumEnrollment', event.target.checked);
+                        if (event.target.checked) updateBooking('loyaltyOptIn', false);
+                      }}
+                      className="mt-0.5 h-4 w-4 rounded border-amber-300 text-amber-700 focus:ring-amber-600"
+                    />
+                    <span>
+                      <strong className="block text-sm">Request company Platinum</strong>
+                      <span>For employees of a participating company. Use your work email in the contact field. The clinic will verify your details and confirm the ${loyaltyProgram.membershipPlans.platinum.topUpPrice} top-up before activating {loyaltyProgram.membershipPlans.platinum.includedHours} hours and Platinum booking benefits.</span>
+                    </span>
+                  </label>
+                  {bookingData.platinumEnrollment && (
+                    <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                      <label className="font-semibold">Company name *
+                        <input
+                          required
+                          maxLength={120}
+                          value={bookingData.companyName}
+                          onChange={(event) => updateBooking('companyName', event.target.value)}
+                          className="mt-1 w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm font-normal text-stone-900"
+                          placeholder="Your employer"
+                        />
+                      </label>
+                      <label className="font-semibold">Employee/company ID (optional)
+                        <input
+                          maxLength={120}
+                          value={bookingData.companyId}
+                          onChange={(event) => updateBooking('companyId', event.target.value)}
+                          className="mt-1 w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm font-normal text-stone-900"
+                          placeholder="Employee or company ID"
+                        />
+                      </label>
+                    </div>
+                  )}
+                </div>
               )}
               {loyaltyProgramError && <p role="status" className="mt-2 text-xs text-amber-800">Rewards enrollment details are temporarily unavailable. You can still complete your booking.</p>}
             </div>
@@ -2328,8 +2383,14 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
             )}
             {sheetsSyncStatus === 'loyalty_enrollment_failed' && (
               <div role="alert" className="inline-flex flex-col items-center space-y-1 rounded-xl border border-amber-300 bg-amber-50 px-4 py-2 text-xs text-amber-900">
-                <span className="font-semibold">Booking saved, but your Rewards enrollment could not be recorded. Please contact the clinic to enroll.</span>
+                <span className="font-semibold">Booking saved, but your Rewards enrollment or confirmation email could not be completed. Please contact the clinic to finish enrollment.</span>
                 {sheetsSyncReason && <span>{sheetsSyncReason}</span>}
+              </div>
+            )}
+            {bookingData.platinumEnrollment && sheetsSyncStatus === 'success' && (
+              <div className="inline-flex flex-col items-center space-y-1 rounded-xl border border-amber-300 bg-amber-50 px-4 py-2 text-xs text-amber-950">
+                <span className="font-semibold">Company Platinum request saved.</span>
+                <span>The clinic will verify your company and confirm payment before activating prepaid hours and booking benefits. We emailed {bookingData.customer.email}{loyaltyCompanyEmailNotified ? ' and copied the registered company contact' : ''} with the claim details.</span>
               </div>
             )}
 
@@ -2364,6 +2425,9 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                     time: null,
                     marketingOptIn: false,
                     loyaltyOptIn: false,
+                    platinumEnrollment: false,
+                    companyName: '',
+                    companyId: '',
                     customer: { firstName: '', lastName: '', email: '', phone: '' },
                     intake: {
                       pressure: 'Medium', focusAreas: '', injuries: '', agreeTerms: false,
@@ -2378,6 +2442,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                     paymentOption: 'deposit',
                     confirmationCode: ''
                   });
+                  setLoyaltyCompanyEmailNotified(false);
                 }}
                 className="px-6 py-2.5 bg-stone-900 text-white font-semibold rounded-xl hover:bg-stone-800 transition"
               >
@@ -2463,7 +2528,7 @@ function AdminPortal({
   const [loyaltyMemberTypeFilter, setLoyaltyMemberTypeFilter] = useState('all');
   const [loyaltyOnboardingSearch, setLoyaltyOnboardingSearch] = useState('');
   const [newLoyaltyMember, setNewLoyaltyMember] = useState({
-    name: '', email: '', phone: '', membershipType: 'gold', organization: '', companyId: '', paidThrough: '',
+    name: '', email: '', phone: '', membershipType: 'gold', organization: '', companyId: '', companyContactEmail: '', paidThrough: '', initialTopUpPaid: false,
   });
   const [isOnboardingLoyaltyMember, setIsOnboardingLoyaltyMember] = useState(false);
   const [selectedTopUpMember, setSelectedTopUpMember] = useState(null);
@@ -2615,7 +2680,7 @@ function AdminPortal({
       if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
       setLoyaltyNotice(data.alreadyAwarded
         ? 'Points or prepaid hours were already recorded for this booking.'
-        : `${data.points ? `${data.points} points awarded to ${booking.customerName}` : `${booking.customerName}'s visit recorded`}${data.hoursUsed ? `; ${data.hoursUsed} prepaid hours used.` : '.'}`);
+        : `${data.points ? `${data.points} points awarded to ${booking.customerName}` : `${booking.customerName}'s visit recorded`}${data.hoursUsed ? `; ${data.hoursUsed} prepaid hours used.` : '.'}${data.balanceEmailSent === false ? ` Balance email failed: ${data.balanceEmailError || 'check Gmail configuration.'}` : ' Loyalty balance email sent.'}`);
       await loadLoyaltyDashboard();
     } catch (error) {
       setLoyaltyError(error.message || 'Unable to award loyalty points.');
@@ -2667,13 +2732,15 @@ function AdminPortal({
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || 'Unable to onboard member.');
-      const platinumNextStep = data.member.membershipType === 'platinum'
-        ? ' Record the $1,500 Platinum top-up in the member list to add prepaid hours.'
-        : '';
+      const platinumNextStep = data.member.membershipType === 'platinum' && !newLoyaltyMember.initialTopUpPaid
+        ? ' The company request is pending; use the member row to record the top-up after payment is confirmed.'
+        : newLoyaltyMember.initialTopUpPaid
+          ? ` ${Number(data.hoursBalance).toFixed(2)} prepaid hours were added after confirming payment.`
+          : '';
       setLoyaltyNotice(`${data.emailSent
         ? `Membership saved and eligibility details emailed to ${data.member.email}.`
         : `Membership saved, but the email could not be sent: ${data.emailError || 'check Gmail configuration and retry.'}`}${platinumNextStep}`);
-      setNewLoyaltyMember({ name: '', email: '', phone: '', membershipType: 'gold', organization: '', companyId: '', paidThrough: '' });
+      setNewLoyaltyMember({ name: '', email: '', phone: '', membershipType: 'gold', organization: '', companyId: '', companyContactEmail: '', paidThrough: '', initialTopUpPaid: false });
       setLoyaltyOnboardingSearch('');
       await loadLoyaltyDashboard();
     } catch (error) {
@@ -2696,7 +2763,7 @@ function AdminPortal({
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || 'Unable to record Platinum top-up.');
-      setLoyaltyNotice(`Recorded $${Number(loyaltySettings.membershipPlans.platinum.topUpPrice).toFixed(2)} payment; ${data.hoursAdded} prepaid hours added. New balance: ${Number(data.hoursBalance).toFixed(2)} hours.`);
+      setLoyaltyNotice(`Recorded $${Number(loyaltySettings.membershipPlans.platinum.topUpPrice).toFixed(2)} payment; ${data.hoursAdded} prepaid hours added. New balance: ${Number(data.hoursBalance).toFixed(2)} hours.${data.emailSent ? ' Balance email sent.' : ` Balance email failed: ${data.emailError || 'check Gmail configuration.'}`}`);
       setSelectedTopUpMember(null);
       await loadLoyaltyDashboard();
     } catch (error) {
@@ -3853,7 +3920,7 @@ function AdminPortal({
               </form>
 
               <form onSubmit={onboardLoyaltyMember} className="space-y-4 rounded-2xl border border-indigo-200 bg-white p-5 shadow-sm sm:p-6">
-                <div><h3 className="text-base font-semibold text-slate-900">Onboard a member</h3><p className="mt-1 text-xs leading-5 text-slate-500">Find a recent customer by name, email or phone, then enroll them in Standard, Gold or Platinum. Platinum employees use their enrolled email and can add a company ID for verification.</p></div>
+                <div><h3 className="text-base font-semibold text-slate-900">Onboard a member</h3><p className="mt-1 text-xs leading-5 text-slate-500">Find a recent customer by name, email or phone. For Platinum, use the employee's work email, add the company and ID, then optionally confirm the initial payment and add the configured hours in this same step.</p></div>
                 <div className="relative max-w-xl">
                   <label className="relative block">
                     <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
@@ -3888,14 +3955,19 @@ function AdminPortal({
                   <label className="text-xs font-semibold text-slate-600">Member name<input required maxLength={120} value={newLoyaltyMember.name} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, name: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" /></label>
                   <label className="text-xs font-semibold text-slate-600">Email<input required type="email" maxLength={254} value={newLoyaltyMember.email} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, email: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" /></label>
                   <label className="text-xs font-semibold text-slate-600">Phone (optional)<input type="tel" maxLength={50} value={newLoyaltyMember.phone} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, phone: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" /></label>
-                  <label className="text-xs font-semibold text-slate-600">Membership type<select value={newLoyaltyMember.membershipType} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, membershipType: event.target.value, organization: event.target.value === 'platinum' ? current.organization : '', companyId: event.target.value === 'platinum' ? current.companyId : '', paidThrough: event.target.value === 'gold' ? current.paidThrough : '' }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm"><option value="regular">Standard · Free points</option><option value="gold">Gold · Monthly</option><option value="platinum">Platinum · Company top-up</option></select></label>
+                  <label className="text-xs font-semibold text-slate-600">Membership type<select value={newLoyaltyMember.membershipType} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, membershipType: event.target.value, organization: event.target.value === 'platinum' ? current.organization : '', companyId: event.target.value === 'platinum' ? current.companyId : '', paidThrough: event.target.value === 'gold' ? current.paidThrough : '', initialTopUpPaid: event.target.value === 'platinum' ? current.initialTopUpPaid : false }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm"><option value="regular">Standard · Free points</option><option value="gold">Gold · Monthly</option><option value="platinum">Platinum · Company top-up</option></select></label>
                   {newLoyaltyMember.membershipType === 'platinum' && <>
                     <label className="text-xs font-semibold text-slate-600">Company name<input required maxLength={120} value={newLoyaltyMember.organization} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, organization: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" /></label>
                     <label className="text-xs font-semibold text-slate-600">Company ID (optional if using work email)<input maxLength={120} value={newLoyaltyMember.companyId} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, companyId: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" /></label>
+                    <label className="text-xs font-semibold text-slate-600">Company registration/contact email<input type="email" maxLength={254} value={newLoyaltyMember.companyContactEmail} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, companyContactEmail: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" placeholder="Company contact email" /></label>
+                    <label className="sm:col-span-2 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-950">
+                      <input type="checkbox" checked={newLoyaltyMember.initialTopUpPaid} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, initialTopUpPaid: event.target.checked }))} className="mt-0.5 h-4 w-4 rounded border-amber-300 text-amber-700" />
+                      <span><strong>Payment confirmed:</strong> record the configured ${Number(loyaltySettings.membershipPlans.platinum.topUpPrice).toFixed(2)} top-up and add {loyaltySettings.membershipPlans.platinum.includedHours} hours now. Leave unchecked for a pending company claim.</span>
+                    </label>
                   </>}
                   {newLoyaltyMember.membershipType === 'gold' && <label className="text-xs font-semibold text-slate-600">Paid through<input type="date" value={newLoyaltyMember.paidThrough} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, paidThrough: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" /></label>}
                 </div>
-                <button type="submit" disabled={isOnboardingLoyaltyMember || !loyaltySettings.enabled} className="inline-flex items-center gap-2 rounded-lg bg-indigo-950 px-4 py-2.5 text-xs font-semibold text-white hover:bg-indigo-800 disabled:opacity-50">{isOnboardingLoyaltyMember ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}{isOnboardingLoyaltyMember ? 'Saving membership…' : 'Save member & email details'}</button>
+                <button type="submit" disabled={isOnboardingLoyaltyMember || !loyaltySettings.enabled} className="inline-flex items-center gap-2 rounded-lg bg-indigo-950 px-4 py-2.5 text-xs font-semibold text-white hover:bg-indigo-800 disabled:opacity-50">{isOnboardingLoyaltyMember ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}{isOnboardingLoyaltyMember ? 'Saving membership…' : newLoyaltyMember.membershipType === 'platinum' && newLoyaltyMember.initialTopUpPaid ? 'Enroll & record paid top-up' : 'Save member & email details'}</button>
               </form>
 
               <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -3937,7 +4009,7 @@ function AdminPortal({
                 {(() => {
                   const filteredMembers = loyaltyDashboard.members
                     .filter((member) => loyaltyMemberTypeFilter === 'all' || member.membershipType === loyaltyMemberTypeFilter)
-                    .filter((member) => [member.name, member.email, member.phone, member.organization, member.companyId].some((value) => (value || '').toLowerCase().includes(loyaltyMemberSearch.trim().toLowerCase())));
+                    .filter((member) => [member.name, member.email, member.phone, member.organization, member.companyId, member.companyContactEmail].some((value) => (value || '').toLowerCase().includes(loyaltyMemberSearch.trim().toLowerCase())));
                   return filteredMembers.length ? (
                     <div className="overflow-x-auto">
                       <table className="w-full min-w-[920px] text-left text-sm">
@@ -3946,7 +4018,7 @@ function AdminPortal({
                           {filteredMembers.map((member) => (
                             <tr key={member.email} className="hover:bg-slate-50">
                               <td className="px-5 py-3 font-medium text-slate-900">{member.name || 'Member'}<span className="mt-0.5 block text-[10px] font-normal text-slate-500">{member.email}{member.phone ? ` · ${member.phone}` : ''}</span></td>
-                              <td className="px-4 py-3"><span className="rounded-full bg-indigo-50 px-2.5 py-1 text-[10px] font-semibold text-indigo-800">{member.membershipType === 'gold' ? 'Gold' : member.membershipType === 'platinum' ? 'Platinum · Company' : member.membershipType === 'silver' ? 'Legacy Silver · Corporate' : `Standard · ${member.tier}`}</span>{member.organization && <span className="mt-1 block text-[10px] text-slate-500">{member.organization}{member.companyId ? ` · ID ${member.companyId}` : ''}</span>}</td>
+                              <td className="px-4 py-3"><span className="rounded-full bg-indigo-50 px-2.5 py-1 text-[10px] font-semibold text-indigo-800">{member.membershipType === 'gold' ? 'Gold' : member.membershipType === 'platinum' ? 'Platinum · Company' : member.membershipType === 'silver' ? 'Legacy Silver · Corporate' : `Standard · ${member.tier}`}</span>{member.organization && <span className="mt-1 block text-[10px] text-slate-500">{member.organization}{member.companyId ? ` · ID ${member.companyId}` : ''}{member.companyContactEmail ? ` · Contact: ${member.companyContactEmail}` : ''}</span>}</td>
                               <td className="px-4 py-3 text-xs">{member.membershipType === 'regular' ? <span className="text-slate-500">Points program</span> : member.membershipType === 'platinum' ? <><span className={member.membershipActive ? 'font-semibold text-emerald-700' : 'font-semibold text-amber-700'}>{member.membershipActive ? `${member.membershipDiscountPercent}% off active` : 'Top-up required'}</span><span className="mt-1 block text-[10px] text-slate-500">{member.prepaidHoursBalance.toFixed(2)} prepaid hours remain · ${loyaltySettings.membershipPlans.platinum.hotStoneDiscount} off Hot Stone add-on</span></> : <><span className={member.membershipActive ? 'font-semibold text-emerald-700' : 'font-semibold text-amber-700'}>{member.membershipActive ? `${member.membershipDiscountPercent}% off active` : 'Payment required'}</span><span className="mt-1 block text-[10px] text-slate-500">Paid through: {member.paidThrough || 'not recorded'}{member.membershipType === 'gold' ? ` · Hot Stone add-on ${member.freeHotStoneAvailable ? 'available' : 'used'} this month` : ''}</span></>}</td>
                               <td className="px-4 py-3 text-right font-semibold tabular-nums text-slate-800">{member.pointsBalance.toLocaleString()} pts{member.membershipType === 'platinum' && <span className="mt-1 block text-[10px] font-normal text-slate-500">{member.prepaidHoursBalance.toFixed(2)} hrs</span>}</td>
                               <td className="px-4 py-3 text-right tabular-nums text-slate-600">{member.lifetimePoints.toLocaleString()} pts</td>
