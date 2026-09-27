@@ -539,6 +539,35 @@ function isCompatibleLoyaltyHeader(title, current, expected) {
   );
 }
 
+async function deleteSheetRows(sheets, title, rowNumbers) {
+  if (!rowNumbers.length) return;
+  const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
+  const spreadsheet = await sheets.spreadsheets.get({
+    spreadsheetId,
+    fields: 'sheets.properties',
+  });
+  const sheetId = (spreadsheet.data.sheets || [])
+    .find((sheet) => sheet.properties?.title === title)?.properties?.sheetId;
+  if (sheetId === undefined) throw new Error(`Sheet "${title}" was not found`);
+  // Delete from the bottom up so earlier row indexes stay valid as rows are removed.
+  const requests = [...new Set(rowNumbers)]
+    .sort((a, b) => b - a)
+    .map((rowNumber) => ({
+      deleteDimension: {
+        range: {
+          sheetId,
+          dimension: 'ROWS',
+          startIndex: rowNumber - 1,
+          endIndex: rowNumber,
+        },
+      },
+    }));
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: { requests },
+  });
+}
+
 function validateLoyaltySettings(input) {
   const membershipPlansInput = input?.membershipPlans || DEFAULT_LOYALTY_SETTINGS.membershipPlans;
   const goldInput = membershipPlansInput.gold || DEFAULT_LOYALTY_SETTINGS.membershipPlans.gold;
@@ -1682,12 +1711,12 @@ export default async function handler(req, res) {
     }
     const ownerOnlyRequest =
       (req.method === 'GET' && ['', 'calendar', 'patient-history', 'business-profile', 'google-ads-report', 'loyalty-dashboard'].includes(view)) ||
-      ['business-profile', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem'].includes(view);
+      ['business-profile', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem'].includes(view);
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
     if (ownerOnlyRequest && !getOwnerSession(req)) {
       return res.status(401).json({ message: 'Owner sign-in required' });
     }
-    if (['business-profile', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
+    if (['business-profile', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
       return res.status(403).json({ message: 'Profile update origin is not allowed' });
     }
 
@@ -2078,6 +2107,99 @@ export default async function handler(req, res) {
         console.error('Membership onboarding email error:', emailError);
       }
       return res.status(200).json({ member, emailSent, emailError, hoursBalance });
+    }
+
+    if (req.method === 'POST' && view === 'loyalty-remove-member') {
+      const email = normalizeLoyaltyEmail(req.body?.email);
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return res.status(400).json({ message: 'A valid member email is required.' });
+      }
+      await ensureLoyaltySheets(sheets);
+      const membersResult = await sheets.spreadsheets.values.get({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: 'LoyaltyMembers!A:J',
+      });
+      const rows = membersResult.data.values || [];
+      const rowIndex = rows.findIndex((row, index) => index > 0 && normalizeLoyaltyEmail(row[0]) === email);
+      if (rowIndex < 1) return res.status(404).json({ message: 'No loyalty member was found for that email.' });
+      const removedMember = {
+        email,
+        name: rows[rowIndex][1] || '',
+        membershipType: String(rows[rowIndex][5] || '').toLowerCase(),
+        organization: rows[rowIndex][6] || '',
+      };
+      await deleteSheetRows(sheets, 'LoyaltyMembers', [rowIndex + 1]);
+      let emailSent = false;
+      let emailError = '';
+      try {
+        const businessProfile = await getBusinessProfile(sheets);
+        await sendFormattedLoyaltyEmail(createGmailApi(), {
+          email,
+          ccEmail: rows[rowIndex][9] || '',
+          name: removedMember.name,
+          subject: `${businessProfile.businessName} loyalty membership ended`,
+          businessName: businessProfile.businessName,
+          heading: 'Membership ended',
+          intro: 'Your membership in the loyalty rewards program has been removed by our team.',
+          details: [
+            { label: 'Membership type', value: removedMember.membershipType || 'Not recorded' },
+            ...(removedMember.organization ? [{ label: 'Company', value: removedMember.organization }] : []),
+          ],
+          note: 'If you believe this was a mistake or would like to re-enroll, please contact the clinic.',
+        });
+        emailSent = true;
+      } catch (error) {
+        emailError = error.message || 'Removal confirmation email could not be sent.';
+        console.error('Loyalty member removal email error:', emailError);
+      }
+      return res.status(200).json({ removed: removedMember, emailSent, emailError });
+    }
+
+    if (req.method === 'POST' && view === 'loyalty-remove-company') {
+      const organization = String(req.body?.organization || '').trim();
+      if (!organization) {
+        return res.status(400).json({ message: 'A company/organization name is required.' });
+      }
+      await ensureLoyaltySheets(sheets);
+      const membersResult = await sheets.spreadsheets.values.get({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: 'LoyaltyMembers!A:J',
+      });
+      const rows = membersResult.data.values || [];
+      const matches = rows
+        .map((row, index) => ({ row, rowNumber: index + 1 }))
+        .filter(({ row, rowNumber }) =>
+          rowNumber > 1 &&
+          ['silver', 'platinum'].includes(String(row[5] || '').toLowerCase()) &&
+          String(row[6] || '').trim().toLowerCase() === organization.toLowerCase(),
+        );
+      if (!matches.length) return res.status(404).json({ message: 'No company members were found for that organization name.' });
+      const removedEmails = matches.map(({ row }) => normalizeLoyaltyEmail(row[0]));
+      const companyContactEmail = matches.find(({ row }) => row[9])?.row[9] || '';
+      await deleteSheetRows(sheets, 'LoyaltyMembers', matches.map(({ rowNumber }) => rowNumber));
+      const businessProfile = await getBusinessProfile(sheets);
+      const emailResults = await Promise.allSettled(matches.map(({ row }) => sendFormattedLoyaltyEmail(createGmailApi(), {
+        email: normalizeLoyaltyEmail(row[0]),
+        ccEmail: companyContactEmail,
+        name: row[1] || '',
+        subject: `${businessProfile.businessName} loyalty membership ended`,
+        businessName: businessProfile.businessName,
+        heading: 'Membership ended',
+        intro: `${organization}'s corporate loyalty membership with ${businessProfile.businessName} has been removed by our team.`,
+        details: [
+          { label: 'Membership type', value: String(row[5] || '').toLowerCase() },
+          { label: 'Company', value: organization },
+        ],
+        note: 'If you believe this was a mistake or would like to re-enroll, please contact the clinic.',
+      })));
+      const emailsSent = emailResults.filter((result) => result.status === 'fulfilled').length;
+      return res.status(200).json({
+        organization,
+        removedCount: matches.length,
+        removedEmails,
+        emailsSent,
+        emailsFailed: matches.length - emailsSent,
+      });
     }
 
     if (req.method === 'POST' && view === 'loyalty-topup') {

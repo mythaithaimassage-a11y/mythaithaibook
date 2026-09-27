@@ -2536,6 +2536,9 @@ function AdminPortal({
   const [selectedTopUpMember, setSelectedTopUpMember] = useState(null);
   const [selectedMembershipPayment, setSelectedMembershipPayment] = useState(null);
   const [membershipPaidThrough, setMembershipPaidThrough] = useState('');
+  const [memberPendingRemoval, setMemberPendingRemoval] = useState(null);
+  const [companyPendingRemoval, setCompanyPendingRemoval] = useState('');
+  const [isRemovingLoyaltyEntry, setIsRemovingLoyaltyEntry] = useState(false);
   const [selectedLoyaltyMember, setSelectedLoyaltyMember] = useState(null);
   const [loyaltyRedeemPoints, setLoyaltyRedeemPoints] = useState('');
   const [loyaltyRedeemBookingId, setLoyaltyRedeemBookingId] = useState('');
@@ -2804,6 +2807,52 @@ function AdminPortal({
       setLoyaltyError(error.message || 'Unable to record membership payment.');
     } finally {
       setLoyaltyActionId('');
+    }
+  };
+
+  const removeLoyaltyMember = async () => {
+    if (!memberPendingRemoval) return;
+    setIsRemovingLoyaltyEntry(true);
+    setLoyaltyError('');
+    setLoyaltyNotice('');
+    try {
+      const response = await fetch('/api/booking?view=loyalty-remove-member', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: memberPendingRemoval.email }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Unable to remove this member.');
+      setLoyaltyNotice(`${memberPendingRemoval.name || memberPendingRemoval.email} was removed from the loyalty program.${data.emailSent ? ' Removal notice emailed.' : data.emailError ? ` Removal notice failed: ${data.emailError}` : ''}`);
+      setMemberPendingRemoval(null);
+      await loadLoyaltyDashboard();
+    } catch (error) {
+      setLoyaltyError(error.message || 'Unable to remove this member.');
+    } finally {
+      setIsRemovingLoyaltyEntry(false);
+    }
+  };
+
+  const removeLoyaltyCompany = async () => {
+    if (!companyPendingRemoval) return;
+    setIsRemovingLoyaltyEntry(true);
+    setLoyaltyError('');
+    setLoyaltyNotice('');
+    try {
+      const response = await fetch('/api/booking?view=loyalty-remove-company', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ organization: companyPendingRemoval }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Unable to remove this company.');
+      setLoyaltyNotice(`Removed ${data.removedCount} member(s) from ${data.organization}.${data.emailsSent ? ` ${data.emailsSent} removal notice(s) emailed.` : ''}${data.emailsFailed ? ` ${data.emailsFailed} notice(s) failed.` : ''}`);
+      setCompanyPendingRemoval('');
+      await loadLoyaltyDashboard();
+    } catch (error) {
+      setLoyaltyError(error.message || 'Unable to remove this company.');
+    } finally {
+      setIsRemovingLoyaltyEntry(false);
     }
   };
 
@@ -4075,6 +4124,8 @@ function AdminPortal({
                                 <button type="button" disabled={!loyaltySettings.enabled || member.pointsBalance < loyaltySettings.redemptionPoints || !member.receiptCandidates?.length} onClick={() => { setSelectedLoyaltyMember(member); setLoyaltyRedeemPoints(String(loyaltySettings.redemptionPoints)); setLoyaltyRedeemBookingId(member.receiptCandidates?.[0]?.bookingId || ''); }} className="rounded-lg border border-indigo-200 px-3 py-2 text-[11px] font-semibold text-indigo-800 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-40">Redeem points</button>
                                 {member.membershipType === 'platinum' && <button type="button" disabled={!loyaltySettings.enabled} onClick={() => setSelectedTopUpMember(member)} className="block ml-auto rounded-lg border border-amber-200 px-3 py-2 text-[11px] font-semibold text-amber-900 hover:bg-amber-50 disabled:opacity-40">Record top-up</button>}
                                 {['gold', 'silver'].includes(member.membershipType) && <button type="button" onClick={() => { setSelectedMembershipPayment(member); setMembershipPaidThrough(member.paidThrough || ''); }} className="block ml-auto rounded-lg border border-emerald-200 px-3 py-2 text-[11px] font-semibold text-emerald-800 hover:bg-emerald-50">Record payment</button>}
+                                <button type="button" onClick={() => setMemberPendingRemoval(member)} className="block ml-auto rounded-lg border border-rose-200 px-3 py-2 text-[11px] font-semibold text-rose-700 hover:bg-rose-50">Remove member</button>
+                                {['silver', 'platinum'].includes(member.membershipType) && member.organization && <button type="button" onClick={() => setCompanyPendingRemoval(member.organization)} className="block ml-auto rounded-lg border border-rose-200 px-3 py-2 text-[11px] font-semibold text-rose-700 hover:bg-rose-50">Remove company</button>}
                               </td>
                             </tr>
                           ))}
@@ -4148,6 +4199,30 @@ function AdminPortal({
                 </div>
                 <p className="rounded-xl bg-amber-50 p-3 text-xs leading-5 text-amber-950">Only continue after confirming receipt of <strong>${Number(loyaltySettings.membershipPlans.platinum.topUpPrice).toFixed(2)}</strong>. This adds <strong>{loyaltySettings.membershipPlans.platinum.includedHours} prepaid hours</strong> to {selectedTopUpMember.organization || 'the employee account'}; completed sessions deduct their duration.</p>
                 <div className="flex justify-end gap-2 pt-1"><button type="button" onClick={() => setSelectedTopUpMember(null)} className="rounded-lg border border-slate-200 px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">Cancel</button><button type="button" onClick={recordPlatinumTopUp} disabled={!!loyaltyActionId} className="rounded-lg bg-amber-800 px-4 py-2.5 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-50">{loyaltyActionId ? 'Recording…' : 'Payment received · add hours'}</button></div>
+              </div>
+            </div>
+          )}
+          {memberPendingRemoval && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setMemberPendingRemoval(null); }}>
+              <div className="w-full max-w-md space-y-4 rounded-2xl bg-white p-5 shadow-2xl sm:p-6" role="dialog" aria-modal="true" aria-labelledby="remove-member-title">
+                <div className="flex items-start justify-between gap-3">
+                  <div><p className="text-[10px] font-bold uppercase tracking-wider text-rose-700">Remove from loyalty program</p><h3 id="remove-member-title" className="mt-1 text-lg font-bold text-slate-900">Remove {memberPendingRemoval.name || memberPendingRemoval.email}?</h3><p className="mt-1 text-xs text-slate-500">{memberPendingRemoval.email} · {memberPendingRemoval.membershipType}</p></div>
+                  <button type="button" onClick={() => setMemberPendingRemoval(null)} aria-label="Close remove member dialog" className="rounded-lg p-2 text-slate-400 hover:bg-slate-100"><X className="h-4 w-4" /></button>
+                </div>
+                <p className="rounded-xl bg-rose-50 p-3 text-xs leading-5 text-rose-950">This immediately removes the member from the loyalty program. Their points/hours balance and membership benefits will no longer apply. This does not affect past receipts. They will be emailed a notice.</p>
+                <div className="flex justify-end gap-2 pt-1"><button type="button" onClick={() => setMemberPendingRemoval(null)} className="rounded-lg border border-slate-200 px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">Cancel</button><button type="button" onClick={removeLoyaltyMember} disabled={isRemovingLoyaltyEntry} className="rounded-lg bg-rose-800 px-4 py-2.5 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50">{isRemovingLoyaltyEntry ? 'Removing…' : 'Remove member'}</button></div>
+              </div>
+            </div>
+          )}
+          {companyPendingRemoval && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setCompanyPendingRemoval(''); }}>
+              <div className="w-full max-w-md space-y-4 rounded-2xl bg-white p-5 shadow-2xl sm:p-6" role="dialog" aria-modal="true" aria-labelledby="remove-company-title">
+                <div className="flex items-start justify-between gap-3">
+                  <div><p className="text-[10px] font-bold uppercase tracking-wider text-rose-700">Remove corporate account</p><h3 id="remove-company-title" className="mt-1 text-lg font-bold text-slate-900">Remove all members from {companyPendingRemoval}?</h3></div>
+                  <button type="button" onClick={() => setCompanyPendingRemoval('')} aria-label="Close remove company dialog" className="rounded-lg p-2 text-slate-400 hover:bg-slate-100"><X className="h-4 w-4" /></button>
+                </div>
+                <p className="rounded-xl bg-rose-50 p-3 text-xs leading-5 text-rose-950">This removes every Platinum or Legacy Silver employee enrolled under <strong>{companyPendingRemoval}</strong> from the loyalty program. Each employee will be emailed a removal notice (with the company contact copied, if one is on file). This does not affect past receipts.</p>
+                <div className="flex justify-end gap-2 pt-1"><button type="button" onClick={() => setCompanyPendingRemoval('')} className="rounded-lg border border-slate-200 px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">Cancel</button><button type="button" onClick={removeLoyaltyCompany} disabled={isRemovingLoyaltyEntry} className="rounded-lg bg-rose-800 px-4 py-2.5 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50">{isRemovingLoyaltyEntry ? 'Removing…' : 'Remove company'}</button></div>
               </div>
             </div>
           )}

@@ -167,6 +167,15 @@ points or prepaid-hour balances, and redemption or top-up confirmations.
 Platinum top-ups are recorded only after the owner confirms payment, add the
 configured hours to that employee's balance, and email the updated balance.
 
+From the **Members & balances** table, the owner can remove a single member
+(any plan) with the **Remove member** button, which deletes their row from
+`LoyaltyMembers` and emails them a removal notice (copying the company contact
+if one is on file). For Platinum or Legacy Silver employees, a **Remove
+company** button removes every employee enrolled under that same company name
+in one action and emails each removed employee, copying the company contact.
+Removal does not alter past receipts or ledger history; it only ends the
+member's active benefits and points/hours balance going forward.
+
 The owner dashboard includes a **Business profile** section for editing the
 business name, optional legal name, description, email, phone, website, location,
 and optional GST/HST registration number for receipts. Profile values are saved
