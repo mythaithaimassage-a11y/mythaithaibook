@@ -201,6 +201,23 @@ function getTherapistFromDescription(description = '') {
   return description.match(/^Therapist:\s*(.+)$/m)?.[1]?.trim() || '';
 }
 
+function parseBookingFieldsFromDescription(description = '') {
+  const field = (label) => description.match(new RegExp(`^${label}:\\s*(.+)$`, 'm'))?.[1]?.trim() || '';
+  const paid = field('Paid').replace(/^\$/, '');
+  const total = field('Total').replace(/^\$/, '');
+  return {
+    bookingId: field('Booking'),
+    customerName: field('Customer'),
+    phone: field('Phone'),
+    email: field('Email'),
+    serviceName: field('Service'),
+    therapistName: field('Therapist'),
+    paymentOption: field('Payment'),
+    paidAmount: Number(paid) || 0,
+    total: Number(total) || 0,
+  };
+}
+
 function getLocalDateTime(value) {
   const date = new Date(value);
   return {
@@ -1665,12 +1682,12 @@ export default async function handler(req, res) {
     }
     const ownerOnlyRequest =
       (req.method === 'GET' && ['', 'calendar', 'patient-history', 'business-profile', 'google-ads-report', 'loyalty-dashboard'].includes(view)) ||
-      ['business-profile', 'mark-paid', 'issue-receipt', 'link-calendar-event', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem'].includes(view);
+      ['business-profile', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem'].includes(view);
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
     if (ownerOnlyRequest && !getOwnerSession(req)) {
       return res.status(401).json({ message: 'Owner sign-in required' });
     }
-    if (['business-profile', 'mark-paid', 'issue-receipt', 'link-calendar-event', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
+    if (['business-profile', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
       return res.status(403).json({ message: 'Profile update origin is not allowed' });
     }
 
@@ -3043,6 +3060,7 @@ export default async function handler(req, res) {
         const calendars = await calendarApi.calendarList.list({ minAccessRole: 'reader', maxResults: 250 });
         const events = [];
         const calendarErrors = [];
+        const pendingAutoLinks = [];
 
         for (const calendarId of calendarIds) {
           try {
@@ -3057,14 +3075,88 @@ export default async function handler(req, res) {
             for (const event of result.data.items || []) {
               const location = event.location || '';
               const start = event.start?.dateTime || event.start?.date || '';
+              const end = event.end?.dateTime || event.end?.date || '';
               const localStart = start ? getLocalDateTime(start) : { date: '', time: '' };
               const bookingRow = bookingByEventId.get(event.id);
-              const eventTherapist = bookingRow?.[6] || getTherapistFromDescription(event.description);
+              const parsedDescription = parseBookingFieldsFromDescription(event.description || '');
+              const eventTherapist = bookingRow?.[6] || parsedDescription.therapistName || getTherapistFromDescription(event.description);
               if (
                 localStart.date === date &&
                 (!branch || location.toLowerCase().includes(branch)) &&
                 (!therapist || eventTherapist.toLowerCase() === therapist)
               ) {
+                let booking = bookingRow ? {
+                  id: bookingRow[0] || '',
+                  customerName: bookingRow[1] || '',
+                  phone: bookingRow[2] || '',
+                  email: bookingRow[3] || '',
+                  branchName: bookingRow[4] || '',
+                  serviceName: bookingRow[5] || '',
+                  therapistName: bookingRow[6] || '',
+                  date: bookingRow[7] || localStart.date,
+                  time: bookingRow[8] || localStart.time,
+                  paymentOption: bookingRow[9] || '',
+                  paidAmount: Number(bookingRow[10]) || 0,
+                  total: Number(bookingRow[11]) || 0,
+                  durationMinutes: Number(bookingRow[12]) || 0,
+                  receiptNumber: bookingRow[18] || '',
+                  receiptEmailStatus: bookingRow[20] || '',
+                } : null;
+
+                if (!booking) {
+                  // Automatically create a linked booking record for calendar events
+                  // that were never written to Sheet1 (e.g. a walk-in typed directly
+                  // into Google Calendar, or a booking whose sheet write failed).
+                  // Structured fields from the event description (written by the
+                  // booking flow) are used when present; otherwise best-effort
+                  // values are derived from the event summary/location.
+                  const [summaryService, summaryName] = String(event.summary || '').split(' - ');
+                  const autoDurationMinutes = start && end ? Math.max(0, Math.round((new Date(end) - new Date(start)) / 60000)) : 0;
+                  const autoBookingId = crypto.randomUUID();
+                  const autoCustomerName = parsedDescription.customerName || (summaryName || '').trim() || 'Walk-in customer';
+                  const autoServiceName = parsedDescription.serviceName || (summaryService || '').trim() || event.summary || '';
+                  const autoRow = [
+                    autoBookingId,
+                    autoCustomerName,
+                    parsedDescription.phone || '',
+                    parsedDescription.email || '',
+                    location,
+                    autoServiceName,
+                    eventTherapist,
+                    localStart.date,
+                    localStart.time,
+                    parsedDescription.paymentOption || '',
+                    parsedDescription.paidAmount || 0,
+                    parsedDescription.total || 0,
+                    autoDurationMinutes,
+                    '',
+                    '',
+                    calendarId,
+                    event.id,
+                    new Date().toISOString(),
+                    '', '', '', '', '', '',
+                  ];
+                  pendingAutoLinks.push(autoRow);
+                  booking = {
+                    id: autoBookingId,
+                    customerName: autoCustomerName,
+                    phone: parsedDescription.phone || '',
+                    email: parsedDescription.email || '',
+                    branchName: location,
+                    serviceName: autoServiceName,
+                    therapistName: eventTherapist,
+                    date: localStart.date,
+                    time: localStart.time,
+                    paymentOption: parsedDescription.paymentOption || '',
+                    paidAmount: parsedDescription.paidAmount || 0,
+                    total: parsedDescription.total || 0,
+                    durationMinutes: autoDurationMinutes,
+                    receiptNumber: '',
+                    receiptEmailStatus: '',
+                    autoLinked: true,
+                  };
+                }
+
                 events.push({
                   id: event.id,
                   calendarId,
@@ -3073,26 +3165,10 @@ export default async function handler(req, res) {
                   location,
                   description: event.description || '',
                   start,
-                  end: event.end?.dateTime || event.end?.date || '',
+                  end,
                   therapistName: eventTherapist,
                   localTime: localStart.time,
-                  booking: bookingRow ? {
-                    id: bookingRow[0] || '',
-                    customerName: bookingRow[1] || '',
-                    phone: bookingRow[2] || '',
-                    email: bookingRow[3] || '',
-                    branchName: bookingRow[4] || '',
-                    serviceName: bookingRow[5] || '',
-                    therapistName: bookingRow[6] || '',
-                    date: bookingRow[7] || localStart.date,
-                    time: bookingRow[8] || localStart.time,
-                    paymentOption: bookingRow[9] || '',
-                    paidAmount: Number(bookingRow[10]) || 0,
-                    total: Number(bookingRow[11]) || 0,
-                    durationMinutes: Number(bookingRow[12]) || 0,
-                    receiptNumber: bookingRow[18] || '',
-                    receiptEmailStatus: bookingRow[20] || '',
-                  } : null,
+                  booking,
                 });
               }
             }
@@ -3101,6 +3177,16 @@ export default async function handler(req, res) {
             calendarErrors.push(`${calendarId}: ${error.message || 'access denied'}`);
           }
         }
+
+        if (pendingAutoLinks.length > 0) {
+          await sheets.spreadsheets.values.append({
+            spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+            range: 'Sheet1!A:X',
+            valueInputOption: 'USER_ENTERED',
+            requestBody: { values: pendingAutoLinks },
+          });
+        }
+
         return res.status(200).json({
           date,
           calendarId: PRIMARY_CALENDAR_ID,
@@ -3144,36 +3230,25 @@ export default async function handler(req, res) {
       });
     }
 
-    if (req.method === 'POST' && req.query?.view === 'link-calendar-event') {
-      const calendarId = String(req.body?.calendarId || '').trim();
-      const eventId = String(req.body?.eventId || '').trim();
-      const customerName = String(req.body?.customerName || '').trim();
+    if (req.method === 'POST' && req.query?.view === 'complete-booking-details') {
+      const bookingId = String(req.body?.bookingId || '').trim();
       const email = String(req.body?.email || '').trim().toLowerCase();
       const phone = String(req.body?.phone || '').trim();
-      const branchName = String(req.body?.branchName || '').trim();
-      const serviceName = String(req.body?.serviceName || '').trim();
-      const therapistName = String(req.body?.therapistName || '').trim();
-      const date = String(req.body?.date || '').trim();
-      const time = String(req.body?.time || '').trim();
-      const durationMinutes = Number(req.body?.durationMinutes) || 0;
+      const total = req.body?.total === undefined || req.body?.total === '' ? null : Number(req.body.total);
+      const paidAmount = req.body?.paidAmount === undefined || req.body?.paidAmount === '' ? null : Number(req.body.paidAmount);
       const paymentOption = String(req.body?.paymentOption || '').trim();
-      const paidAmount = Number(req.body?.paidAmount) || 0;
-      const total = Number(req.body?.total) || 0;
 
-      if (!calendarId || !eventId) {
-        return res.status(400).json({ message: 'A calendar event is required to create a linked booking' });
+      if (!bookingId || bookingId.length > 100) {
+        return res.status(400).json({ message: 'A valid booking ID is required' });
       }
-      if (!customerName) {
-        return res.status(400).json({ message: 'A patient name is required' });
+      if (email && !/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(email)) {
+        return res.status(400).json({ message: 'Enter a valid patient email address' });
       }
-      if (!email || !/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(email)) {
-        return res.status(400).json({ message: 'A valid patient email is required' });
+      if (total !== null && (Number.isNaN(total) || total <= 0)) {
+        return res.status(400).json({ message: 'Enter a valid appointment total' });
       }
-      if (total <= 0) {
-        return res.status(400).json({ message: 'A valid appointment total is required' });
-      }
-      if (paidAmount < 0 || paidAmount > total + 0.005) {
-        return res.status(400).json({ message: 'The amount paid cannot exceed the appointment total' });
+      if (paidAmount !== null && (Number.isNaN(paidAmount) || paidAmount < 0)) {
+        return res.status(400).json({ message: 'Enter a valid amount paid' });
       }
       if (!process.env.GOOGLE_SPREADSHEET_ID) {
         throw new Error('GOOGLE_SPREADSHEET_ID is not configured');
@@ -3185,63 +3260,62 @@ export default async function handler(req, res) {
       });
       const rows = result.data.values || [];
       const hasHeader = rows[0]?.[0] === 'Booking ID';
-      const dataRows = hasHeader ? rows.slice(1) : rows;
-      const alreadyLinked = dataRows.some((row) => row[16] === eventId);
-      if (alreadyLinked) {
-        return res.status(409).json({ message: 'This calendar event is already linked to a booking record' });
-      }
+      const startIndex = hasHeader ? 1 : 0;
+      const rowIndex = rows.findIndex((row, index) => index >= startIndex && String(row[0] || '') === bookingId);
+      if (rowIndex < 0) return res.status(404).json({ message: 'Booking was not found in Google Sheets' });
 
-      const bookingId = crypto.randomUUID();
-      const rowValues = [
-        bookingId,
-        customerName,
-        phone,
-        email,
-        branchName,
-        serviceName,
-        therapistName,
-        date,
-        time,
-        paymentOption,
-        paidAmount,
-        total,
-        durationMinutes || '',
-        '',
-        '',
-        calendarId,
-        eventId,
-        new Date().toISOString(),
-        '',
-        '',
-        '',
-        '',
-        '',
-        '',
-      ];
-      await sheets.spreadsheets.values.append({
+      const row = rows[rowIndex];
+      const resolvedTotal = total !== null ? total : (Number(row[11]) || 0);
+      const resolvedPaid = paidAmount !== null ? paidAmount : (Number(row[10]) || 0);
+      if (resolvedPaid > resolvedTotal + 0.005) {
+        return res.status(400).json({ message: 'The amount paid cannot exceed the appointment total' });
+      }
+      const updatedRow = {
+        email: email || row[3] || '',
+        phone: phone || row[2] || '',
+        paymentOption: paymentOption || row[9] || '',
+        paidAmount: resolvedPaid,
+        total: resolvedTotal,
+      };
+      const sheetRow = rowIndex + 1;
+      await sheets.spreadsheets.values.update({
         spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'Sheet1!A:X',
+        range: `Sheet1!C${sheetRow}:L${sheetRow}`,
         valueInputOption: 'USER_ENTERED',
-        requestBody: { values: [rowValues] },
+        requestBody: {
+          values: [[
+            updatedRow.phone,
+            updatedRow.email,
+            row[4] || '',
+            row[5] || '',
+            row[6] || '',
+            row[7] || '',
+            row[8] || '',
+            updatedRow.paymentOption,
+            updatedRow.paidAmount,
+            updatedRow.total,
+          ]],
+        },
       });
 
       return res.status(200).json({
         booking: {
-          id: bookingId,
-          customerName,
-          phone,
-          email,
-          branchName,
-          serviceName,
-          therapistName,
-          date,
-          time,
-          paymentOption,
-          paidAmount,
-          total,
-          durationMinutes,
-          receiptNumber: '',
-          receiptEmailStatus: '',
+          id: row[0] || '',
+          customerName: row[1] || '',
+          phone: updatedRow.phone,
+          email: updatedRow.email,
+          branchName: row[4] || '',
+          serviceName: row[5] || '',
+          therapistName: row[6] || '',
+          date: row[7] || '',
+          time: row[8] || '',
+          paymentOption: updatedRow.paymentOption,
+          paidAmount: updatedRow.paidAmount,
+          total: updatedRow.total,
+          durationMinutes: Number(row[12]) || 0,
+          receiptNumber: row[18] || '',
+          receiptEmailStatus: row[20] || '',
+          autoLinked: true,
         },
       });
     }

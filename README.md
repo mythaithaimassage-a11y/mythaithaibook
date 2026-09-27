@@ -218,11 +218,13 @@ services are treated as HST-exempt; other services use the Ontario 13%
 tax-inclusive rate for the receipt breakdown.
 
 Calendar events created outside the booking flow (for example, an appointment
-typed directly into Google Calendar for a walk-in) have no matching row in
-`Sheet1`, so opening them shows "not created through the booking flow" instead
-of payment details. Fill in the patient name, email, service, payment method,
-total, and amount paid in that form to create a linked booking record for the
-event, after which payment can be tracked and a receipt issued normally.
+typed directly into Google Calendar for a walk-in) are automatically linked to
+`Sheet1` when the owner calendar view is loaded. The app creates a booking row
+from the event details (and from structured fields in the event description
+when available), so staff can immediately track payment and continue to receipt
+issuing. If required details such as patient email or appointment total are
+missing, the appointment panel shows a short "Save details" form to complete
+only those missing fields.
 
 For new bookings to be written to the primary calendar, share that calendar
 with the service-account email as an Editor. For the embedded native calendar

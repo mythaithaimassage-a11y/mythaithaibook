@@ -2973,59 +2973,47 @@ function AdminPortal({
   };
 
   useEffect(() => {
-    if (selectedCalendarEvent && !selectedCalendarEvent.booking) {
-      const [parsedService, parsedName] = String(selectedCalendarEvent.summary || '').split(' - ');
+    const booking = selectedCalendarEvent?.booking;
+    if (booking?.autoLinked) {
       setLinkEventForm({
-        customerName: (parsedName || '').trim(),
-        email: '',
-        phone: '',
-        serviceName: (parsedService || '').trim(),
-        paymentOption: 'Cash',
-        paidAmount: '',
-        total: '',
+        email: booking.email || '',
+        phone: booking.phone || '',
+        paymentOption: booking.paymentOption || 'Cash',
+        paidAmount: booking.paidAmount ? String(booking.paidAmount) : '',
+        total: booking.total ? String(booking.total) : '',
       });
     } else {
       setLinkEventForm(null);
     }
-  }, [selectedCalendarEvent?.id]);
+  }, [selectedCalendarEvent?.id, selectedCalendarEvent?.booking?.autoLinked]);
 
-  const linkCalendarEvent = async (event) => {
+  const completeBookingDetails = async (event) => {
     event.preventDefault();
-    if (!selectedCalendarEvent || !linkEventForm) return;
+    const booking = selectedCalendarEvent?.booking;
+    if (!booking || !linkEventForm) return;
     setIsLinkingEvent(true);
     setReceiptError('');
     setReceiptNotice('');
     try {
-      const durationMinutes = selectedCalendarEvent.start && selectedCalendarEvent.end
-        ? Math.round((new Date(selectedCalendarEvent.end) - new Date(selectedCalendarEvent.start)) / 60000)
-        : 60;
-      const response = await fetch('/api/booking?view=link-calendar-event', {
+      const response = await fetch('/api/booking?view=complete-booking-details', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          calendarId: selectedCalendarEvent.calendarId,
-          eventId: selectedCalendarEvent.id,
-          customerName: linkEventForm.customerName,
+          bookingId: booking.id,
           email: linkEventForm.email,
           phone: linkEventForm.phone,
-          branchName: selectedCalendarEvent.location || '',
-          serviceName: linkEventForm.serviceName || selectedCalendarEvent.summary,
-          therapistName: selectedCalendarEvent.therapistName || '',
-          date: calendarDate,
-          time: selectedCalendarEvent.localTime,
-          durationMinutes,
           paymentOption: linkEventForm.paymentOption,
-          paidAmount: Number(linkEventForm.paidAmount) || 0,
-          total: Number(linkEventForm.total) || 0,
+          paidAmount: linkEventForm.paidAmount,
+          total: linkEventForm.total,
         }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
       setSelectedCalendarEvent((current) => current ? { ...current, booking: data.booking } : current);
-      setReceiptNotice('Booking record created and linked to this calendar event. You can now issue a receipt once fully paid.');
-      await loadCalendar();
+      setBookings((current) => current.map((item) => item.id === data.booking.id ? { ...item, ...data.booking } : item));
+      setReceiptNotice('Booking details saved.');
     } catch (error) {
-      setReceiptError(error.message || 'Unable to link this calendar event to a booking record');
+      setReceiptError(error.message || 'Unable to save these booking details');
     } finally {
       setIsLinkingEvent(false);
     }
@@ -4637,8 +4625,14 @@ function AdminPortal({
               {(() => {
                 const booking = issuedReceipt?.booking || selectedCalendarEvent.booking;
                 const paidInFull = booking && Number(booking.total) > 0 && Number(booking.paidAmount) + 0.005 >= Number(booking.total);
+                const needsDetails = booking?.autoLinked && (!booking.email || !(Number(booking.total) > 0));
                 return booking ? (
                   <>
+                    {booking.autoLinked && (
+                      <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-950">
+                        This appointment was booked directly on the calendar and was automatically linked to a new booking record. {needsDetails ? 'Add the missing details below to enable receipt issuing.' : ''}
+                      </div>
+                    )}
                     <div className="grid gap-3 sm:grid-cols-2">
                       {[
                         ['Patient', booking.customerName],
@@ -4655,7 +4649,34 @@ function AdminPortal({
                       <div className="flex justify-between text-sm text-slate-500"><span>Amount paid</span><span>${Number(booking.paidAmount || 0).toFixed(2)}</span></div>
                       <div className="mt-2 flex justify-between text-sm font-bold text-slate-900"><span>Appointment total</span><span>${Number(booking.total || 0).toFixed(2)}</span></div>
                     </div>
-                    {!issuedReceipt && booking.id && Number(booking.total) > 0 && (
+                    {!issuedReceipt && needsDetails && linkEventForm && (
+                      <form onSubmit={completeBookingDetails} className="space-y-3 rounded-xl border border-slate-200 p-4">
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <label className="text-xs font-semibold text-slate-600">Patient email
+                            <input required type="email" value={linkEventForm.email} onChange={(event) => setLinkEventForm((current) => ({ ...current, email: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                          </label>
+                          <label className="text-xs font-semibold text-slate-600">Phone
+                            <input value={linkEventForm.phone} onChange={(event) => setLinkEventForm((current) => ({ ...current, phone: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                          </label>
+                          <label className="text-xs font-semibold text-slate-600">Payment method
+                            <select value={linkEventForm.paymentOption} onChange={(event) => setLinkEventForm((current) => ({ ...current, paymentOption: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                              <option>Cash</option>
+                              <option>Card</option>
+                              <option>E-transfer</option>
+                              <option>Other</option>
+                            </select>
+                          </label>
+                          <label className="text-xs font-semibold text-slate-600">Appointment total ($)
+                            <input required type="number" min="0" step="0.01" value={linkEventForm.total} onChange={(event) => setLinkEventForm((current) => ({ ...current, total: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                          </label>
+                          <label className="text-xs font-semibold text-slate-600">Amount paid ($)
+                            <input type="number" min="0" step="0.01" value={linkEventForm.paidAmount} onChange={(event) => setLinkEventForm((current) => ({ ...current, paidAmount: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                          </label>
+                        </div>
+                        <button type="submit" disabled={isLinkingEvent} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-950 px-4 py-2.5 text-xs font-bold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50">{isLinkingEvent ? 'Saving…' : 'Save details'}</button>
+                      </form>
+                    )}
+                    {!issuedReceipt && !needsDetails && booking.id && Number(booking.total) > 0 && (
                       <label className={`flex items-start gap-3 rounded-xl border px-4 py-3 ${paidInFull ? 'border-emerald-200 bg-emerald-50' : 'border-slate-200 bg-white'}`}>
                         <input
                           type="checkbox"
@@ -4680,7 +4701,7 @@ function AdminPortal({
                         <p className="mt-3 text-xs text-emerald-900">Receipt email sent to {issuedReceipt.booking.email}.</p>
                       </div>
                     )}
-                    {!issuedReceipt && (
+                    {!issuedReceipt && !needsDetails && (
                       <div className="flex flex-col-reverse gap-3 border-t border-slate-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
                         <p className="text-xs leading-5 text-slate-500">{!paidInFull ? 'Receipts are available only after full payment is recorded.' : !booking.email ? 'Add a valid patient email to the booking before issuing a receipt.' : !booking.id ? 'This appointment is not linked to a booking record.' : 'A receipt will be emailed to the patient and recorded with this booking.'}</p>
                         <button type="button" disabled={isIssuingReceipt || !paidInFull || !booking.email || !booking.id} onClick={() => issueReceipt(booking.id)} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-emerald-950 px-4 py-2.5 text-xs font-bold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"><ReceiptText className="h-4 w-4" />{isIssuingReceipt ? 'Issuing…' : 'Issue & email receipt'}</button>
@@ -4688,44 +4709,9 @@ function AdminPortal({
                     )}
                   </>
                 ) : (
-                  <>
-                    <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-950">
-                      This calendar event was not created through the booking flow, so it has no linked record in Google Sheets. Fill in the details below to create one — this links the event to a booking so payment can be tracked and a receipt can be issued.
-                    </div>
-                    {linkEventForm && (
-                      <form onSubmit={linkCalendarEvent} className="space-y-3 rounded-xl border border-slate-200 p-4">
-                        <div className="grid gap-3 sm:grid-cols-2">
-                          <label className="text-xs font-semibold text-slate-600">Patient name
-                            <input required value={linkEventForm.customerName} onChange={(event) => setLinkEventForm((current) => ({ ...current, customerName: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-                          </label>
-                          <label className="text-xs font-semibold text-slate-600">Patient email
-                            <input required type="email" value={linkEventForm.email} onChange={(event) => setLinkEventForm((current) => ({ ...current, email: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-                          </label>
-                          <label className="text-xs font-semibold text-slate-600">Phone
-                            <input value={linkEventForm.phone} onChange={(event) => setLinkEventForm((current) => ({ ...current, phone: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-                          </label>
-                          <label className="text-xs font-semibold text-slate-600">Service
-                            <input required value={linkEventForm.serviceName} onChange={(event) => setLinkEventForm((current) => ({ ...current, serviceName: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-                          </label>
-                          <label className="text-xs font-semibold text-slate-600">Payment method
-                            <select value={linkEventForm.paymentOption} onChange={(event) => setLinkEventForm((current) => ({ ...current, paymentOption: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
-                              <option>Cash</option>
-                              <option>Card</option>
-                              <option>E-transfer</option>
-                              <option>Other</option>
-                            </select>
-                          </label>
-                          <label className="text-xs font-semibold text-slate-600">Appointment total ($)
-                            <input required type="number" min="0" step="0.01" value={linkEventForm.total} onChange={(event) => setLinkEventForm((current) => ({ ...current, total: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-                          </label>
-                          <label className="text-xs font-semibold text-slate-600">Amount paid ($)
-                            <input type="number" min="0" step="0.01" value={linkEventForm.paidAmount} onChange={(event) => setLinkEventForm((current) => ({ ...current, paidAmount: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-                          </label>
-                        </div>
-                        <button type="submit" disabled={isLinkingEvent} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-950 px-4 py-2.5 text-xs font-bold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50">{isLinkingEvent ? 'Creating booking record…' : 'Create & link booking record'}</button>
-                      </form>
-                    )}
-                  </>
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-950">
+                    This calendar event could not be automatically linked to a booking record. Reload the calendar to try again.
+                  </div>
                 );
               })()}
             </div>
