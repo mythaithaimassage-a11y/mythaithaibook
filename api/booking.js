@@ -499,16 +499,7 @@ async function ensureLoyaltySheets(sheets) {
         requestBody: { values: [headers] },
       });
     } else if (
-      (
-        ['LoyaltyMembers', 'LoyaltyLedger'].includes(title) &&
-        current.length === headers.length - 1 &&
-        current.every((header, index) => header === headers[index])
-      ) ||
-      (
-        title === 'LoyaltyMembers' &&
-        headers.slice(0, 5).every((header, index) => current[index] === header) &&
-        current.slice(5).every((header) => !header)
-      )
+      isCompatibleLoyaltyHeader(title, current, headers)
     ) {
       await sheets.spreadsheets.values.update({
         spreadsheetId,
@@ -520,6 +511,15 @@ async function ensureLoyaltySheets(sheets) {
       throw new Error(`${title} sheet has an unexpected header format`);
     }
   }
+}
+
+function isCompatibleLoyaltyHeader(title, current, expected) {
+  if (!['LoyaltyMembers', 'LoyaltyLedger'].includes(title)) return false;
+  const minimumLength = title === 'LoyaltyMembers' ? 5 : 8;
+  if (current.length < minimumLength || current.length >= expected.length) return false;
+  return current.every((header, index) =>
+    String(header || '').trim() === expected[index],
+  );
 }
 
 function validateLoyaltySettings(input) {
