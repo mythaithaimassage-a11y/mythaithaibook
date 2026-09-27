@@ -1665,12 +1665,12 @@ export default async function handler(req, res) {
     }
     const ownerOnlyRequest =
       (req.method === 'GET' && ['', 'calendar', 'patient-history', 'business-profile', 'google-ads-report', 'loyalty-dashboard'].includes(view)) ||
-      ['business-profile', 'mark-paid', 'issue-receipt', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem'].includes(view);
+      ['business-profile', 'mark-paid', 'issue-receipt', 'link-calendar-event', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem'].includes(view);
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
     if (ownerOnlyRequest && !getOwnerSession(req)) {
       return res.status(401).json({ message: 'Owner sign-in required' });
     }
-    if (['business-profile', 'mark-paid', 'issue-receipt', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
+    if (['business-profile', 'mark-paid', 'issue-receipt', 'link-calendar-event', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
       return res.status(403).json({ message: 'Profile update origin is not allowed' });
     }
 
@@ -3067,6 +3067,7 @@ export default async function handler(req, res) {
               ) {
                 events.push({
                   id: event.id,
+                  calendarId,
                   calendarName: calendar?.summary || calendarId,
                   summary: event.summary || '',
                   location,
@@ -3140,6 +3141,108 @@ export default async function handler(req, res) {
           receiptEmailStatus: row[20] || '',
           syncedToSheets: true,
         })),
+      });
+    }
+
+    if (req.method === 'POST' && req.query?.view === 'link-calendar-event') {
+      const calendarId = String(req.body?.calendarId || '').trim();
+      const eventId = String(req.body?.eventId || '').trim();
+      const customerName = String(req.body?.customerName || '').trim();
+      const email = String(req.body?.email || '').trim().toLowerCase();
+      const phone = String(req.body?.phone || '').trim();
+      const branchName = String(req.body?.branchName || '').trim();
+      const serviceName = String(req.body?.serviceName || '').trim();
+      const therapistName = String(req.body?.therapistName || '').trim();
+      const date = String(req.body?.date || '').trim();
+      const time = String(req.body?.time || '').trim();
+      const durationMinutes = Number(req.body?.durationMinutes) || 0;
+      const paymentOption = String(req.body?.paymentOption || '').trim();
+      const paidAmount = Number(req.body?.paidAmount) || 0;
+      const total = Number(req.body?.total) || 0;
+
+      if (!calendarId || !eventId) {
+        return res.status(400).json({ message: 'A calendar event is required to create a linked booking' });
+      }
+      if (!customerName) {
+        return res.status(400).json({ message: 'A patient name is required' });
+      }
+      if (!email || !/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(email)) {
+        return res.status(400).json({ message: 'A valid patient email is required' });
+      }
+      if (total <= 0) {
+        return res.status(400).json({ message: 'A valid appointment total is required' });
+      }
+      if (paidAmount < 0 || paidAmount > total + 0.005) {
+        return res.status(400).json({ message: 'The amount paid cannot exceed the appointment total' });
+      }
+      if (!process.env.GOOGLE_SPREADSHEET_ID) {
+        throw new Error('GOOGLE_SPREADSHEET_ID is not configured');
+      }
+
+      const result = await sheets.spreadsheets.values.get({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: 'Sheet1!A:U',
+      });
+      const rows = result.data.values || [];
+      const hasHeader = rows[0]?.[0] === 'Booking ID';
+      const dataRows = hasHeader ? rows.slice(1) : rows;
+      const alreadyLinked = dataRows.some((row) => row[16] === eventId);
+      if (alreadyLinked) {
+        return res.status(409).json({ message: 'This calendar event is already linked to a booking record' });
+      }
+
+      const bookingId = crypto.randomUUID();
+      const rowValues = [
+        bookingId,
+        customerName,
+        phone,
+        email,
+        branchName,
+        serviceName,
+        therapistName,
+        date,
+        time,
+        paymentOption,
+        paidAmount,
+        total,
+        durationMinutes || '',
+        '',
+        '',
+        calendarId,
+        eventId,
+        new Date().toISOString(),
+        '',
+        '',
+        '',
+        '',
+        '',
+        '',
+      ];
+      await sheets.spreadsheets.values.append({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: 'Sheet1!A:X',
+        valueInputOption: 'USER_ENTERED',
+        requestBody: { values: [rowValues] },
+      });
+
+      return res.status(200).json({
+        booking: {
+          id: bookingId,
+          customerName,
+          phone,
+          email,
+          branchName,
+          serviceName,
+          therapistName,
+          date,
+          time,
+          paymentOption,
+          paidAmount,
+          total,
+          durationMinutes,
+          receiptNumber: '',
+          receiptEmailStatus: '',
+        },
       });
     }
 

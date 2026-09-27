@@ -217,6 +217,13 @@ configured Gmail OAuth sender and the saved business profile. RMT/acupuncture
 services are treated as HST-exempt; other services use the Ontario 13%
 tax-inclusive rate for the receipt breakdown.
 
+Calendar events created outside the booking flow (for example, an appointment
+typed directly into Google Calendar for a walk-in) have no matching row in
+`Sheet1`, so opening them shows "not created through the booking flow" instead
+of payment details. Fill in the patient name, email, service, payment method,
+total, and amount paid in that form to create a linked booking record for the
+event, after which payment can be tracked and a receipt issued normally.
+
 For new bookings to be written to the primary calendar, share that calendar
 with the service-account email as an Editor. For the embedded native calendar
 view to display appointments, share the calendar with the admin users or

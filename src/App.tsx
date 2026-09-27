@@ -2481,6 +2481,8 @@ function AdminPortal({
   const [issuedReceipt, setIssuedReceipt] = useState(null);
   const [isIssuingReceipt, setIsIssuingReceipt] = useState(false);
   const [isMarkingPaid, setIsMarkingPaid] = useState(false);
+  const [isLinkingEvent, setIsLinkingEvent] = useState(false);
+  const [linkEventForm, setLinkEventForm] = useState(null);
   const [receiptError, setReceiptError] = useState('');
   const [receiptNotice, setReceiptNotice] = useState('');
   const [reportStartDate, setReportStartDate] = useState(() => {
@@ -2967,6 +2969,65 @@ function AdminPortal({
       setReceiptError(error.message || 'Unable to record payment');
     } finally {
       setIsMarkingPaid(false);
+    }
+  };
+
+  useEffect(() => {
+    if (selectedCalendarEvent && !selectedCalendarEvent.booking) {
+      const [parsedService, parsedName] = String(selectedCalendarEvent.summary || '').split(' - ');
+      setLinkEventForm({
+        customerName: (parsedName || '').trim(),
+        email: '',
+        phone: '',
+        serviceName: (parsedService || '').trim(),
+        paymentOption: 'Cash',
+        paidAmount: '',
+        total: '',
+      });
+    } else {
+      setLinkEventForm(null);
+    }
+  }, [selectedCalendarEvent?.id]);
+
+  const linkCalendarEvent = async (event) => {
+    event.preventDefault();
+    if (!selectedCalendarEvent || !linkEventForm) return;
+    setIsLinkingEvent(true);
+    setReceiptError('');
+    setReceiptNotice('');
+    try {
+      const durationMinutes = selectedCalendarEvent.start && selectedCalendarEvent.end
+        ? Math.round((new Date(selectedCalendarEvent.end) - new Date(selectedCalendarEvent.start)) / 60000)
+        : 60;
+      const response = await fetch('/api/booking?view=link-calendar-event', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          calendarId: selectedCalendarEvent.calendarId,
+          eventId: selectedCalendarEvent.id,
+          customerName: linkEventForm.customerName,
+          email: linkEventForm.email,
+          phone: linkEventForm.phone,
+          branchName: selectedCalendarEvent.location || '',
+          serviceName: linkEventForm.serviceName || selectedCalendarEvent.summary,
+          therapistName: selectedCalendarEvent.therapistName || '',
+          date: calendarDate,
+          time: selectedCalendarEvent.localTime,
+          durationMinutes,
+          paymentOption: linkEventForm.paymentOption,
+          paidAmount: Number(linkEventForm.paidAmount) || 0,
+          total: Number(linkEventForm.total) || 0,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+      setSelectedCalendarEvent((current) => current ? { ...current, booking: data.booking } : current);
+      setReceiptNotice('Booking record created and linked to this calendar event. You can now issue a receipt once fully paid.');
+      await loadCalendar();
+    } catch (error) {
+      setReceiptError(error.message || 'Unable to link this calendar event to a booking record');
+    } finally {
+      setIsLinkingEvent(false);
     }
   };
 
@@ -4627,9 +4688,44 @@ function AdminPortal({
                     )}
                   </>
                 ) : (
-                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-950">
-                    This calendar event is not linked to a booking record in Google Sheets. A patient email and verified payment amount are required to issue a receipt.
-                  </div>
+                  <>
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-950">
+                      This calendar event was not created through the booking flow, so it has no linked record in Google Sheets. Fill in the details below to create one — this links the event to a booking so payment can be tracked and a receipt can be issued.
+                    </div>
+                    {linkEventForm && (
+                      <form onSubmit={linkCalendarEvent} className="space-y-3 rounded-xl border border-slate-200 p-4">
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <label className="text-xs font-semibold text-slate-600">Patient name
+                            <input required value={linkEventForm.customerName} onChange={(event) => setLinkEventForm((current) => ({ ...current, customerName: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                          </label>
+                          <label className="text-xs font-semibold text-slate-600">Patient email
+                            <input required type="email" value={linkEventForm.email} onChange={(event) => setLinkEventForm((current) => ({ ...current, email: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                          </label>
+                          <label className="text-xs font-semibold text-slate-600">Phone
+                            <input value={linkEventForm.phone} onChange={(event) => setLinkEventForm((current) => ({ ...current, phone: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                          </label>
+                          <label className="text-xs font-semibold text-slate-600">Service
+                            <input required value={linkEventForm.serviceName} onChange={(event) => setLinkEventForm((current) => ({ ...current, serviceName: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                          </label>
+                          <label className="text-xs font-semibold text-slate-600">Payment method
+                            <select value={linkEventForm.paymentOption} onChange={(event) => setLinkEventForm((current) => ({ ...current, paymentOption: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                              <option>Cash</option>
+                              <option>Card</option>
+                              <option>E-transfer</option>
+                              <option>Other</option>
+                            </select>
+                          </label>
+                          <label className="text-xs font-semibold text-slate-600">Appointment total ($)
+                            <input required type="number" min="0" step="0.01" value={linkEventForm.total} onChange={(event) => setLinkEventForm((current) => ({ ...current, total: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                          </label>
+                          <label className="text-xs font-semibold text-slate-600">Amount paid ($)
+                            <input type="number" min="0" step="0.01" value={linkEventForm.paidAmount} onChange={(event) => setLinkEventForm((current) => ({ ...current, paidAmount: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                          </label>
+                        </div>
+                        <button type="submit" disabled={isLinkingEvent} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-950 px-4 py-2.5 text-xs font-bold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50">{isLinkingEvent ? 'Creating booking record…' : 'Create & link booking record'}</button>
+                      </form>
+                    )}
+                  </>
                 );
               })()}
             </div>
