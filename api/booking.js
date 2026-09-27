@@ -57,6 +57,7 @@ const LOYALTY_SHEETS = {
   LoyaltySettings: ['Settings JSON', 'Updated At'],
   LoyaltyMembers: ['Email', 'Name', 'Phone', 'Enrolled At', 'Updated At', 'Membership Type', 'Organization', 'Paid Through', 'Company ID', 'Company Contact Email'],
   LoyaltyLedger: ['Transaction ID', 'Email', 'Booking ID', 'Type', 'Points', 'Reward Value', 'Description', 'Created At', 'Hours', 'Receipt No.'],
+  LoyaltyCompanies: ['Organization', 'Company ID', 'Contact Email', 'Access Token', 'Created At', 'Updated At'],
 };
 const RECEIPT_HEADERS = ['Receipt No.', 'Receipt Issued At', 'Receipt Email Status'];
 const MARKETING_CONTACT_HEADERS = [
@@ -566,6 +567,70 @@ async function deleteSheetRows(sheets, title, rowNumbers) {
     spreadsheetId,
     requestBody: { requests },
   });
+}
+
+function normalizeOrganizationKey(organization) {
+  return String(organization || '').trim().toLowerCase();
+}
+
+async function getCompanyPortalRows(sheets) {
+  const result = await sheets.spreadsheets.values.get({
+    spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+    range: 'LoyaltyCompanies!A:F',
+  });
+  return result.data.values || [];
+}
+
+// Finds (or creates) the magic-link access token a Platinum company's primary contact
+// uses to reach the self-service company portal. Idempotent: calling this again for the
+// same organization keeps the existing token and simply refreshes the company ID/contact
+// email on file if either changed.
+async function ensureCompanyPortalAccess(sheets, organization, companyId, contactEmail) {
+  const orgKey = normalizeOrganizationKey(organization);
+  if (!orgKey) throw new Error('A company name is required to set up the company portal.');
+  await ensureLoyaltySheets(sheets);
+  const rows = await getCompanyPortalRows(sheets);
+  const rowIndex = rows.findIndex((row, index) => index > 0 && normalizeOrganizationKey(row[0]) === orgKey);
+  const now = new Date().toISOString();
+  if (rowIndex >= 1) {
+    const row = rows[rowIndex];
+    const existingCompanyId = String(row[1] || '');
+    const existingContactEmail = normalizeLoyaltyEmail(row[2]);
+    const nextCompanyId = companyId || existingCompanyId;
+    const nextContactEmail = contactEmail || existingContactEmail;
+    if (nextCompanyId !== existingCompanyId || nextContactEmail !== existingContactEmail) {
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: `LoyaltyCompanies!B${rowIndex + 1}:F${rowIndex + 1}`,
+        valueInputOption: 'RAW',
+        requestBody: { values: [[nextCompanyId, nextContactEmail, row[3] || '', row[4] || now, now]] },
+      });
+    }
+    return { token: row[3] || '', isNew: false, contactEmail: nextContactEmail };
+  }
+  const token = crypto.randomBytes(24).toString('hex');
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+    range: 'LoyaltyCompanies!A:F',
+    valueInputOption: 'RAW',
+    requestBody: { values: [[organization.trim(), companyId || '', contactEmail || '', token, now, now]] },
+  });
+  return { token, isNew: true, contactEmail: contactEmail || '' };
+}
+
+async function findCompanyPortalByToken(sheets, token) {
+  const rows = await getCompanyPortalRows(sheets);
+  const rowIndex = rows.findIndex((row, index) => index > 0 && row[3] === token);
+  if (rowIndex < 1) return null;
+  const row = rows[rowIndex];
+  return { organization: row[0] || '', companyId: row[1] || '', contactEmail: normalizeLoyaltyEmail(row[2]) };
+}
+
+function getCompanyPortalUrl(req, token) {
+  const host = req.headers['x-forwarded-host'] || req.headers.host;
+  if (!host || /[\r\n/]/.test(host)) throw new Error('Unable to determine the public app address for the company portal link');
+  const protocol = req.headers['x-forwarded-proto'] === 'http' ? 'http' : 'https';
+  return `${protocol}://${host}/?companyToken=${encodeURIComponent(token)}`;
 }
 
 function validateLoyaltySettings(input) {
@@ -1407,6 +1472,48 @@ async function sendMembershipEmail(gmail, member, settings, businessProfile, eve
   });
 }
 
+async function sendCompanyPortalInviteEmail(gmail, { contactEmail, organization, businessProfile, portalUrl }) {
+  const recipient = normalizeLoyaltyEmail(contactEmail);
+  if (!/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(recipient)) {
+    throw new Error('A valid company contact email is required for the company portal invite.');
+  }
+  const businessName = businessProfile.businessName || 'MY THAI THAI';
+  await sendFormattedLoyaltyEmail(gmail, {
+    email: recipient,
+    name: organization || 'there',
+    subject: `${businessName} Platinum company portal for ${organization}`,
+    businessName,
+    heading: 'Your company portal is ready',
+    intro: `As the primary contact for ${organization}, you can use your company portal to view prepaid-hour balances, see which employees are using their Platinum benefit, and sign up new employees.`,
+    details: [{ label: 'Company portal link', value: portalUrl }],
+    note: 'Keep this link private — anyone with it can view and manage your company\'s Platinum membership. Contact the clinic if you need a new link.',
+  });
+}
+
+async function sendCompanyUsageNotificationEmail(gmail, { contactEmail, organization, employeeName, employeeEmail, serviceName, hoursUsed, hoursRemaining, businessProfile, portalUrl }) {
+  const recipient = normalizeLoyaltyEmail(contactEmail);
+  if (!/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(recipient)) {
+    throw new Error('A valid company contact email is required for the usage notification.');
+  }
+  const businessName = businessProfile.businessName || 'MY THAI THAI';
+  await sendFormattedLoyaltyEmail(gmail, {
+    email: recipient,
+    name: organization || 'there',
+    subject: `${businessName} Platinum usage: ${employeeName || employeeEmail}`,
+    businessName,
+    heading: 'Platinum hours used',
+    intro: `${employeeName || employeeEmail} just used prepaid Platinum hours at ${businessName} under ${organization}.`,
+    details: [
+      { label: 'Employee', value: `${employeeName || 'Employee'} (${employeeEmail})` },
+      { label: 'Service', value: serviceName || 'Massage service' },
+      { label: 'Hours used', value: `${hoursUsed.toFixed(2)} hours` },
+      { label: 'Employee remaining balance', value: `${hoursRemaining.toFixed(2)} hours` },
+      ...(portalUrl ? [{ label: 'Company portal link', value: portalUrl }] : []),
+    ],
+    note: 'You are receiving this because you are the primary contact on file for this company\'s Platinum membership.',
+  });
+}
+
 async function sendReceiptEmail(gmail, booking, receipt, businessProfile) {
   const recipient = String(booking.email || '').trim();
   if (!/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(recipient)) {
@@ -1705,18 +1812,18 @@ export default async function handler(req, res) {
     }
 
     const view = String(req.query?.view || '');
-    const validGetViews = ['', 'calendar', 'patient-history', 'business-profile', 'business-name', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe'];
+    const validGetViews = ['', 'calendar', 'patient-history', 'business-profile', 'business-name', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal'];
     if (req.method === 'GET' && !validGetViews.includes(view)) {
       return res.status(404).json({ message: 'Unknown booking view' });
     }
     const ownerOnlyRequest =
       (req.method === 'GET' && ['', 'calendar', 'patient-history', 'business-profile', 'google-ads-report', 'loyalty-dashboard'].includes(view)) ||
-      ['business-profile', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem'].includes(view);
+      ['business-profile', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'company-portal-link'].includes(view);
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
     if (ownerOnlyRequest && !getOwnerSession(req)) {
       return res.status(401).json({ message: 'Owner sign-in required' });
     }
-    if (['business-profile', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
+    if (['business-profile', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'company-portal-signup', 'company-portal-link'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
       return res.status(403).json({ message: 'Profile update origin is not allowed' });
     }
 
@@ -2099,14 +2206,32 @@ export default async function handler(req, res) {
       member.hoursBalance = hoursBalance;
       let emailSent = false;
       let emailError = '';
+      const businessProfile = await getBusinessProfile(sheets);
       try {
-        await sendMembershipEmail(createGmailApi(), member, settings, await getBusinessProfile(sheets), initialTopUpPaid ? 'topup' : 'welcome', companyContactEmail);
+        await sendMembershipEmail(createGmailApi(), member, settings, businessProfile, initialTopUpPaid ? 'topup' : 'welcome', companyContactEmail);
         emailSent = true;
       } catch (error) {
         emailError = error.message || 'Membership email could not be sent.';
         console.error('Membership onboarding email error:', emailError);
       }
-      return res.status(200).json({ member, emailSent, emailError, hoursBalance });
+      let companyPortalUrl = '';
+      if (membershipType === 'platinum' && organization && companyContactEmail) {
+        try {
+          const access = await ensureCompanyPortalAccess(sheets, organization, companyId, companyContactEmail);
+          companyPortalUrl = getCompanyPortalUrl(req, access.token);
+          if (access.isNew) {
+            await sendCompanyPortalInviteEmail(createGmailApi(), {
+              contactEmail: companyContactEmail,
+              organization,
+              businessProfile,
+              portalUrl: companyPortalUrl,
+            });
+          }
+        } catch (error) {
+          console.error('Company portal setup error:', error.message || error);
+        }
+      }
+      return res.status(200).json({ member, emailSent, emailError, hoursBalance, companyPortalUrl });
     }
 
     if (req.method === 'POST' && view === 'loyalty-remove-member') {
@@ -2155,6 +2280,19 @@ export default async function handler(req, res) {
       return res.status(200).json({ removed: removedMember, emailSent, emailError });
     }
 
+    if (req.method === 'POST' && view === 'company-portal-link') {
+      const organization = String(req.body?.organization || '').trim();
+      const companyId = String(req.body?.companyId || '').trim();
+      const companyContactEmail = normalizeLoyaltyEmail(req.body?.companyContactEmail);
+      if (!organization) return res.status(400).json({ message: 'A company/organization name is required.' });
+      if (!companyContactEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(companyContactEmail)) {
+        return res.status(400).json({ message: 'A valid company contact email on file is required to create a portal link.' });
+      }
+      await ensureLoyaltySheets(sheets);
+      const access = await ensureCompanyPortalAccess(sheets, organization, companyId, companyContactEmail);
+      return res.status(200).json({ organization, portalUrl: getCompanyPortalUrl(req, access.token) });
+    }
+
     if (req.method === 'POST' && view === 'loyalty-remove-company') {
       const organization = String(req.body?.organization || '').trim();
       if (!organization) {
@@ -2177,6 +2315,13 @@ export default async function handler(req, res) {
       const removedEmails = matches.map(({ row }) => normalizeLoyaltyEmail(row[0]));
       const companyContactEmail = matches.find(({ row }) => row[9])?.row[9] || '';
       await deleteSheetRows(sheets, 'LoyaltyMembers', matches.map(({ rowNumber }) => rowNumber));
+      try {
+        const companyRows = await getCompanyPortalRows(sheets);
+        const companyRowIndex = companyRows.findIndex((row, index) => index > 0 && normalizeOrganizationKey(row[0]) === normalizeOrganizationKey(organization));
+        if (companyRowIndex >= 1) await deleteSheetRows(sheets, 'LoyaltyCompanies', [companyRowIndex + 1]);
+      } catch (error) {
+        console.error('Company portal cleanup error:', error.message || error);
+      }
       const businessProfile = await getBusinessProfile(sheets);
       const emailResults = await Promise.allSettled(matches.map(({ row }) => sendFormattedLoyaltyEmail(createGmailApi(), {
         email: normalizeLoyaltyEmail(row[0]),
@@ -2403,12 +2548,12 @@ export default async function handler(req, res) {
       }
       let balanceEmailSent = true;
       let balanceEmailError = '';
+      const businessProfile = await getBusinessProfile(sheets);
+      const hoursBalance = loyaltyHoursBalance([...ledgerRows, ...ledgerEntries], email);
       try {
-        const businessProfile = await getBusinessProfile(sheets);
         const pointsBalance = ledgerRows
           .filter((row) => normalizeLoyaltyEmail(row[1]) === email)
           .reduce((sum, row) => sum + (Number(row[4]) || 0), 0) + points;
-        const hoursBalance = loyaltyHoursBalance([...ledgerRows, ...ledgerEntries], email);
         await sendFormattedLoyaltyEmail(createGmailApi(), {
           email,
           name: member[1] || '',
@@ -2428,7 +2573,31 @@ export default async function handler(req, res) {
         balanceEmailError = error.message || 'Loyalty balance email could not be sent.';
         console.error('Loyalty award email error:', balanceEmailError);
       }
-      return res.status(200).json({ awarded: points > 0, points, hoursUsed, freeHotStone, bookingId, email, balanceEmailSent, balanceEmailError });
+      let companyNotifySent = false;
+      let companyNotifyError = '';
+      const organization = String(member[6] || '').trim();
+      const companyContactEmail = normalizeLoyaltyEmail(member[9]);
+      if (hoursUsed > 0 && organization && companyContactEmail) {
+        try {
+          const access = await ensureCompanyPortalAccess(sheets, organization, member[8] || '', companyContactEmail);
+          await sendCompanyUsageNotificationEmail(createGmailApi(), {
+            contactEmail: companyContactEmail,
+            organization,
+            employeeName: member[1] || '',
+            employeeEmail: email,
+            serviceName: booking[5] || '',
+            hoursUsed,
+            hoursRemaining: hoursBalance,
+            businessProfile,
+            portalUrl: getCompanyPortalUrl(req, access.token),
+          });
+          companyNotifySent = true;
+        } catch (error) {
+          companyNotifyError = error.message || 'Company usage notification could not be sent.';
+          console.error('Company usage notification error:', companyNotifyError);
+        }
+      }
+      return res.status(200).json({ awarded: points > 0, points, hoursUsed, freeHotStone, bookingId, email, balanceEmailSent, balanceEmailError, companyNotifySent, companyNotifyError });
     }
 
     if (req.method === 'POST' && view === 'loyalty-redeem') {
@@ -2746,6 +2915,129 @@ export default async function handler(req, res) {
         });
       }
       return res.status(200).json({ profile: { ...profile, updatedAt } });
+    }
+
+    if (view === 'company-portal' && req.method === 'GET') {
+      const token = String(req.query?.token || '');
+      if (!/^[a-f0-9]{48}$/.test(token)) {
+        return res.status(400).json({ message: 'This company portal link is invalid or incomplete.' });
+      }
+      await ensureLoyaltySheets(sheets);
+      const company = await findCompanyPortalByToken(sheets, token);
+      if (!company) return res.status(404).json({ message: 'This company portal link is invalid or no longer active.' });
+      const [membersResult, ledgerResult] = await Promise.all([
+        sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'LoyaltyMembers!A:J' }),
+        sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'LoyaltyLedger!A:J' }),
+      ]);
+      const orgKey = normalizeOrganizationKey(company.organization);
+      const employeeRows = (membersResult.data.values || []).slice(1)
+        .filter((row) => String(row[5] || '').toLowerCase() === 'platinum' && normalizeOrganizationKey(row[6]) === orgKey);
+      const ledgerRows = (ledgerResult.data.values || []).slice(1);
+      const employeeEmails = new Set(employeeRows.map((row) => normalizeLoyaltyEmail(row[0])));
+      const employees = employeeRows.map((row) => {
+        const email = normalizeLoyaltyEmail(row[0]);
+        return {
+          email,
+          name: row[1] || '',
+          phone: row[2] || '',
+          enrolledAt: row[3] || '',
+          hoursBalance: loyaltyHoursBalance(ledgerRows, email),
+        };
+      }).sort((a, b) => a.name.localeCompare(b.name) || a.email.localeCompare(b.email));
+      const employeeNameByEmail = new Map(employees.map((employee) => [employee.email, employee.name]));
+      const companyLedgerRows = ledgerRows.filter((row) => employeeEmails.has(normalizeLoyaltyEmail(row[1])));
+      const topUps = companyLedgerRows
+        .filter((row) => row[3] === 'TOPUP')
+        .map((row) => ({
+          email: normalizeLoyaltyEmail(row[1]),
+          employeeName: employeeNameByEmail.get(normalizeLoyaltyEmail(row[1])) || '',
+          createdAt: row[7] || '',
+          hoursAdded: Number(row[8]) || 0,
+          description: row[6] || '',
+        }))
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+        .slice(0, 50);
+      const usage = companyLedgerRows
+        .filter((row) => row[3] === 'USE')
+        .map((row) => ({
+          email: normalizeLoyaltyEmail(row[1]),
+          employeeName: employeeNameByEmail.get(normalizeLoyaltyEmail(row[1])) || '',
+          createdAt: row[7] || '',
+          hoursUsed: Math.abs(Number(row[8]) || 0),
+          description: row[6] || '',
+          bookingId: row[2] || '',
+        }))
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+        .slice(0, 50);
+      const totals = {
+        employeeCount: employees.length,
+        hoursBalance: employees.reduce((sum, employee) => sum + employee.hoursBalance, 0),
+        hoursToppedUpAllTime: companyLedgerRows.filter((row) => row[3] === 'TOPUP').reduce((sum, row) => sum + (Number(row[8]) || 0), 0),
+        hoursUsedAllTime: Math.abs(companyLedgerRows.filter((row) => row[3] === 'USE').reduce((sum, row) => sum + (Number(row[8]) || 0), 0)),
+      };
+      return res.status(200).json({
+        organization: company.organization,
+        companyId: company.companyId,
+        contactEmail: company.contactEmail,
+        employees,
+        topUps,
+        usage,
+        totals,
+      });
+    }
+
+    if (view === 'company-portal-signup' && req.method === 'POST') {
+      const token = String(req.body?.token || '');
+      if (!/^[a-f0-9]{48}$/.test(token)) {
+        return res.status(400).json({ message: 'This company portal link is invalid or incomplete.' });
+      }
+      await ensureLoyaltySheets(sheets);
+      const company = await findCompanyPortalByToken(sheets, token);
+      if (!company) return res.status(404).json({ message: 'This company portal link is invalid or no longer active.' });
+      const settings = await getLoyaltySettings(sheets);
+      if (!settings.enabled) return res.status(409).json({ message: 'The loyalty program is currently paused.' });
+      const email = normalizeLoyaltyEmail(req.body?.email);
+      const name = String(req.body?.name || '').trim().slice(0, 120);
+      const phone = String(req.body?.phone || '').trim().slice(0, 50);
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !name) {
+        return res.status(400).json({ message: 'Enter a valid employee email and name.' });
+      }
+      const membersResult = await sheets.spreadsheets.values.get({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: 'LoyaltyMembers!A:J',
+      });
+      const rows = membersResult.data.values || [];
+      const existingIndex = rows.findIndex((row, index) => index > 0 && normalizeLoyaltyEmail(row[0]) === email);
+      if (existingIndex >= 1) {
+        const existingType = String(rows[existingIndex][5] || 'regular').toLowerCase();
+        const existingOrganization = String(rows[existingIndex][6] || '').trim();
+        if (existingType === 'platinum' && normalizeOrganizationKey(existingOrganization) === normalizeOrganizationKey(company.organization)) {
+          return res.status(409).json({ message: 'This employee is already signed up for your company\'s Platinum membership.' });
+        }
+        return res.status(409).json({ message: 'This email is already enrolled under a different membership. Contact the clinic to update it.' });
+      }
+      const now = new Date().toISOString();
+      // Organization, company ID, and contact email are forced from the token record (not client-supplied) so a
+      // company portal link cannot be used to enroll an employee under a different company.
+      await sheets.spreadsheets.values.append({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: 'LoyaltyMembers!A:J',
+        valueInputOption: 'RAW',
+        requestBody: { values: [[email, name, phone, now, now, 'platinum', company.organization, '', company.companyId, company.contactEmail]] },
+      });
+      const member = {
+        email, name, phone, membershipType: 'platinum', organization: company.organization, companyId: company.companyId, hoursBalance: 0,
+      };
+      let emailSent = false;
+      let emailError = '';
+      try {
+        await sendMembershipEmail(createGmailApi(), member, settings, await getBusinessProfile(sheets), 'welcome', company.contactEmail);
+        emailSent = true;
+      } catch (error) {
+        emailError = error.message || 'Membership email could not be sent.';
+        console.error('Company portal signup email error:', emailError);
+      }
+      return res.status(200).json({ member, emailSent, emailError });
     }
 
     if (view === 'unsubscribe' && req.method === 'GET') {

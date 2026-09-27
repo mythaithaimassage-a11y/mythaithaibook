@@ -379,6 +379,10 @@ function TherapistDonutCard({ title, subtitle, segments, centerValue, centerLabe
 }
 
 export default function App() {
+  const [companyPortalToken] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    return new URLSearchParams(window.location.search).get('companyToken') || '';
+  });
   const [viewMode, setViewMode] = useState('customer'); // 'customer' or 'admin'
   const [adminLang, setAdminLang] = useState('en'); // 'en' or 'th'
   const [servicesList, setServicesList] = useState(INITIAL_SERVICES);
@@ -395,6 +399,10 @@ export default function App() {
     { id: 'MTT-1002', customerName: 'Sarah Jenkins', phone: '905-555-0143', email: 's.jenkins@yahoo.ca', serviceId: 11, serviceName: 'Thai Combo Swedish + Hot Stone (60 min)', branchId: 1, therapistId: 2, therapistName: 'Michael T., RMT', date: '2026-09-19', time: '01:00 PM', status: 'Completed', paidAmount: 118.65, total: 118.65, syncedToSheets: true },
     { id: 'MTT-1003', customerName: 'Amanda Wong', phone: '647-555-0821', email: 'amanda.wong@outlook.com', serviceId: 18, serviceName: 'Registered Massage Therapy (RMT 60 min)', branchId: 2, therapistId: 4, therapistName: 'Somchai R., RMT', date: '2026-09-19', time: '02:30 PM', status: 'Confirmed', paidAmount: 30, total: 120.00, syncedToSheets: true }
   ]);
+
+  if (companyPortalToken) {
+    return <CompanyPortal token={companyPortalToken} />;
+  }
 
   return (
     <div className="min-h-screen bg-stone-100 font-sans text-stone-800 flex flex-col justify-between">
@@ -470,6 +478,241 @@ export default function App() {
       {/* Footer */}
       <footer className="bg-stone-900 text-stone-400 text-xs py-4 px-6 text-center border-t border-stone-800">
         <p>© 2026 MY THAI THAI MASSAGE AND WELLNESS INC. All rights reserved. • Toronto & Mississauga, Ontario</p>
+      </footer>
+    </div>
+  );
+}
+
+// Self-service portal for a Platinum company's primary contact, reached via a private magic
+// link (?companyToken=...) emailed when their company is enrolled. No login is required — the
+// token itself proves the contact's identity, mirroring the existing unsubscribe-link pattern.
+function CompanyPortal({ token }) {
+  const { businessName, photoUrl } = useBusinessBranding();
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [signupForm, setSignupForm] = useState({ name: '', email: '', phone: '' });
+  const [signupSubmitting, setSignupSubmitting] = useState(false);
+  const [signupMessage, setSignupMessage] = useState('');
+  const [signupError, setSignupError] = useState('');
+
+  const loadPortal = async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const response = await fetch(`/api/booking?view=company-portal&token=${encodeURIComponent(token)}`);
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || 'Unable to load your company portal.');
+      setData(result);
+    } catch (requestError) {
+      setError(requestError.message || 'Unable to load your company portal.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadPortal();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+
+  const submitSignup = async (event) => {
+    event.preventDefault();
+    setSignupSubmitting(true);
+    setSignupError('');
+    setSignupMessage('');
+    try {
+      const response = await fetch('/api/booking?view=company-portal-signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, ...signupForm }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || 'Unable to sign up this employee.');
+      setSignupMessage(`${signupForm.name} was signed up for Platinum${result.emailSent ? ' and their welcome email was sent.' : ', but their welcome email could not be sent — the clinic can resend it.'}`);
+      setSignupForm({ name: '', email: '', phone: '' });
+      loadPortal();
+    } catch (requestError) {
+      setSignupError(requestError.message || 'Unable to sign up this employee.');
+    } finally {
+      setSignupSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-stone-100 font-sans text-stone-800">
+      <header className="border-b border-slate-200 bg-white px-4 py-4 shadow-sm sm:px-8">
+        <div className="mx-auto flex max-w-5xl items-center gap-3">
+          {photoUrl ? (
+            <img src={photoUrl} alt="" className="h-10 w-10 rounded-xl object-cover" />
+          ) : (
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-950 text-xs font-black tracking-tight text-white">M</span>
+          )}
+          <div>
+            <p className="text-lg font-bold tracking-tight text-slate-950">{businessName || 'MY THAI THAI'}</p>
+            <p className="text-xs font-semibold uppercase tracking-wider text-emerald-800">Platinum company portal{data?.organization ? ` · ${data.organization}` : ''}</p>
+          </div>
+        </div>
+      </header>
+
+      <main className="mx-auto max-w-5xl px-4 py-6 sm:px-8">
+        {loading ? (
+          <p className="rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-500">Loading your company portal…</p>
+        ) : error ? (
+          <p className="rounded-xl border border-rose-200 bg-rose-50 p-6 text-sm font-medium text-rose-700">{error}</p>
+        ) : data ? (
+          <div className="space-y-6">
+            <section className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Employees enrolled</p>
+                <p className="mt-1 text-2xl font-bold text-slate-950">{data.totals.employeeCount}</p>
+              </div>
+              <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Hours remaining</p>
+                <p className="mt-1 text-2xl font-bold text-emerald-800">{data.totals.hoursBalance.toFixed(2)}</p>
+              </div>
+              <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Hours topped up (all-time)</p>
+                <p className="mt-1 text-2xl font-bold text-slate-950">{data.totals.hoursToppedUpAllTime.toFixed(2)}</p>
+              </div>
+              <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Hours used (all-time)</p>
+                <p className="mt-1 text-2xl font-bold text-slate-950">{data.totals.hoursUsedAllTime.toFixed(2)}</p>
+              </div>
+            </section>
+
+            <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+              <h2 className="text-sm font-bold uppercase tracking-wide text-slate-700">Employees using Platinum</h2>
+              {data.employees.length ? (
+                <div className="mt-3 overflow-x-auto">
+                  <table className="w-full min-w-[480px] text-left text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500">
+                        <th className="py-2 pr-3">Name</th>
+                        <th className="py-2 pr-3">Email</th>
+                        <th className="py-2 pr-3">Enrolled</th>
+                        <th className="py-2 pr-3">Hours remaining</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.employees.map((employee) => (
+                        <tr key={employee.email} className="border-b border-slate-100 last:border-0">
+                          <td className="py-2 pr-3 font-medium text-slate-900">{employee.name || '—'}</td>
+                          <td className="py-2 pr-3 text-slate-600">{employee.email}</td>
+                          <td className="py-2 pr-3 text-slate-600">{employee.enrolledAt ? new Date(employee.enrolledAt).toLocaleDateString() : '—'}</td>
+                          <td className="py-2 pr-3 font-semibold text-emerald-800">{employee.hoursBalance.toFixed(2)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="mt-2 text-sm text-slate-500">No employees are signed up yet — use the form below to add your first one.</p>
+              )}
+            </section>
+
+            <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+              <h2 className="text-sm font-bold uppercase tracking-wide text-slate-700">Recent activity</h2>
+              {data.usage.length ? (
+                <div className="mt-3 overflow-x-auto">
+                  <table className="w-full min-w-[480px] text-left text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500">
+                        <th className="py-2 pr-3">Date</th>
+                        <th className="py-2 pr-3">Employee</th>
+                        <th className="py-2 pr-3">Service</th>
+                        <th className="py-2 pr-3">Hours used</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.usage.map((entry, index) => (
+                        <tr key={`${entry.bookingId}-${index}`} className="border-b border-slate-100 last:border-0">
+                          <td className="py-2 pr-3 text-slate-600">{entry.createdAt ? new Date(entry.createdAt).toLocaleString() : '—'}</td>
+                          <td className="py-2 pr-3 font-medium text-slate-900">{entry.employeeName || entry.email}</td>
+                          <td className="py-2 pr-3 text-slate-600">{entry.description}</td>
+                          <td className="py-2 pr-3 font-semibold text-slate-900">{entry.hoursUsed.toFixed(2)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="mt-2 text-sm text-slate-500">No employee has used a Platinum session yet.</p>
+              )}
+            </section>
+
+            <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+              <h2 className="text-sm font-bold uppercase tracking-wide text-slate-700">Top-up history</h2>
+              {data.topUps.length ? (
+                <div className="mt-3 overflow-x-auto">
+                  <table className="w-full min-w-[480px] text-left text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-200 text-xs uppercase tracking-wide text-slate-500">
+                        <th className="py-2 pr-3">Date</th>
+                        <th className="py-2 pr-3">Employee</th>
+                        <th className="py-2 pr-3">Hours added</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.topUps.map((entry, index) => (
+                        <tr key={index} className="border-b border-slate-100 last:border-0">
+                          <td className="py-2 pr-3 text-slate-600">{entry.createdAt ? new Date(entry.createdAt).toLocaleString() : '—'}</td>
+                          <td className="py-2 pr-3 font-medium text-slate-900">{entry.employeeName || entry.email}</td>
+                          <td className="py-2 pr-3 font-semibold text-emerald-800">+{entry.hoursAdded.toFixed(2)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="mt-2 text-sm text-slate-500">No top-up payments have been recorded yet — contact the clinic to top up.</p>
+              )}
+            </section>
+
+            <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+              <h2 className="text-sm font-bold uppercase tracking-wide text-slate-700">Sign up a new employee</h2>
+              <p className="mt-1 text-sm text-slate-500">New employees start at 0 hours until the clinic records a top-up payment.</p>
+              <form onSubmit={submitSignup} className="mt-3 grid gap-3 sm:grid-cols-3">
+                <input
+                  type="text"
+                  required
+                  placeholder="Employee name"
+                  value={signupForm.name}
+                  onChange={(event) => setSignupForm((current) => ({ ...current, name: event.target.value }))}
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                />
+                <input
+                  type="email"
+                  required
+                  placeholder="Employee email"
+                  value={signupForm.email}
+                  onChange={(event) => setSignupForm((current) => ({ ...current, email: event.target.value }))}
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                />
+                <input
+                  type="tel"
+                  placeholder="Phone (optional)"
+                  value={signupForm.phone}
+                  onChange={(event) => setSignupForm((current) => ({ ...current, phone: event.target.value }))}
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                />
+                <button
+                  type="submit"
+                  disabled={signupSubmitting}
+                  className="rounded-lg bg-emerald-950 px-4 py-2 text-sm font-semibold text-white shadow-sm disabled:opacity-60 sm:col-span-3 sm:w-fit"
+                >
+                  {signupSubmitting ? 'Signing up…' : 'Sign up employee'}
+                </button>
+              </form>
+              {signupMessage && <p className="mt-2 text-sm font-medium text-emerald-800">{signupMessage}</p>}
+              {signupError && <p className="mt-2 text-sm font-medium text-rose-700">{signupError}</p>}
+            </section>
+          </div>
+        ) : null}
+      </main>
+
+      <footer className="bg-stone-900 px-4 py-4 text-center text-xs text-stone-400">
+        <p>© 2026 MY THAI THAI MASSAGE AND WELLNESS INC. All rights reserved.</p>
       </footer>
     </div>
   );
@@ -2539,6 +2782,7 @@ function AdminPortal({
   const [memberPendingRemoval, setMemberPendingRemoval] = useState(null);
   const [companyPendingRemoval, setCompanyPendingRemoval] = useState('');
   const [isRemovingLoyaltyEntry, setIsRemovingLoyaltyEntry] = useState(false);
+  const [copyingPortalFor, setCopyingPortalFor] = useState('');
   const [selectedLoyaltyMember, setSelectedLoyaltyMember] = useState(null);
   const [loyaltyRedeemPoints, setLoyaltyRedeemPoints] = useState('');
   const [loyaltyRedeemBookingId, setLoyaltyRedeemBookingId] = useState('');
@@ -2853,6 +3097,29 @@ function AdminPortal({
       setLoyaltyError(error.message || 'Unable to remove this company.');
     } finally {
       setIsRemovingLoyaltyEntry(false);
+    }
+  };
+
+  const copyCompanyPortalLink = async (member) => {
+    setLoyaltyError('');
+    setLoyaltyNotice('');
+    setCopyingPortalFor(member.organization);
+    try {
+      const response = await fetch('/api/booking?view=company-portal-link', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ organization: member.organization, companyId: member.companyId, companyContactEmail: member.companyContactEmail }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Unable to create a company portal link.');
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(data.portalUrl);
+      setLoyaltyNotice(navigator.clipboard?.writeText
+        ? `Company portal link for ${member.organization} copied to clipboard.`
+        : `Company portal link for ${member.organization}: ${data.portalUrl}`);
+    } catch (error) {
+      setLoyaltyError(error.message || 'Unable to create a company portal link.');
+    } finally {
+      setCopyingPortalFor('');
     }
   };
 
@@ -4124,6 +4391,7 @@ function AdminPortal({
                                 <button type="button" disabled={!loyaltySettings.enabled || member.pointsBalance < loyaltySettings.redemptionPoints || !member.receiptCandidates?.length} onClick={() => { setSelectedLoyaltyMember(member); setLoyaltyRedeemPoints(String(loyaltySettings.redemptionPoints)); setLoyaltyRedeemBookingId(member.receiptCandidates?.[0]?.bookingId || ''); }} className="rounded-lg border border-indigo-200 px-3 py-2 text-[11px] font-semibold text-indigo-800 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-40">Redeem points</button>
                                 {member.membershipType === 'platinum' && <button type="button" disabled={!loyaltySettings.enabled} onClick={() => setSelectedTopUpMember(member)} className="block ml-auto rounded-lg border border-amber-200 px-3 py-2 text-[11px] font-semibold text-amber-900 hover:bg-amber-50 disabled:opacity-40">Record top-up</button>}
                                 {['gold', 'silver'].includes(member.membershipType) && <button type="button" onClick={() => { setSelectedMembershipPayment(member); setMembershipPaidThrough(member.paidThrough || ''); }} className="block ml-auto rounded-lg border border-emerald-200 px-3 py-2 text-[11px] font-semibold text-emerald-800 hover:bg-emerald-50">Record payment</button>}
+                                {member.membershipType === 'platinum' && member.organization && member.companyContactEmail && <button type="button" disabled={copyingPortalFor === member.organization} onClick={() => copyCompanyPortalLink(member)} className="block ml-auto rounded-lg border border-sky-200 px-3 py-2 text-[11px] font-semibold text-sky-800 hover:bg-sky-50 disabled:opacity-40">{copyingPortalFor === member.organization ? 'Copying…' : 'Copy portal link'}</button>}
                                 <button type="button" onClick={() => setMemberPendingRemoval(member)} className="block ml-auto rounded-lg border border-rose-200 px-3 py-2 text-[11px] font-semibold text-rose-700 hover:bg-rose-50">Remove member</button>
                                 {['silver', 'platinum'].includes(member.membershipType) && member.organization && <button type="button" onClick={() => setCompanyPendingRemoval(member.organization)} className="block ml-auto rounded-lg border border-rose-200 px-3 py-2 text-[11px] font-semibold text-rose-700 hover:bg-rose-50">Remove company</button>}
                               </td>

@@ -176,6 +176,23 @@ in one action and emails each removed employee, copying the company contact.
 Removal does not alter past receipts or ledger history; it only ends the
 member's active benefits and points/hours balance going forward.
 
+Each Platinum company also gets a self-service **Company portal**: a private,
+token-based link (no login required) that the registered company contact can
+use to see how many employees are enrolled, each employee's remaining prepaid
+hours, recent top-up and usage activity across the whole company, and a form
+to sign up a new employee (who starts at 0 hours until the clinic records a
+top-up). The link is created and emailed automatically the first time a
+Platinum employee is enrolled or claims Platinum with a company contact email
+on file; the owner can also copy/re-share it any time from the **Members &
+balances** table with the **Copy portal link** button. Portal access, the
+token, and each company's registration details are stored in a `LoyaltyCompanies`
+tab (auto-created alongside the other loyalty tabs). Whenever an employee's
+completed visit deducts prepaid hours, the registered company contact is
+automatically emailed who used their benefit, the service, hours used, and the
+employee's remaining balance, in addition to the employee's own balance email.
+Removing a member or an entire company (see above) also removes the matching
+`LoyaltyCompanies` row so a deleted company's portal link stops working.
+
 The owner dashboard includes a **Business profile** section for editing the
 business name, optional legal name, description, email, phone, website, location,
 and optional GST/HST registration number for receipts. Profile values are saved
