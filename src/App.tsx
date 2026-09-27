@@ -76,7 +76,60 @@ const DEFAULT_BUSINESS_PROFILE = {
   website: 'https://mythaithaimassage.com',
   address: 'Ontario, Canada',
   taxRegistrationNumber: '',
+  photoUrl: '',
 };
+
+function useBusinessBranding() {
+  const [businessName, setBusinessName] = useState(DEFAULT_BUSINESS_PROFILE.businessName);
+  const [photoUrl, setPhotoUrl] = useState('');
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let isCurrent = true;
+    const loadBranding = async () => {
+      try {
+        const response = await fetch('/api/booking?view=business-name', { cache: 'no-store' });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+        if (typeof data.businessName !== 'string' || !data.businessName.trim()) {
+          throw new Error('The owner profile does not have a business display name.');
+        }
+        if (isCurrent) {
+          setBusinessName(data.businessName);
+          setPhotoUrl(typeof data.photoUrl === 'string' ? data.photoUrl : '');
+          setError('');
+        }
+      } catch {
+        if (isCurrent) setError('Business profile branding could not be synced.');
+      }
+    };
+
+    loadBranding();
+    const refreshInterval = window.setInterval(loadBranding, 30000);
+    return () => {
+      isCurrent = false;
+      window.clearInterval(refreshInterval);
+    };
+  }, []);
+
+  return { businessName, photoUrl, error };
+}
+
+function BusinessPhoto({ businessName, photoUrl, className }) {
+  const [imageFailed, setImageFailed] = useState(false);
+  useEffect(() => setImageFailed(false), [photoUrl]);
+  const initials = businessName.split(/\s+/).filter(Boolean).slice(0, 2).map((word) => word[0]).join('').toUpperCase() || 'MT';
+
+  if (photoUrl && !imageFailed) {
+    return <img src={photoUrl} alt={`${businessName} logo`} className={className} onError={() => setImageFailed(true)} />;
+  }
+
+  return (
+    <div role="img" aria-label={`${businessName} logo`} className={`${className} flex items-center justify-center bg-gradient-to-br from-emerald-900 to-emerald-700 text-sm font-bold text-white`}>
+      {initials}
+    </div>
+  );
+}
 
 function getTherapistCalendarColor(therapistName, therapists) {
   const index = therapists.findIndex((therapist) => therapist.name === therapistName);
@@ -421,7 +474,7 @@ export default function App() {
 
 function TherapistPortal() {
   const [therapist, setTherapist] = useState(null);
-  const [businessName, setBusinessName] = useState(DEFAULT_BUSINESS_PROFILE.businessName);
+  const { businessName, photoUrl, error: brandingError } = useBusinessBranding();
   const [appointments, setAppointments] = useState([]);
   const [patientNotes, setPatientNotes] = useState([]);
   const [rebookingReminders, setRebookingReminders] = useState([]);
@@ -457,7 +510,6 @@ function TherapistPortal() {
     const data = await response.json();
     if (!response.ok) throw new Error(data.message || 'Unable to load therapist appointments');
     setTherapist(data.therapist);
-    setBusinessName(data.businessName || DEFAULT_BUSINESS_PROFILE.businessName);
     setAppointments(data.appointments || []);
     setPatientNotes(data.patientNotes || []);
     setRebookingReminders(data.rebookingReminders || []);
@@ -648,8 +700,8 @@ function TherapistPortal() {
     <div className="min-h-[calc(100vh-7rem)] bg-slate-100">
       <header className="flex min-h-14 items-center justify-between gap-4 bg-black px-4 py-2 text-white shadow-sm sm:px-6">
         <div className="flex items-center gap-3">
-          <div className="grid h-9 w-9 place-items-center rounded-lg border border-white/40 bg-white/10 text-xs font-black">{businessName.split(/\s+/).filter(Boolean).slice(0, 2).map((word) => word[0]).join('').toUpperCase() || 'MT'}</div>
-          <div><p className="text-sm font-black tracking-wide">{businessName}</p><p className="text-[9px] uppercase tracking-[0.18em] text-blue-100">Therapist portal</p></div>
+          <BusinessPhoto businessName={businessName} photoUrl={photoUrl} className="h-9 w-9 rounded-lg border border-white/40 object-cover text-xs" />
+          <div><p className="text-sm font-black tracking-wide">{businessName}</p><p className="text-[9px] uppercase tracking-[0.18em] text-blue-100">Therapist portal</p>{brandingError && <p role="status" className="text-[9px] text-amber-200">{brandingError}</p>}</div>
         </div>
         <div className="flex items-center gap-3">
           <span className="hidden text-xs text-blue-100 sm:inline">{new Date().toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })}</span>
@@ -1307,8 +1359,7 @@ function AdminGate({ children }) {
 
 function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNewBooking }) {
   const [step, setStep] = useState(1);
-  const [businessName, setBusinessName] = useState(DEFAULT_BUSINESS_PROFILE.businessName);
-  const [businessNameError, setBusinessNameError] = useState('');
+  const { businessName, photoUrl, error: brandingError } = useBusinessBranding();
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [sheetsSyncStatus, setSheetsSyncStatus] = useState(null);
@@ -1316,6 +1367,8 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
   const [showExistingPatientChoice, setShowExistingPatientChoice] = useState(false);
   const [loyaltyProgram, setLoyaltyProgram] = useState(null);
   const [loyaltyProgramError, setLoyaltyProgramError] = useState('');
+  const [membershipBenefit, setMembershipBenefit] = useState(null);
+  const [membershipCheckMessage, setMembershipCheckMessage] = useState('');
   
   const [bookingData, setBookingData] = useState({
     branch: branches[0],
@@ -1361,23 +1414,6 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
 
   useEffect(() => {
     let isCurrent = true;
-    fetch('/api/booking?view=business-name')
-      .then(async (response) => {
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
-        if (typeof data.businessName !== 'string' || !data.businessName.trim()) {
-          throw new Error('The owner profile does not have a business display name.');
-        }
-        if (isCurrent) setBusinessName(data.businessName);
-      })
-      .catch(() => {
-        if (isCurrent) setBusinessNameError('The business name could not be synced from the owner profile.');
-      });
-    return () => { isCurrent = false; };
-  }, []);
-
-  useEffect(() => {
-    let isCurrent = true;
     fetch('/api/booking?view=loyalty-program')
       .then(async (response) => {
         const data = await response.json();
@@ -1400,10 +1436,39 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
   };
 
   const updateCustomer = (field, val) => {
+    if (field === 'email') {
+      setMembershipBenefit(null);
+      setMembershipCheckMessage('');
+    }
     setBookingData(prev => ({
       ...prev,
       customer: { ...prev.customer, [field]: val }
     }));
+  };
+
+  const checkMembershipEligibility = async () => {
+    const email = bookingData.customer.email.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return;
+    setMembershipCheckMessage('Checking membership eligibility…');
+    try {
+      const response = await fetch(`/api/booking?view=loyalty-eligibility&email=${encodeURIComponent(email)}`, { cache: 'no-store' });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Could not check membership.');
+      if (data.eligible) {
+        setMembershipBenefit(data);
+        const planName = data.membershipType === 'gold' ? 'Gold' : data.membershipType === 'platinum' ? 'Platinum' : 'Silver';
+        const benefits = data.membershipType === 'platinum'
+          ? `${data.discountPercent}% off services, $${data.hotStoneDiscount} off Hot Stone add-ons, ${Number(data.hoursBalance).toFixed(2)} prepaid hours remain`
+          : `${data.discountPercent}% off services${data.membershipType === 'gold' ? `, ${data.pointsMultiplier}x points and ${data.freeHotStonePerMonth} free Hot Stone add-on(s) per month${data.freeHotStoneAvailable ? ' available now' : ''}` : ''}`;
+        setMembershipCheckMessage(`${planName} membership active: ${benefits}.`);
+      } else {
+        setMembershipBenefit(null);
+        setMembershipCheckMessage('No active paid membership found. Regular points rewards remain available.');
+      }
+    } catch (error) {
+      setMembershipBenefit(null);
+      setMembershipCheckMessage(error.message || 'Could not check membership eligibility.');
+    }
   };
 
   const updateIntake = (field, val) => {
@@ -1421,20 +1486,37 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
   };
 
   const calculateFinancials = () => {
-    if (!bookingData.service) return { base: 0, tax: 0, total: 0, deposit: 0, balanceDue: 0 };
+    if (!bookingData.service) return { base: 0, discountPercent: 0, discountAmount: 0, tax: 0, total: 0, deposit: 0, balanceDue: 0 };
     const base = bookingData.service.price;
-    const tax = base * (bookingData.service.taxRate || 0);
-    const total = base + tax;
+    const isPlatinumHotStoneAddon = membershipBenefit?.type === 'platinum' &&
+      bookingData.service.name.toLowerCase().includes('hot stone add-on');
+    const isGoldFreeHotStoneAddon = membershipBenefit?.type === 'gold' &&
+      membershipBenefit.freeHotStoneAvailable &&
+      bookingData.service.name.toLowerCase().includes('hot stone add-on');
+    const isPlatinumPrepaidSession = membershipBenefit?.type === 'platinum' &&
+      !isPlatinumHotStoneAddon &&
+      Number(membershipBenefit.hoursBalance) >= Number(bookingData.service.duration) / 60;
+    const discountAmount = isGoldFreeHotStoneAddon
+      ? base
+      : isPlatinumPrepaidSession
+        ? base
+        : isPlatinumHotStoneAddon
+          ? Math.min(base, Number(membershipBenefit.hotStoneDiscount) || 0)
+          : Math.round(base * (membershipBenefit?.discountPercent || 0)) / 100;
+    const discountPercent = base > 0 ? discountAmount * 100 / base : 0;
+    const discountedBase = base - discountAmount;
+    const tax = discountedBase * (bookingData.service.taxRate || 0);
+    const total = discountedBase + tax;
     let deposit = 0;
     if (bookingData.paymentOption === 'deposit') {
-      deposit = bookingData.service.deposit;
+      deposit = Math.min(bookingData.service.deposit, total);
     } else if (bookingData.paymentOption === 'full') {
       deposit = total;
     } else {
       deposit = 0; // clinic
     }
     const balanceDue = Math.max(0, total - deposit);
-    return { base, tax, total, deposit, balanceDue };
+    return { base, discountPercent, discountAmount, tax, total, deposit, balanceDue };
   };
 
   const financials = calculateFinancials();
@@ -1455,6 +1537,9 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
       email: bookingData.customer.email,
       marketingOptIn: bookingData.marketingOptIn,
       loyaltyOptIn: bookingData.loyaltyOptIn,
+      subtotalAmount: financials.base.toFixed(2),
+      taxRate: bookingData.service.taxRate || 0,
+      expectedDiscountPercent: financials.discountPercent,
       branchName: bookingData.branch.name,
       serviceName: bookingData.service.name,
       therapistName: bookingData.therapist?.name || 'Any Available',
@@ -1485,7 +1570,10 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
     };
 
     // Use the Vercel route by default; retain support for a configured webhook.
-    const syncResult = await sendBookingToGoogleSheets(bookingData.marketingOptIn || bookingData.loyaltyOptIn ? '' : sheetsWebhookUrl, payloadForSheets);
+    const syncResult = await sendBookingToGoogleSheets(
+      bookingData.marketingOptIn || bookingData.loyaltyOptIn || membershipBenefit ? '' : sheetsWebhookUrl,
+      payloadForSheets,
+    );
     const syncSuccess = syncResult.success;
     if (!syncSuccess || syncResult.emailSent === false || syncResult.patientHistorySaved === false || (bookingData.marketingOptIn && syncResult.marketingConsentSaved === false) || (bookingData.loyaltyOptIn && syncResult.loyaltyEnrollmentSaved === false)) {
       setSheetsSyncReason(syncResult.reason || syncResult.emailReason || syncResult.patientHistoryReason || syncResult.marketingConsentReason || syncResult.loyaltyEnrollmentReason || 'The booking sync failed.');
@@ -1504,8 +1592,8 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
       date: bookingData.date,
       time: bookingData.time,
       status: 'Confirmed',
-      paidAmount: financials.deposit,
-      total: financials.total,
+      paidAmount: Number(syncResult.data?.paidAmount ?? financials.deposit),
+      total: Number(syncResult.data?.totalAmount ?? financials.total),
       syncedToSheets: syncSuccess
     };
 
@@ -1524,9 +1612,12 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
       <div className="bg-slate-950 text-white p-6 sm:p-8 text-center relative overflow-hidden">
         <div className="absolute top-0 right-0 transform translate-x-8 -translate-y-8 w-40 h-40 bg-slate-700 rounded-full opacity-30 pointer-events-none"></div>
         <div className="relative z-10">
-          <h1 className="text-3xl sm:text-4xl font-serif tracking-tight font-bold text-amber-200">{businessName}</h1>
+          <div className="flex items-center justify-center gap-3">
+            <BusinessPhoto businessName={businessName} photoUrl={photoUrl} className="h-12 w-12 rounded-xl object-cover shadow-md" />
+            <h1 className="text-3xl sm:text-4xl font-serif tracking-tight font-bold text-amber-200">{businessName}</h1>
+          </div>
           <p className="text-slate-300 font-medium text-sm sm:text-base mt-1">Thai Massage & Wellness • Ontario, Canada</p>
-          {businessNameError && <p role="status" className="mt-2 text-xs text-amber-200">{businessNameError}</p>}
+          {brandingError && <p role="status" className="mt-2 text-xs text-amber-200">{brandingError}</p>}
           
           <div className="mt-4 inline-flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-xs sm:text-sm bg-white/5 backdrop-blur px-5 py-2 rounded-full border border-white/10">
             <a href="tel:+14378987424" className="flex items-center text-slate-200 hover:text-white transition">
@@ -1889,7 +1980,8 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                   />
                   <span>
                     <strong className="block text-sm">Join {businessName} Rewards</strong>
-                    <span className="block mt-0.5">Earn {loyaltyProgram.pointsPerDollar} point{loyaltyProgram.pointsPerDollar === 1 ? '' : 's'} per $1 paid. Redeem {loyaltyProgram.redemptionPoints} points for ${Number(loyaltyProgram.redemptionValue).toFixed(2)} off in clinic. Membership is optional and separate from marketing emails.</span>
+                    <span className="block mt-0.5">Earn {loyaltyProgram.pointsPerDollar} points per $1 actually paid, with {loyaltyProgram.firstSessionMultiplier}x points on your first single-session purchase. Redeem {loyaltyProgram.redemptionPoints.toLocaleString()} points for ${Number(loyaltyProgram.redemptionValue).toFixed(2)} off in clinic. Membership is optional and separate from marketing emails.</span>
+                    <span className="mt-1 block">Gold: ${loyaltyProgram.membershipPlans.gold.monthlyFee}/month, {loyaltyProgram.membershipPlans.gold.discountPercent}% off, {loyaltyProgram.membershipPlans.gold.pointsMultiplier}x points and {loyaltyProgram.membershipPlans.gold.freeHotStonePerMonth} free Hot Stone add-on(s) monthly. Platinum: ${loyaltyProgram.membershipPlans.platinum.topUpPrice} for {loyaltyProgram.membershipPlans.platinum.includedHours} prepaid hours, {loyaltyProgram.membershipPlans.platinum.discountPercent}% off and ${loyaltyProgram.membershipPlans.platinum.hotStoneDiscount} off Hot Stone add-ons.</span>
                     <span className="mt-1 block text-indigo-700">Tiers: {loyaltyProgram.tiers.map((tier) => tier.name).join(' · ')}</span>
                   </span>
                 </label>
@@ -2347,9 +2439,15 @@ function AdminPortal({
   const [loyaltyDashboard, setLoyaltyDashboard] = useState(null);
   const [loyaltySettings, setLoyaltySettings] = useState({
     enabled: true,
-    pointsPerDollar: 1,
-    redemptionPoints: 100,
-    redemptionValue: 5,
+    pointsPerDollar: 10,
+    firstSessionMultiplier: 5,
+    redemptionPoints: 10000,
+    redemptionValue: 10,
+    membershipPlans: {
+      gold: { monthlyFee: 39, discountPercent: 10, pointsMultiplier: 1.5, freeHotStonePerMonth: 1 },
+      platinum: { topUpPrice: 1500, includedHours: 50, discountPercent: 30, hotStoneDiscount: 10 },
+      silver: { monthlyFee: 250, discountPercent: 5, maxEmployees: 50 },
+    },
     tiers: [
       { name: 'Member', threshold: 0 },
       { name: 'Silver', threshold: 500 },
@@ -2362,9 +2460,18 @@ function AdminPortal({
   const [loyaltyNotice, setLoyaltyNotice] = useState('');
   const [loyaltyActionId, setLoyaltyActionId] = useState('');
   const [loyaltyMemberSearch, setLoyaltyMemberSearch] = useState('');
+  const [loyaltyMemberTypeFilter, setLoyaltyMemberTypeFilter] = useState('all');
+  const [loyaltyOnboardingSearch, setLoyaltyOnboardingSearch] = useState('');
+  const [newLoyaltyMember, setNewLoyaltyMember] = useState({
+    name: '', email: '', phone: '', membershipType: 'gold', organization: '', companyId: '', paidThrough: '',
+  });
+  const [isOnboardingLoyaltyMember, setIsOnboardingLoyaltyMember] = useState(false);
+  const [selectedTopUpMember, setSelectedTopUpMember] = useState(null);
+  const [selectedMembershipPayment, setSelectedMembershipPayment] = useState(null);
+  const [membershipPaidThrough, setMembershipPaidThrough] = useState('');
   const [selectedLoyaltyMember, setSelectedLoyaltyMember] = useState(null);
   const [loyaltyRedeemPoints, setLoyaltyRedeemPoints] = useState('');
-  const [loyaltyRedeemReference, setLoyaltyRedeemReference] = useState('');
+  const [loyaltyRedeemBookingId, setLoyaltyRedeemBookingId] = useState('');
   const [campaignSubject, setCampaignSubject] = useState('');
   const [campaignPreview, setCampaignPreview] = useState('');
   const [campaignMessage, setCampaignMessage] = useState('');
@@ -2506,7 +2613,9 @@ function AdminPortal({
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
-      setLoyaltyNotice(data.alreadyAwarded ? 'Points were already awarded for this booking.' : `${data.points} points awarded to ${booking.customerName}.`);
+      setLoyaltyNotice(data.alreadyAwarded
+        ? 'Points or prepaid hours were already recorded for this booking.'
+        : `${data.points ? `${data.points} points awarded to ${booking.customerName}` : `${booking.customerName}'s visit recorded`}${data.hoursUsed ? `; ${data.hoursUsed} prepaid hours used.` : '.'}`);
       await loadLoyaltyDashboard();
     } catch (error) {
       setLoyaltyError(error.message || 'Unable to award loyalty points.');
@@ -2528,18 +2637,102 @@ function AdminPortal({
         body: JSON.stringify({
           email: selectedLoyaltyMember.email,
           points: Number(loyaltyRedeemPoints),
-          reference: loyaltyRedeemReference,
+          bookingId: loyaltyRedeemBookingId,
         }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
-      setLoyaltyNotice(`${data.redeemedPoints} points redeemed for $${Number(data.rewardValue).toFixed(2)} off. Apply the discount to the customer's in-clinic purchase.`);
+      setLoyaltyNotice(`${data.redeemedPoints.toLocaleString()} points redeemed for $${Number(data.rewardValue).toFixed(2)} off and linked to booking ${data.bookingId}. Remaining balance: ${data.remainingPoints.toLocaleString()} points.${data.emailSent ? ' Confirmation emailed; the receipt number will be linked and emailed when the receipt is issued.' : ` Redemption saved, but confirmation email failed: ${data.emailError || 'check Gmail configuration.'}`}`);
       setSelectedLoyaltyMember(null);
       setLoyaltyRedeemPoints('');
-      setLoyaltyRedeemReference('');
+      setLoyaltyRedeemBookingId('');
       await loadLoyaltyDashboard();
     } catch (error) {
       setLoyaltyError(error.message || 'Unable to redeem loyalty points.');
+    } finally {
+      setLoyaltyActionId('');
+    }
+  };
+
+  const onboardLoyaltyMember = async (event) => {
+    event.preventDefault();
+    setIsOnboardingLoyaltyMember(true);
+    setLoyaltyError('');
+    setLoyaltyNotice('');
+    try {
+      const response = await fetch('/api/booking?view=loyalty-member', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newLoyaltyMember),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Unable to onboard member.');
+      const platinumNextStep = data.member.membershipType === 'platinum'
+        ? ' Record the $1,500 Platinum top-up in the member list to add prepaid hours.'
+        : '';
+      setLoyaltyNotice(`${data.emailSent
+        ? `Membership saved and eligibility details emailed to ${data.member.email}.`
+        : `Membership saved, but the email could not be sent: ${data.emailError || 'check Gmail configuration and retry.'}`}${platinumNextStep}`);
+      setNewLoyaltyMember({ name: '', email: '', phone: '', membershipType: 'gold', organization: '', companyId: '', paidThrough: '' });
+      setLoyaltyOnboardingSearch('');
+      await loadLoyaltyDashboard();
+    } catch (error) {
+      setLoyaltyError(error.message || 'Unable to onboard member.');
+    } finally {
+      setIsOnboardingLoyaltyMember(false);
+    }
+  };
+
+  const recordPlatinumTopUp = async () => {
+    if (!selectedTopUpMember) return;
+    setLoyaltyActionId(selectedTopUpMember.email);
+    setLoyaltyError('');
+    setLoyaltyNotice('');
+    try {
+      const response = await fetch('/api/booking?view=loyalty-topup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: selectedTopUpMember.email }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Unable to record Platinum top-up.');
+      setLoyaltyNotice(`Recorded $${Number(loyaltySettings.membershipPlans.platinum.topUpPrice).toFixed(2)} payment; ${data.hoursAdded} prepaid hours added. New balance: ${Number(data.hoursBalance).toFixed(2)} hours.`);
+      setSelectedTopUpMember(null);
+      await loadLoyaltyDashboard();
+    } catch (error) {
+      setLoyaltyError(error.message || 'Unable to record Platinum top-up.');
+    } finally {
+      setLoyaltyActionId('');
+    }
+  };
+
+  const recordMembershipPayment = async (event) => {
+    event.preventDefault();
+    if (!selectedMembershipPayment || !membershipPaidThrough) return;
+    setLoyaltyActionId(selectedMembershipPayment.email);
+    setLoyaltyError('');
+    setLoyaltyNotice('');
+    try {
+      const response = await fetch('/api/booking?view=loyalty-payment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: selectedMembershipPayment.email,
+          organization: selectedMembershipPayment.membershipType === 'silver' ? selectedMembershipPayment.organization : '',
+          paidThrough: membershipPaidThrough,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Unable to record membership payment.');
+      const emailStatus = data.emailFailures?.length
+        ? ` ${data.emailFailures.length} payment notification(s) failed.`
+        : ` Payment confirmations emailed to ${data.emailsSent} member(s).`;
+      setLoyaltyNotice(`Payment recorded through ${data.paidThrough} for ${data.updatedCount} member(s).${emailStatus}`);
+      setSelectedMembershipPayment(null);
+      setMembershipPaidThrough('');
+      await loadLoyaltyDashboard();
+    } catch (error) {
+      setLoyaltyError(error.message || 'Unable to record membership payment.');
     } finally {
       setLoyaltyActionId('');
     }
@@ -2863,7 +3056,7 @@ function AdminPortal({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
     }[char]));
     const { receipt, booking, businessProfile: profile } = data;
-    popup.document.write(`<!doctype html><html><head><title>Receipt ${safe(receipt.number)}</title><meta charset="utf-8"><style>body{font:15px Arial,sans-serif;color:#17231e;max-width:760px;margin:48px auto;padding:32px}header{display:flex;justify-content:space-between;border-bottom:3px solid #087765;padding-bottom:20px}h1{font-size:28px;margin:0}small,.muted{color:#65716b}.row{display:flex;justify-content:space-between;padding:12px 0;border-bottom:1px solid #e5ebe7}.total{font-size:20px;font-weight:bold;border-top:2px solid #087765;margin-top:18px;padding-top:18px}button{margin:24px 0;padding:10px 18px;background:#073d32;color:white;border:0;border-radius:8px}@media print{button{display:none}body{margin:0 auto}}</style></head><body><header><div><h1>${safe(profile.businessName)}</h1><p class="muted">${safe(profile.legalName)}</p><p class="muted">${safe(profile.address)}</p><p class="muted">${safe(profile.phone)} · ${safe(profile.email)}</p>${profile.taxRegistrationNumber ? `<p class="muted">GST/HST No.: ${safe(profile.taxRegistrationNumber)}</p>` : ''}</div><h1>RECEIPT</h1></header><p><strong>Receipt No.</strong> ${safe(receipt.number)}<br><strong>Issued</strong> ${safe(receipt.issuedAt.slice(0, 10))}</p><p><strong>Client</strong> ${safe(booking.customerName)}<br>${safe(booking.email)}<br>${safe(booking.phone)}</p><p><strong>Service date</strong> ${safe(booking.date)}<br><strong>Payment method</strong> ${safe(booking.paymentOption)}</p><div class="row"><strong>${safe(booking.serviceName)}</strong><span>$${receipt.subtotal.toFixed(2)}</span></div><div class="row"><span>${safe(receipt.taxLabel)}</span><span>$${receipt.tax.toFixed(2)}</span></div><div class="row total"><span>Total paid</span><span>$${receipt.total.toFixed(2)}</span></div><p class="muted" style="text-align:center;margin-top:64px">Thank you for choosing ${safe(profile.businessName)}.</p><button onclick="window.print()">Print receipt</button></body></html>`);
+    popup.document.write(`<!doctype html><html><head><title>Receipt ${safe(receipt.number)}</title><meta charset="utf-8"><style>body{font:15px Arial,sans-serif;color:#17231e;max-width:760px;margin:48px auto;padding:32px}header{display:flex;justify-content:space-between;border-bottom:3px solid #087765;padding-bottom:20px}h1{font-size:28px;margin:0}small,.muted{color:#65716b}.row{display:flex;justify-content:space-between;padding:12px 0;border-bottom:1px solid #e5ebe7}.total{font-size:20px;font-weight:bold;border-top:2px solid #087765;margin-top:18px;padding-top:18px}.balance{margin-top:20px;padding:12px;background:#eff6f3;border-radius:8px}button{margin:24px 0;padding:10px 18px;background:#073d32;color:white;border:0;border-radius:8px}@media print{button{display:none}body{margin:0 auto}}</style></head><body><header><div><h1>${safe(profile.businessName)}</h1><p class="muted">${safe(profile.legalName)}</p><p class="muted">${safe(profile.address)}</p><p class="muted">${safe(profile.phone)} · ${safe(profile.email)}</p>${profile.taxRegistrationNumber ? `<p class="muted">GST/HST No.: ${safe(profile.taxRegistrationNumber)}</p>` : ''}</div><h1>RECEIPT</h1></header><p><strong>Receipt No.</strong> ${safe(receipt.number)}<br><strong>Issued</strong> ${safe(receipt.issuedAt.slice(0, 10))}</p><p><strong>Client</strong> ${safe(booking.customerName)}<br>${safe(booking.email)}<br>${safe(booking.phone)}</p><p><strong>Service date</strong> ${safe(booking.date)}<br><strong>Payment method</strong> ${safe(booking.paymentOption)}</p><div class="row"><strong>${safe(booking.serviceName)}</strong><span>$${receipt.subtotal.toFixed(2)}</span></div>${receipt.loyaltyDiscount > 0 ? `<div class="row"><span>Loyalty discount · ${receipt.pointsRedeemed.toLocaleString()} points</span><span>-$${receipt.loyaltyDiscount.toFixed(2)}</span></div>` : ''}<div class="row"><span>${safe(receipt.taxLabel)}</span><span>$${receipt.tax.toFixed(2)}</span></div><div class="row total"><span>Total paid</span><span>$${receipt.total.toFixed(2)}</span></div>${receipt.loyaltyMember ? `<p class="balance"><strong>Loyalty points balance:</strong> ${receipt.pointsBalance.toLocaleString()}</p>` : ''}<p class="muted" style="text-align:center;margin-top:64px">Thank you for choosing ${safe(profile.businessName)}.</p><button onclick="window.print()">Print receipt</button></body></html>`);
     popup.document.close();
     popup.focus();
   };
@@ -3580,16 +3773,19 @@ function AdminPortal({
                 <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 pb-4">
                   <div>
                     <h3 className="text-base font-semibold text-slate-900">Program settings</h3>
-                    <p className="mt-1 text-xs leading-5 text-slate-500">Update how members earn, redeem, and move through tiers. Changes affect future awards; existing points stay in member ledgers.</p>
+                    <p className="mt-1 text-xs leading-5 text-slate-500">Configure Standard, Gold and Platinum benefits. Point awards use service amounts actually paid, and existing ledger entries are unchanged.</p>
                   </div>
                   <label className="inline-flex cursor-pointer items-center gap-2 text-xs font-semibold text-slate-700">
                     <input type="checkbox" checked={loyaltySettings.enabled} onChange={(event) => setLoyaltySettings((current) => ({ ...current, enabled: event.target.checked }))} className="h-4 w-4 rounded border-slate-300 text-indigo-700 focus:ring-indigo-600" />
                     Program accepting members
                   </label>
                 </div>
-                <div className="grid gap-4 sm:grid-cols-3">
-                  <label className="text-xs font-semibold text-slate-600">Points per $1 paid
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                  <label className="text-xs font-semibold text-slate-600">Standard points per $1 paid
                     <input type="number" min="0.01" max="100" step="0.01" required value={loyaltySettings.pointsPerDollar} onChange={(event) => setLoyaltySettings((current) => ({ ...current, pointsPerDollar: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900" />
+                  </label>
+                  <label className="text-xs font-semibold text-slate-600">First single-session multiplier
+                    <input type="number" min="1" max="100" step="0.1" required value={loyaltySettings.firstSessionMultiplier} onChange={(event) => setLoyaltySettings((current) => ({ ...current, firstSessionMultiplier: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900" />
                   </label>
                   <label className="text-xs font-semibold text-slate-600">Points per reward
                     <input type="number" min="1" max="1000000" step="1" required value={loyaltySettings.redemptionPoints} onChange={(event) => setLoyaltySettings((current) => ({ ...current, redemptionPoints: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900" />
@@ -3598,6 +3794,41 @@ function AdminPortal({
                     <input type="number" min="0.01" max="10000" step="0.01" required value={loyaltySettings.redemptionValue} onChange={(event) => setLoyaltySettings((current) => ({ ...current, redemptionValue: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900" />
                   </label>
                 </div>
+                <section className="space-y-3 rounded-xl border border-indigo-100 bg-indigo-50/50 p-4">
+                  <h4 className="text-sm font-semibold text-indigo-950">Gold monthly</h4>
+                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                    <label className="text-xs font-semibold text-slate-700">Monthly fee ($)
+                    <input type="number" min="0" max="100000" step="0.01" required value={loyaltySettings.membershipPlans.gold.monthlyFee} onChange={(event) => setLoyaltySettings((current) => ({ ...current, membershipPlans: { ...current.membershipPlans, gold: { ...current.membershipPlans.gold, monthlyFee: event.target.value } } }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" />
+                    </label>
+                    <label className="text-xs font-semibold text-slate-700">Service discount (%)
+                    <input type="number" min="0" max="100" step="0.1" required value={loyaltySettings.membershipPlans.gold.discountPercent} onChange={(event) => setLoyaltySettings((current) => ({ ...current, membershipPlans: { ...current.membershipPlans, gold: { ...current.membershipPlans.gold, discountPercent: event.target.value } } }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" />
+                    </label>
+                    <label className="text-xs font-semibold text-slate-700">Points multiplier
+                    <input type="number" min="0" max="100" step="0.1" required value={loyaltySettings.membershipPlans.gold.pointsMultiplier} onChange={(event) => setLoyaltySettings((current) => ({ ...current, membershipPlans: { ...current.membershipPlans, gold: { ...current.membershipPlans.gold, pointsMultiplier: event.target.value } } }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" />
+                    </label>
+                    <label className="text-xs font-semibold text-slate-700">Free Hot Stone add-ons / month
+                    <input type="number" min="0" max="100" step="1" required value={loyaltySettings.membershipPlans.gold.freeHotStonePerMonth} onChange={(event) => setLoyaltySettings((current) => ({ ...current, membershipPlans: { ...current.membershipPlans, gold: { ...current.membershipPlans.gold, freeHotStonePerMonth: event.target.value } } }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" />
+                    </label>
+                  </div>
+                </section>
+                <section className="space-y-3 rounded-xl border border-amber-200 bg-amber-50/50 p-4">
+                  <h4 className="text-sm font-semibold text-amber-950">Platinum company top-up</h4>
+                  <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                    <label className="text-xs font-semibold text-slate-700">Top-up price ($)
+                      <input type="number" min="0" max="100000" step="0.01" required value={loyaltySettings.membershipPlans.platinum.topUpPrice} onChange={(event) => setLoyaltySettings((current) => ({ ...current, membershipPlans: { ...current.membershipPlans, platinum: { ...current.membershipPlans.platinum, topUpPrice: event.target.value } } }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" />
+                    </label>
+                    <label className="text-xs font-semibold text-slate-700">Prepaid hours
+                      <input type="number" min="0.01" max="10000" step="0.25" required value={loyaltySettings.membershipPlans.platinum.includedHours} onChange={(event) => setLoyaltySettings((current) => ({ ...current, membershipPlans: { ...current.membershipPlans, platinum: { ...current.membershipPlans.platinum, includedHours: event.target.value } } }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" />
+                    </label>
+                    <label className="text-xs font-semibold text-slate-700">Service discount (%)
+                      <input type="number" min="0" max="100" step="0.1" required value={loyaltySettings.membershipPlans.platinum.discountPercent} onChange={(event) => setLoyaltySettings((current) => ({ ...current, membershipPlans: { ...current.membershipPlans, platinum: { ...current.membershipPlans.platinum, discountPercent: event.target.value } } }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" />
+                    </label>
+                    <label className="text-xs font-semibold text-slate-700">Hot Stone add-on discount ($)
+                      <input type="number" min="0" max="10000" step="0.01" required value={loyaltySettings.membershipPlans.platinum.hotStoneDiscount} onChange={(event) => setLoyaltySettings((current) => ({ ...current, membershipPlans: { ...current.membershipPlans, platinum: { ...current.membershipPlans.platinum, hotStoneDiscount: event.target.value } } }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" />
+                    </label>
+                  </div>
+                  <p className="text-[11px] leading-5 text-slate-600">Company employees are matched by their enrolled email and optional company ID. Record a confirmed top-up from the member row; completed visits consume their service duration from the hours balance.</p>
+                </section>
                 <div>
                   <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                     <div><h4 className="text-sm font-semibold text-slate-900">Member tiers</h4><p className="mt-0.5 text-[11px] text-slate-500">Tier level is based on lifetime points earned. The first tier must begin at 0 points.</p></div>
@@ -3621,10 +3852,56 @@ function AdminPortal({
                 </div>
               </form>
 
+              <form onSubmit={onboardLoyaltyMember} className="space-y-4 rounded-2xl border border-indigo-200 bg-white p-5 shadow-sm sm:p-6">
+                <div><h3 className="text-base font-semibold text-slate-900">Onboard a member</h3><p className="mt-1 text-xs leading-5 text-slate-500">Find a recent customer by name, email or phone, then enroll them in Standard, Gold or Platinum. Platinum employees use their enrolled email and can add a company ID for verification.</p></div>
+                <div className="relative max-w-xl">
+                  <label className="relative block">
+                    <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                    <input type="search" value={loyaltyOnboardingSearch} onChange={(event) => setLoyaltyOnboardingSearch(event.target.value)} placeholder="Find a booking customer by name, email or phone" aria-label="Find a customer to enroll" className="w-full rounded-lg border border-slate-200 py-2.5 pl-10 pr-3 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100" />
+                  </label>
+                  {!!loyaltyOnboardingSearch.trim() && (() => {
+                    const query = loyaltyOnboardingSearch.trim().toLowerCase();
+                    const matches = (loyaltyDashboard.customerDirectory || [])
+                      .filter((customer) => [customer.name, customer.email, customer.phone].some((value) => (value || '').toLowerCase().includes(query)))
+                      .slice(0, 6);
+                    return matches.length ? (
+                      <div className="absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-lg border border-slate-200 bg-white p-1 shadow-lg">
+                        {matches.map((customer) => (
+                          <button key={customer.email} type="button" onClick={() => {
+                            setNewLoyaltyMember((current) => ({
+                              ...current,
+                              name: customer.name || current.name,
+                              email: customer.email,
+                              phone: customer.phone || current.phone,
+                            }));
+                            setLoyaltyOnboardingSearch('');
+                          }} className="block w-full rounded-md px-3 py-2 text-left hover:bg-indigo-50">
+                            <span className="block text-xs font-semibold text-slate-800">{customer.name || customer.email}</span>
+                            <span className="block text-[11px] text-slate-500">{customer.email}{customer.phone ? ` · ${customer.phone}` : ''}</span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : <p className="absolute z-20 mt-1 w-full rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-500 shadow-lg">No booking customer matches that search.</p>;
+                  })()}
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  <label className="text-xs font-semibold text-slate-600">Member name<input required maxLength={120} value={newLoyaltyMember.name} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, name: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" /></label>
+                  <label className="text-xs font-semibold text-slate-600">Email<input required type="email" maxLength={254} value={newLoyaltyMember.email} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, email: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" /></label>
+                  <label className="text-xs font-semibold text-slate-600">Phone (optional)<input type="tel" maxLength={50} value={newLoyaltyMember.phone} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, phone: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" /></label>
+                  <label className="text-xs font-semibold text-slate-600">Membership type<select value={newLoyaltyMember.membershipType} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, membershipType: event.target.value, organization: event.target.value === 'platinum' ? current.organization : '', companyId: event.target.value === 'platinum' ? current.companyId : '', paidThrough: event.target.value === 'gold' ? current.paidThrough : '' }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm"><option value="regular">Standard · Free points</option><option value="gold">Gold · Monthly</option><option value="platinum">Platinum · Company top-up</option></select></label>
+                  {newLoyaltyMember.membershipType === 'platinum' && <>
+                    <label className="text-xs font-semibold text-slate-600">Company name<input required maxLength={120} value={newLoyaltyMember.organization} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, organization: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" /></label>
+                    <label className="text-xs font-semibold text-slate-600">Company ID (optional if using work email)<input maxLength={120} value={newLoyaltyMember.companyId} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, companyId: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" /></label>
+                  </>}
+                  {newLoyaltyMember.membershipType === 'gold' && <label className="text-xs font-semibold text-slate-600">Paid through<input type="date" value={newLoyaltyMember.paidThrough} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, paidThrough: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" /></label>}
+                </div>
+                <button type="submit" disabled={isOnboardingLoyaltyMember || !loyaltySettings.enabled} className="inline-flex items-center gap-2 rounded-lg bg-indigo-950 px-4 py-2.5 text-xs font-semibold text-white hover:bg-indigo-800 disabled:opacity-50">{isOnboardingLoyaltyMember ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}{isOnboardingLoyaltyMember ? 'Saving membership…' : 'Save member & email details'}</button>
+              </form>
+
               <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
                 <div className="border-b border-slate-100 px-5 py-4">
                   <h3 className="text-base font-semibold text-slate-900">Confirm completed visits</h3>
-                  <p className="mt-1 text-xs leading-5 text-slate-500">Only member appointments whose treatment time has passed and are fully paid appear here. Confirming a visit records points once and cannot be repeated.</p>
+                  <p className="mt-1 text-xs leading-5 text-slate-500">Confirm completed, paid member visits, redeem a Gold monthly Hot Stone add-on, or consume Platinum prepaid hours. Each visit can only be recorded once.</p>
                 </div>
                 {loyaltyDashboard.eligibleBookings.length ? (
                   <div className="overflow-x-auto">
@@ -3636,35 +3913,48 @@ function AdminPortal({
                             <td className="px-5 py-3 font-medium text-slate-900">{booking.customerName}<span className="mt-0.5 block text-[10px] font-normal text-slate-500">{booking.email}</span></td>
                             <td className="px-4 py-3 text-slate-700">{booking.date}<span className="mt-0.5 block text-[10px] text-slate-500">{booking.serviceName} · {booking.id}</span></td>
                             <td className="px-4 py-3 text-right tabular-nums text-slate-700">${booking.paidAmount.toFixed(2)}</td>
-                            <td className="px-5 py-3 text-right font-semibold text-indigo-800">+{booking.points}</td>
+                            <td className="px-5 py-3 text-right font-semibold text-indigo-800">{booking.points ? `+${booking.points} pts` : booking.hoursToUse ? `${booking.hoursToUse.toFixed(2)} hrs` : booking.freeHotStone ? 'Free add-on' : '—'}{booking.firstSession && <span className="mt-0.5 block text-[10px] font-normal">First session · {booking.pointsMultiplier}x</span>}</td>
                             <td className="px-5 py-3 text-right"><button type="button" disabled={loyaltyActionId === booking.id || !loyaltySettings.enabled} onClick={() => awardLoyaltyPoints(booking)} className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-950 px-3 py-2 text-[11px] font-semibold text-white hover:bg-indigo-800 disabled:opacity-50"><CheckCircle2 className="h-3.5 w-3.5" />{loyaltyActionId === booking.id ? 'Awarding…' : 'Confirm & award'}</button></td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
                   </div>
-                ) : <p className="p-6 text-center text-sm text-slate-500">No fully paid, completed member visits are waiting for points.</p>}
+                ) : <p className="p-6 text-center text-sm text-slate-500">No completed member visits or benefits are waiting to be recorded.</p>}
               </section>
 
               <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
-                  <div><h3 className="text-base font-semibold text-slate-900">Members & balances</h3><p className="mt-1 text-xs text-slate-500">Redeem a reward in clinic and apply the shown discount to the customer's purchase.</p></div>
-                  <label className="relative w-full sm:w-64"><Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" /><input type="search" value={loyaltyMemberSearch} onChange={(event) => setLoyaltyMemberSearch(event.target.value)} placeholder="Search members" aria-label="Search loyalty members" className="w-full rounded-lg border border-slate-200 py-2 pl-9 pr-3 text-xs outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100" /></label>
+                  <div><h3 className="text-base font-semibold text-slate-900">Members & balances</h3><p className="mt-1 text-xs text-slate-500">Search by member, email, phone, company or company ID; check eligibility, record top-ups and redeem points.</p></div>
+                  <div className="flex w-full flex-wrap gap-2 sm:w-auto">
+                    <label className="sr-only" htmlFor="loyalty-member-type-filter">Filter members by membership type</label>
+                    <select id="loyalty-member-type-filter" value={loyaltyMemberTypeFilter} onChange={(event) => setLoyaltyMemberTypeFilter(event.target.value)} className="rounded-lg border border-slate-200 px-3 py-2 text-xs">
+                      <option value="all">All memberships</option><option value="gold">Gold</option><option value="platinum">Platinum company</option><option value="silver">Legacy Silver</option><option value="regular">Standard points</option>
+                    </select>
+                    <label className="relative w-full sm:w-64"><Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" /><input type="search" value={loyaltyMemberSearch} onChange={(event) => setLoyaltyMemberSearch(event.target.value)} placeholder="Search member or company" aria-label="Search loyalty members" className="w-full rounded-lg border border-slate-200 py-2 pl-9 pr-3 text-xs outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100" /></label>
+                  </div>
                 </div>
                 {(() => {
-                  const filteredMembers = loyaltyDashboard.members.filter((member) => [member.name, member.email, member.phone].some((value) => value.toLowerCase().includes(loyaltyMemberSearch.trim().toLowerCase())));
+                  const filteredMembers = loyaltyDashboard.members
+                    .filter((member) => loyaltyMemberTypeFilter === 'all' || member.membershipType === loyaltyMemberTypeFilter)
+                    .filter((member) => [member.name, member.email, member.phone, member.organization, member.companyId].some((value) => (value || '').toLowerCase().includes(loyaltyMemberSearch.trim().toLowerCase())));
                   return filteredMembers.length ? (
                     <div className="overflow-x-auto">
-                      <table className="w-full min-w-[640px] text-left text-sm">
-                        <thead className="bg-slate-50 text-xs font-semibold text-slate-500"><tr><th className="px-5 py-3">Member</th><th className="px-4 py-3">Tier</th><th className="px-4 py-3 text-right">Balance</th><th className="px-4 py-3 text-right">Lifetime earned</th><th className="px-5 py-3 text-right">Reward</th></tr></thead>
+                      <table className="w-full min-w-[920px] text-left text-sm">
+                        <thead className="bg-slate-50 text-xs font-semibold text-slate-500"><tr><th className="px-5 py-3">Member</th><th className="px-4 py-3">Membership</th><th className="px-4 py-3">Eligibility</th><th className="px-4 py-3 text-right">Balance</th><th className="px-4 py-3 text-right">Lifetime earned</th><th className="px-5 py-3 text-right">Actions</th></tr></thead>
                         <tbody className="divide-y divide-slate-100">
                           {filteredMembers.map((member) => (
                             <tr key={member.email} className="hover:bg-slate-50">
                               <td className="px-5 py-3 font-medium text-slate-900">{member.name || 'Member'}<span className="mt-0.5 block text-[10px] font-normal text-slate-500">{member.email}{member.phone ? ` · ${member.phone}` : ''}</span></td>
-                              <td className="px-4 py-3"><span className="rounded-full bg-indigo-50 px-2.5 py-1 text-[10px] font-semibold text-indigo-800">{member.tier}</span></td>
-                              <td className="px-4 py-3 text-right font-semibold tabular-nums text-slate-800">{member.pointsBalance.toLocaleString()} pts</td>
+                              <td className="px-4 py-3"><span className="rounded-full bg-indigo-50 px-2.5 py-1 text-[10px] font-semibold text-indigo-800">{member.membershipType === 'gold' ? 'Gold' : member.membershipType === 'platinum' ? 'Platinum · Company' : member.membershipType === 'silver' ? 'Legacy Silver · Corporate' : `Standard · ${member.tier}`}</span>{member.organization && <span className="mt-1 block text-[10px] text-slate-500">{member.organization}{member.companyId ? ` · ID ${member.companyId}` : ''}</span>}</td>
+                              <td className="px-4 py-3 text-xs">{member.membershipType === 'regular' ? <span className="text-slate-500">Points program</span> : member.membershipType === 'platinum' ? <><span className={member.membershipActive ? 'font-semibold text-emerald-700' : 'font-semibold text-amber-700'}>{member.membershipActive ? `${member.membershipDiscountPercent}% off active` : 'Top-up required'}</span><span className="mt-1 block text-[10px] text-slate-500">{member.prepaidHoursBalance.toFixed(2)} prepaid hours remain · ${loyaltySettings.membershipPlans.platinum.hotStoneDiscount} off Hot Stone add-on</span></> : <><span className={member.membershipActive ? 'font-semibold text-emerald-700' : 'font-semibold text-amber-700'}>{member.membershipActive ? `${member.membershipDiscountPercent}% off active` : 'Payment required'}</span><span className="mt-1 block text-[10px] text-slate-500">Paid through: {member.paidThrough || 'not recorded'}{member.membershipType === 'gold' ? ` · Hot Stone add-on ${member.freeHotStoneAvailable ? 'available' : 'used'} this month` : ''}</span></>}</td>
+                              <td className="px-4 py-3 text-right font-semibold tabular-nums text-slate-800">{member.pointsBalance.toLocaleString()} pts{member.membershipType === 'platinum' && <span className="mt-1 block text-[10px] font-normal text-slate-500">{member.prepaidHoursBalance.toFixed(2)} hrs</span>}</td>
                               <td className="px-4 py-3 text-right tabular-nums text-slate-600">{member.lifetimePoints.toLocaleString()} pts</td>
-                              <td className="px-5 py-3 text-right"><button type="button" disabled={!loyaltySettings.enabled || member.pointsBalance < loyaltySettings.redemptionPoints} onClick={() => { setSelectedLoyaltyMember(member); setLoyaltyRedeemPoints(String(loyaltySettings.redemptionPoints)); setLoyaltyRedeemReference(''); }} className="rounded-lg border border-indigo-200 px-3 py-2 text-[11px] font-semibold text-indigo-800 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-40">Redeem reward</button></td>
+                              <td className="space-y-1 px-5 py-3 text-right">
+                                <button type="button" disabled={!loyaltySettings.enabled || member.pointsBalance < loyaltySettings.redemptionPoints || !member.receiptCandidates?.length} onClick={() => { setSelectedLoyaltyMember(member); setLoyaltyRedeemPoints(String(loyaltySettings.redemptionPoints)); setLoyaltyRedeemBookingId(member.receiptCandidates?.[0]?.bookingId || ''); }} className="rounded-lg border border-indigo-200 px-3 py-2 text-[11px] font-semibold text-indigo-800 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-40">Redeem points</button>
+                                {member.membershipType === 'platinum' && <button type="button" disabled={!loyaltySettings.enabled} onClick={() => setSelectedTopUpMember(member)} className="block ml-auto rounded-lg border border-amber-200 px-3 py-2 text-[11px] font-semibold text-amber-900 hover:bg-amber-50 disabled:opacity-40">Record top-up</button>}
+                                {['gold', 'silver'].includes(member.membershipType) && <button type="button" onClick={() => { setSelectedMembershipPayment(member); setMembershipPaidThrough(member.paidThrough || ''); }} className="block ml-auto rounded-lg border border-emerald-200 px-3 py-2 text-[11px] font-semibold text-emerald-800 hover:bg-emerald-50">Record payment</button>}
+                              </td>
                             </tr>
                           ))}
                         </tbody>
@@ -3680,8 +3970,8 @@ function AdminPortal({
                   {recentLoyaltyTransactions.length ? (
                     recentLoyaltyTransactions.map((transaction) => (
                         <div key={transaction.id} className="flex flex-wrap items-center justify-between gap-2 py-3 text-xs">
-                          <div><p className="font-semibold text-slate-800">{transaction.memberName}</p><p className="mt-0.5 text-slate-500">{transaction.description} · {transaction.createdAt ? new Date(transaction.createdAt).toLocaleDateString() : ''}</p></div>
-                          <span className={`font-bold tabular-nums ${transaction.points >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{transaction.points > 0 ? '+' : ''}{transaction.points} pts</span>
+                          <div><p className="font-semibold text-slate-800">{transaction.memberName}</p><p className="mt-0.5 text-slate-500">{transaction.description} · {transaction.createdAt ? new Date(transaction.createdAt).toLocaleDateString() : ''}{transaction.bookingId ? ` · Booking ${transaction.bookingId}` : ''}{transaction.receiptNumber ? ` · Receipt ${transaction.receiptNumber}` : ''}</p></div>
+                          <span className={`font-bold tabular-nums ${transaction.points >= 0 && transaction.hours >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{transaction.hours ? `${transaction.hours > 0 ? '+' : ''}${transaction.hours.toFixed(2)} hrs` : `${transaction.points > 0 ? '+' : ''}${transaction.points} pts`}</span>
                         </div>
                       ))
                   ) : <p className="py-4 text-sm text-slate-500">No reward activity recorded yet.</p>}
@@ -3697,16 +3987,47 @@ function AdminPortal({
                   <div><p className="text-[10px] font-bold uppercase tracking-wider text-indigo-700">In-clinic reward</p><h3 id="redeem-loyalty-title" className="mt-1 text-lg font-bold text-slate-900">Redeem points</h3><p className="mt-1 text-xs text-slate-500">{selectedLoyaltyMember.name} · {selectedLoyaltyMember.email}</p></div>
                   <button type="button" onClick={() => setSelectedLoyaltyMember(null)} aria-label="Close redemption dialog" className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700"><X className="h-4 w-4" /></button>
                 </div>
-                <p className="rounded-xl bg-indigo-50 p-3 text-xs leading-5 text-indigo-900">Available: <strong>{selectedLoyaltyMember.pointsBalance.toLocaleString()} points</strong>. Every {loyaltySettings.redemptionPoints} points gives ${Number(loyaltySettings.redemptionValue).toFixed(2)} off.</p>
+                <p className="rounded-xl bg-indigo-50 p-3 text-xs leading-5 text-indigo-900">Available: <strong>{selectedLoyaltyMember.pointsBalance.toLocaleString()} points</strong>. Every {loyaltySettings.redemptionPoints.toLocaleString()} points gives ${Number(loyaltySettings.redemptionValue).toFixed(2)} off. Choose the paid booking below; the discount will be linked to its receipt number when staff issue the receipt.</p>
                 <label className="block text-xs font-semibold text-slate-600">Points to redeem
                   <input type="number" min={loyaltySettings.redemptionPoints} max={selectedLoyaltyMember.pointsBalance} step={loyaltySettings.redemptionPoints} required value={loyaltyRedeemPoints} onChange={(event) => setLoyaltyRedeemPoints(event.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900" />
                 </label>
-                <label className="block text-xs font-semibold text-slate-600">Optional sale / receipt reference
-                  <input maxLength={100} value={loyaltyRedeemReference} onChange={(event) => setLoyaltyRedeemReference(event.target.value)} placeholder="e.g. receipt number" className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900" />
+                <label className="block text-xs font-semibold text-slate-600">Paid booking / receipt to apply the discount to
+                  <select required value={loyaltyRedeemBookingId} onChange={(event) => setLoyaltyRedeemBookingId(event.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900">
+                    {(selectedLoyaltyMember.receiptCandidates || []).map((candidate) => (
+                      <option key={candidate.bookingId} value={candidate.bookingId}>{candidate.date} · {candidate.serviceName} · ${candidate.total.toFixed(2)} · {candidate.bookingId}</option>
+                    ))}
+                  </select>
                 </label>
                 <div className="flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-xs"><span className="text-slate-600">Discount to apply</span><strong className="text-lg text-indigo-900">${((Number(loyaltyRedeemPoints) / loyaltySettings.redemptionPoints) * loyaltySettings.redemptionValue || 0).toFixed(2)}</strong></div>
-                <div className="flex justify-end gap-2 pt-1"><button type="button" onClick={() => setSelectedLoyaltyMember(null)} className="rounded-lg border border-slate-200 px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">Cancel</button><button type="submit" disabled={!!loyaltyActionId || !Number.isInteger(Number(loyaltyRedeemPoints)) || Number(loyaltyRedeemPoints) < loyaltySettings.redemptionPoints || Number(loyaltyRedeemPoints) > selectedLoyaltyMember.pointsBalance || Number(loyaltyRedeemPoints) % loyaltySettings.redemptionPoints !== 0} className="rounded-lg bg-indigo-950 px-4 py-2.5 text-xs font-semibold text-white hover:bg-indigo-800 disabled:opacity-50">{loyaltyActionId ? 'Recording…' : 'Confirm redemption'}</button></div>
+                <div className="flex justify-end gap-2 pt-1"><button type="button" onClick={() => setSelectedLoyaltyMember(null)} className="rounded-lg border border-slate-200 px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">Cancel</button><button type="submit" disabled={!!loyaltyActionId || !loyaltyRedeemBookingId || !Number.isInteger(Number(loyaltyRedeemPoints)) || Number(loyaltyRedeemPoints) < loyaltySettings.redemptionPoints || Number(loyaltyRedeemPoints) > selectedLoyaltyMember.pointsBalance || Number(loyaltyRedeemPoints) % loyaltySettings.redemptionPoints !== 0} className="rounded-lg bg-indigo-950 px-4 py-2.5 text-xs font-semibold text-white hover:bg-indigo-800 disabled:opacity-50">{loyaltyActionId ? 'Recording…' : 'Confirm redemption'}</button></div>
               </form>
+            </div>
+          )}
+          {selectedMembershipPayment && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedMembershipPayment(null); }}>
+              <form onSubmit={recordMembershipPayment} className="w-full max-w-md space-y-4 rounded-2xl bg-white p-5 shadow-2xl sm:p-6" role="dialog" aria-modal="true" aria-labelledby="membership-payment-title">
+                <div className="flex items-start justify-between gap-3">
+                  <div><p className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">External payment record</p><h3 id="membership-payment-title" className="mt-1 text-lg font-bold text-slate-900">Record membership payment</h3><p className="mt-1 text-xs text-slate-500">{selectedMembershipPayment.membershipType === 'silver' ? selectedMembershipPayment.organization : selectedMembershipPayment.email}</p></div>
+                  <button type="button" onClick={() => setSelectedMembershipPayment(null)} aria-label="Close payment dialog" className="rounded-lg p-2 text-slate-400 hover:bg-slate-100"><X className="h-4 w-4" /></button>
+                </div>
+                <p className="rounded-xl bg-emerald-50 p-3 text-xs leading-5 text-emerald-900">Record the date through which the payment was received. {selectedMembershipPayment.membershipType === 'silver' ? 'This updates all employees onboarded under this corporate account and emails each one.' : 'This activates the member discount and emails a payment confirmation.'}</p>
+                <label className="block text-xs font-semibold text-slate-600">Paid through
+                  <input type="date" required value={membershipPaidThrough} onChange={(event) => setMembershipPaidThrough(event.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900" />
+                </label>
+                <div className="flex justify-end gap-2 pt-1"><button type="button" onClick={() => setSelectedMembershipPayment(null)} className="rounded-lg border border-slate-200 px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">Cancel</button><button type="submit" disabled={!!loyaltyActionId || !membershipPaidThrough} className="rounded-lg bg-emerald-900 px-4 py-2.5 text-xs font-semibold text-white hover:bg-emerald-800 disabled:opacity-50">{loyaltyActionId ? 'Recording…' : 'Record payment & notify'}</button></div>
+              </form>
+            </div>
+          )}
+          {selectedTopUpMember && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedTopUpMember(null); }}>
+              <div className="w-full max-w-md space-y-4 rounded-2xl bg-white p-5 shadow-2xl sm:p-6" role="dialog" aria-modal="true" aria-labelledby="platinum-topup-title">
+                <div className="flex items-start justify-between gap-3">
+                  <div><p className="text-[10px] font-bold uppercase tracking-wider text-amber-700">Confirm external payment</p><h3 id="platinum-topup-title" className="mt-1 text-lg font-bold text-slate-900">Record Platinum top-up</h3><p className="mt-1 text-xs text-slate-500">{selectedTopUpMember.name} · {selectedTopUpMember.email}</p></div>
+                  <button type="button" onClick={() => setSelectedTopUpMember(null)} aria-label="Close Platinum top-up dialog" className="rounded-lg p-2 text-slate-400 hover:bg-slate-100"><X className="h-4 w-4" /></button>
+                </div>
+                <p className="rounded-xl bg-amber-50 p-3 text-xs leading-5 text-amber-950">Only continue after confirming receipt of <strong>${Number(loyaltySettings.membershipPlans.platinum.topUpPrice).toFixed(2)}</strong>. This adds <strong>{loyaltySettings.membershipPlans.platinum.includedHours} prepaid hours</strong> to {selectedTopUpMember.organization || 'the employee account'}; completed sessions deduct their duration.</p>
+                <div className="flex justify-end gap-2 pt-1"><button type="button" onClick={() => setSelectedTopUpMember(null)} className="rounded-lg border border-slate-200 px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">Cancel</button><button type="button" onClick={recordPlatinumTopUp} disabled={!!loyaltyActionId} className="rounded-lg bg-amber-800 px-4 py-2.5 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-50">{loyaltyActionId ? 'Recording…' : 'Payment received · add hours'}</button></div>
+              </div>
             </div>
           )}
         </div>
@@ -3957,13 +4278,14 @@ function AdminPortal({
                     { key: 'website', label: 'Website', type: 'url', placeholder: 'https://example.com' },
                     { key: 'address', label: 'Business location', type: 'text', placeholder: 'City, Province' },
                     { key: 'taxRegistrationNumber', label: 'GST/HST registration number', type: 'text', placeholder: 'Optional — enter only your registered number' },
+                    { key: 'photoUrl', label: 'Business photo URL', type: 'url', placeholder: 'https://example.com/business-photo.jpg' },
                   ].map((field) => (
-                    <label key={field.key} className={`block ${field.key === 'businessName' || field.key === 'tagline' ? 'sm:col-span-2' : ''}`}>
+                    <label key={field.key} className={`block ${field.key === 'businessName' || field.key === 'tagline' || field.key === 'photoUrl' ? 'sm:col-span-2' : ''}`}>
                       <span className="mb-1.5 block text-xs font-semibold text-slate-700">{field.label}{field.required && <span className="ml-1 text-rose-600">*</span>}</span>
                       <input
                         type={field.type}
                         required={field.required}
-                        maxLength={field.key === 'businessName' ? 100 : 250}
+                        maxLength={field.key === 'businessName' ? 100 : field.key === 'photoUrl' ? 2048 : 250}
                         value={businessProfile[field.key] || ''}
                         onChange={(event) => {
                           setBusinessProfile((profile) => ({ ...profile, [field.key]: event.target.value }));
@@ -3972,6 +4294,7 @@ function AdminPortal({
                         placeholder={field.placeholder}
                         className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100"
                       />
+                      {field.key === 'photoUrl' && <span className="mt-1.5 block text-xs leading-5 text-slate-500">Paste a publicly accessible image URL. Leave blank to use the business initials.</span>}
                     </label>
                   ))}
                 </div>
@@ -3986,9 +4309,7 @@ function AdminPortal({
 
               <aside className="self-start rounded-2xl border border-slate-200 bg-slate-50 p-5">
                 <p className="text-[11px] font-bold uppercase tracking-[0.15em] text-slate-400">Profile preview</p>
-                <div className="mt-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-900 to-emerald-700 text-lg font-bold text-white shadow-md">
-                  {(businessProfile.businessName || 'MT').split(/\s+/).filter(Boolean).slice(0, 2).map((word) => word[0]).join('').toUpperCase()}
-                </div>
+                <BusinessPhoto businessName={businessProfile.businessName || 'Your business'} photoUrl={businessProfile.photoUrl} className="mt-5 h-14 w-14 rounded-2xl object-cover text-lg shadow-md" />
                 <h3 className="mt-4 text-lg font-bold text-slate-900">{businessProfile.businessName || 'Your business name'}</h3>
                 {businessProfile.legalName && <p className="mt-0.5 text-xs text-slate-500">{businessProfile.legalName}</p>}
                 <p className="mt-1 text-sm leading-5 text-slate-500">{businessProfile.tagline || 'Add a short introduction to your practice.'}</p>
@@ -4219,8 +4540,10 @@ function AdminPortal({
                     {issuedReceipt && (
                       <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-4">
                         <div className="flex items-center justify-between"><div><p className="text-[10px] font-bold uppercase tracking-wider text-emerald-800">Receipt issued</p><p className="mt-1 font-mono text-sm font-bold text-slate-900">{issuedReceipt.receipt.number}</p></div><CheckCircle2 className="h-5 w-5 text-emerald-700" /></div>
+                        {issuedReceipt.receipt.loyaltyDiscount > 0 && <div className="mt-3 flex justify-between border-t border-emerald-100 pt-3 text-sm"><span className="text-slate-600">Loyalty discount · {issuedReceipt.receipt.pointsRedeemed.toLocaleString()} points</span><span>-${issuedReceipt.receipt.loyaltyDiscount.toFixed(2)}</span></div>}
                         <div className="mt-3 flex justify-between border-t border-emerald-100 pt-3 text-sm"><span className="text-slate-600">{issuedReceipt.receipt.taxLabel}</span><span>${issuedReceipt.receipt.tax.toFixed(2)}</span></div>
                         <div className="mt-2 flex justify-between text-sm font-bold"><span>Total paid</span><span>${issuedReceipt.receipt.total.toFixed(2)}</span></div>
+                        <p className="mt-3 text-xs text-emerald-900">Loyalty balance: {issuedReceipt.receipt.pointsBalance.toLocaleString()} points.</p>
                         <p className="mt-3 text-xs text-emerald-900">Receipt email sent to {issuedReceipt.booking.email}.</p>
                       </div>
                     )}

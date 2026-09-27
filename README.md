@@ -117,23 +117,45 @@ Environment Variables; the browser only receives campaign metrics. The report
 automatically paginates campaign results and reads the account currency from
 Google Ads.
 
-The owner dashboard's **Loyalty program** section lets the owner enable or pause
-Rewards, configure points earned per dollar paid, set the points-to-discount
-conversion, and edit member-tier names and lifetime-point thresholds. The
-program's default is 1 point per dollar paid, 100 points for a $5 in-clinic
-discount, and Member/Silver/Gold tiers at 0/500/1,500 lifetime points. Customers
-can separately opt into Rewards while booking; this consent is independent of
-marketing email consent. Members and the transaction ledger are stored in the
-owner's `GOOGLE_SPREADSHEET_ID` in `LoyaltySettings`, `LoyaltyMembers`, and
-`LoyaltyLedger` tabs, which the API creates as needed. The service account needs
-Editor access to this spreadsheet.
+The owner dashboard's **Loyalty program** section lets the owner configure the
+Standard, Gold, and Platinum plans, point earning and redemption, first-session
+bonus, monthly Gold Hot Stone allowance, and Platinum top-up price, hours, and
+discounts. Defaults are 10 points per $1 actually paid (1,000 per $100), 5x
+points on the first single-session purchase, and 10,000 points for $10 off.
+Gold defaults to $39/month, 10% off services, 1.5x points, and one free Hot
+Stone add-on per month. Platinum defaults to a $1,500 top-up for 50 prepaid
+hours, 30% off services, and $10 off a Hot Stone add-on. Gold and Platinum
+discounts are checked during online booking. Platinum bookings covered by
+available prepaid hours are no-charge at booking and consume their duration
+after the completed visit is confirmed; sessions beyond the available balance
+receive the configured service discount. Customers can separately opt into
+Standard Rewards while booking; this consent is independent of marketing email
+consent.
 
-After a member's appointment treatment time has passed and the booking is fully
-paid, owner staff can confirm the visit and award points. Booking IDs are
-recorded in the ledger so an already-awarded visit cannot be credited again. Staff can
-redeem points in person from the member list; the dashboard records the
-redemption and the discount value, which staff apply to the sale. Rewards are
-not automatically applied online, and no reward emails are sent.
+Members and the transaction ledger are stored in the owner's
+`GOOGLE_SPREADSHEET_ID` in `LoyaltySettings`, `LoyaltyMembers`, and
+`LoyaltyLedger` tabs, which the API creates and upgrades as needed. The service
+account needs Editor access to this spreadsheet. The owner can search recent
+booking customers by name, email, or phone when enrolling them. Platinum
+employees are associated with a company name and optional company ID; the
+enrolled email is their booking identifier.
+
+After a member's appointment treatment time has passed, staff can confirm an
+eligible visit from the dashboard. Standard/Gold point awards are based on the
+amount actually paid, and Platinum visits covered by prepaid hours deduct the
+session duration from the member's balance. A completed, fully paid single
+session receives the first-session multiplier when it is the customer's first
+qualifying visit. Gold free Hot Stone add-ons and visit records are limited by
+the configured monthly allowance. Booking IDs are recorded so point awards,
+prepaid-hour use, or a free add-on cannot be recorded twice. Staff can redeem
+points against a fully paid booking before its receipt is issued. The redemption
+is applied to the receipt total, tax is recalculated on the discounted amount,
+and the receipt number is saved on the loyalty ledger entry. The customer gets
+a redemption email with the points balance and a receipt email with the receipt
+number, discount, points redeemed, and updated points balance. Loyalty receipt
+discounts cannot be attached after a receipt has already been issued.
+Platinum top-ups are manually recorded after the owner confirms payment,
+adding the configured hours to that employee's balance.
 
 The owner dashboard includes a **Business profile** section for editing the
 business name, optional legal name, description, email, phone, website, location,

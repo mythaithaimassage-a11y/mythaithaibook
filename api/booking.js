@@ -23,7 +23,7 @@ const THERAPIST_SESSION_SECRET = process.env.THERAPIST_SESSION_SECRET || '';
 const THERAPIST_ACCOUNTS = process.env.THERAPIST_ACCOUNTS || '[]';
 const OWNER_ADMIN_PASSWORD = process.env.OWNER_ADMIN_PASSWORD || '';
 const OWNER_ADMIN_SESSION_SECRET = process.env.OWNER_ADMIN_SESSION_SECRET || '';
-const BUSINESS_PROFILE_FIELDS = ['businessName', 'legalName', 'tagline', 'email', 'phone', 'website', 'address', 'taxRegistrationNumber'];
+const BUSINESS_PROFILE_FIELDS = ['businessName', 'legalName', 'tagline', 'email', 'phone', 'website', 'address', 'taxRegistrationNumber', 'photoUrl'];
 const LEGACY_BUSINESS_PROFILE_FIELDS = ['businessName', 'tagline', 'email', 'phone', 'website', 'address'];
 const DEFAULT_BUSINESS_PROFILE = {
   businessName: 'MY THAI THAI',
@@ -34,12 +34,19 @@ const DEFAULT_BUSINESS_PROFILE = {
   website: 'https://mythaithaimassage.com',
   address: 'Ontario, Canada',
   taxRegistrationNumber: '',
+  photoUrl: '',
 };
 const DEFAULT_LOYALTY_SETTINGS = {
   enabled: true,
-  pointsPerDollar: 1,
-  redemptionPoints: 100,
-  redemptionValue: 5,
+  pointsPerDollar: 10,
+  firstSessionMultiplier: 5,
+  redemptionPoints: 10000,
+  redemptionValue: 10,
+  membershipPlans: {
+    gold: { monthlyFee: 39, discountPercent: 10, pointsMultiplier: 1.5, freeHotStonePerMonth: 1 },
+    platinum: { topUpPrice: 1500, includedHours: 50, discountPercent: 30, hotStoneDiscount: 10 },
+    silver: { monthlyFee: 250, discountPercent: 5, maxEmployees: 50 },
+  },
   tiers: [
     { name: 'Member', threshold: 0 },
     { name: 'Silver', threshold: 500 },
@@ -48,8 +55,8 @@ const DEFAULT_LOYALTY_SETTINGS = {
 };
 const LOYALTY_SHEETS = {
   LoyaltySettings: ['Settings JSON', 'Updated At'],
-  LoyaltyMembers: ['Email', 'Name', 'Phone', 'Enrolled At', 'Updated At'],
-  LoyaltyLedger: ['Transaction ID', 'Email', 'Booking ID', 'Type', 'Points', 'Reward Value', 'Description', 'Created At'],
+  LoyaltyMembers: ['Email', 'Name', 'Phone', 'Enrolled At', 'Updated At', 'Membership Type', 'Organization', 'Paid Through', 'Company ID'],
+  LoyaltyLedger: ['Transaction ID', 'Email', 'Booking ID', 'Type', 'Points', 'Reward Value', 'Description', 'Created At', 'Hours', 'Receipt No.'],
 };
 const RECEIPT_HEADERS = ['Receipt No.', 'Receipt Issued At', 'Receipt Email Status'];
 const MARKETING_CONTACT_HEADERS = [
@@ -392,14 +399,28 @@ async function ensureBusinessProfileSheet(sheets) {
   }
   const header = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range: 'BusinessProfile!A1:H1',
+    range: 'BusinessProfile!A1:I1',
   });
-  if (BUSINESS_PROFILE_FIELDS.some((field, index) => header.data.values?.[0]?.[index] !== field)) {
+  const headerRow = header.data.values?.[0] || [];
+  if (BUSINESS_PROFILE_FIELDS.some((field, index) => headerRow[index] !== field)) {
+    const isPreviousProfile = BUSINESS_PROFILE_FIELDS.slice(0, -1)
+      .every((field, index) => headerRow[index] === field);
     const isLegacyProfile = LEGACY_BUSINESS_PROFILE_FIELDS.every(
-      (field, index) => header.data.values?.[0]?.[index] === field,
+      (field, index) => headerRow[index] === field,
     );
     let migratedProfile;
-    if (isLegacyProfile) {
+    if (isPreviousProfile) {
+      const previousValues = await sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: 'BusinessProfile!A2:H2',
+      });
+      const previousRow = previousValues.data.values?.[0] || [];
+      migratedProfile = BUSINESS_PROFILE_FIELDS.map((field, index) => (
+        index < BUSINESS_PROFILE_FIELDS.length - 1
+          ? previousRow[index] ?? DEFAULT_BUSINESS_PROFILE[field] ?? ''
+          : DEFAULT_BUSINESS_PROFILE[field]
+      ));
+    } else if (isLegacyProfile) {
       const legacyValues = await sheets.spreadsheets.values.get({
         spreadsheetId,
         range: 'BusinessProfile!A2:F2',
@@ -410,14 +431,14 @@ async function ensureBusinessProfileSheet(sheets) {
     }
     await sheets.spreadsheets.values.update({
       spreadsheetId,
-      range: 'BusinessProfile!A1:H1',
+      range: 'BusinessProfile!A1:I1',
       valueInputOption: 'RAW',
       requestBody: { values: [BUSINESS_PROFILE_FIELDS] },
     });
     if (migratedProfile) {
       await sheets.spreadsheets.values.update({
         spreadsheetId,
-        range: 'BusinessProfile!A2:H2',
+        range: 'BusinessProfile!A2:I2',
         valueInputOption: 'RAW',
         requestBody: { values: [migratedProfile] },
       });
@@ -429,7 +450,7 @@ async function getBusinessProfile(sheets) {
   await ensureBusinessProfileSheet(sheets);
   const result = await sheets.spreadsheets.values.get({
     spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-    range: 'BusinessProfile!A1:H2',
+    range: 'BusinessProfile!A1:I2',
   });
   const row = result.data.values?.[1] || [];
   return Object.fromEntries(BUSINESS_PROFILE_FIELDS.map((field, index) => [
@@ -477,6 +498,24 @@ async function ensureLoyaltySheets(sheets) {
         valueInputOption: 'RAW',
         requestBody: { values: [headers] },
       });
+    } else if (
+      (
+        ['LoyaltyMembers', 'LoyaltyLedger'].includes(title) &&
+        current.length === headers.length - 1 &&
+        current.every((header, index) => header === headers[index])
+      ) ||
+      (
+        title === 'LoyaltyMembers' &&
+        headers.slice(0, 5).every((header, index) => current[index] === header) &&
+        current.slice(5).every((header) => !header)
+      )
+    ) {
+      await sheets.spreadsheets.values.update({
+        spreadsheetId,
+        range: `${title}!A1:${endColumn}1`,
+        valueInputOption: 'RAW',
+        requestBody: { values: [headers] },
+      });
     } else if (headers.some((header, index) => current[index] !== header)) {
       throw new Error(`${title} sheet has an unexpected header format`);
     }
@@ -484,11 +523,38 @@ async function ensureLoyaltySheets(sheets) {
 }
 
 function validateLoyaltySettings(input) {
+  const membershipPlansInput = input?.membershipPlans || DEFAULT_LOYALTY_SETTINGS.membershipPlans;
+  const goldInput = membershipPlansInput.gold || DEFAULT_LOYALTY_SETTINGS.membershipPlans.gold;
+  const platinumInput = membershipPlansInput.platinum || DEFAULT_LOYALTY_SETTINGS.membershipPlans.platinum;
+  const silverInput = membershipPlansInput.silver || DEFAULT_LOYALTY_SETTINGS.membershipPlans.silver;
+  const hasLegacyDefaults = Number(input?.pointsPerDollar) === 1 &&
+    Number(input?.redemptionPoints) === 100 &&
+    Number(input?.redemptionValue) === 5;
   const settings = {
     enabled: input?.enabled !== false,
-    pointsPerDollar: Number(input?.pointsPerDollar),
-    redemptionPoints: Number(input?.redemptionPoints),
-    redemptionValue: Number(input?.redemptionValue),
+    pointsPerDollar: hasLegacyDefaults ? DEFAULT_LOYALTY_SETTINGS.pointsPerDollar : Number(input?.pointsPerDollar),
+    firstSessionMultiplier: Number(input?.firstSessionMultiplier ?? DEFAULT_LOYALTY_SETTINGS.firstSessionMultiplier),
+    redemptionPoints: hasLegacyDefaults ? DEFAULT_LOYALTY_SETTINGS.redemptionPoints : Number(input?.redemptionPoints),
+    redemptionValue: hasLegacyDefaults ? DEFAULT_LOYALTY_SETTINGS.redemptionValue : Number(input?.redemptionValue),
+    membershipPlans: {
+      gold: {
+        monthlyFee: Number(goldInput.monthlyFee),
+        discountPercent: Number(goldInput.discountPercent),
+        pointsMultiplier: Number(goldInput.pointsMultiplier ?? DEFAULT_LOYALTY_SETTINGS.membershipPlans.gold.pointsMultiplier),
+        freeHotStonePerMonth: Number(goldInput.freeHotStonePerMonth ?? DEFAULT_LOYALTY_SETTINGS.membershipPlans.gold.freeHotStonePerMonth),
+      },
+      platinum: {
+        topUpPrice: Number(platinumInput.topUpPrice),
+        includedHours: Number(platinumInput.includedHours),
+        discountPercent: Number(platinumInput.discountPercent),
+        hotStoneDiscount: Number(platinumInput.hotStoneDiscount),
+      },
+      silver: {
+        monthlyFee: Number(silverInput.monthlyFee),
+        discountPercent: Number(silverInput.discountPercent),
+        maxEmployees: Number(silverInput.maxEmployees),
+      },
+    },
     tiers: Array.isArray(input?.tiers) ? input.tiers.map((tier) => ({
       name: String(tier?.name || '').trim(),
       threshold: Number(tier?.threshold),
@@ -496,8 +562,20 @@ function validateLoyaltySettings(input) {
   };
   if (
     !Number.isFinite(settings.pointsPerDollar) || settings.pointsPerDollar <= 0 || settings.pointsPerDollar > 100 ||
+    !Number.isFinite(settings.firstSessionMultiplier) || settings.firstSessionMultiplier < 1 || settings.firstSessionMultiplier > 100 ||
     !Number.isInteger(settings.redemptionPoints) || settings.redemptionPoints < 1 || settings.redemptionPoints > 1000000 ||
     !Number.isFinite(settings.redemptionValue) || settings.redemptionValue <= 0 || settings.redemptionValue > 10000 ||
+    !Number.isFinite(settings.membershipPlans.gold.monthlyFee) || settings.membershipPlans.gold.monthlyFee < 0 || settings.membershipPlans.gold.monthlyFee > 100000 ||
+    !Number.isFinite(settings.membershipPlans.gold.discountPercent) || settings.membershipPlans.gold.discountPercent < 0 || settings.membershipPlans.gold.discountPercent > 100 ||
+    !Number.isFinite(settings.membershipPlans.gold.pointsMultiplier) || settings.membershipPlans.gold.pointsMultiplier < 0 || settings.membershipPlans.gold.pointsMultiplier > 100 ||
+    !Number.isInteger(settings.membershipPlans.gold.freeHotStonePerMonth) || settings.membershipPlans.gold.freeHotStonePerMonth < 0 || settings.membershipPlans.gold.freeHotStonePerMonth > 100 ||
+    !Number.isFinite(settings.membershipPlans.platinum.topUpPrice) || settings.membershipPlans.platinum.topUpPrice < 0 || settings.membershipPlans.platinum.topUpPrice > 100000 ||
+    !Number.isFinite(settings.membershipPlans.platinum.includedHours) || settings.membershipPlans.platinum.includedHours <= 0 || settings.membershipPlans.platinum.includedHours > 10000 ||
+    !Number.isFinite(settings.membershipPlans.platinum.discountPercent) || settings.membershipPlans.platinum.discountPercent < 0 || settings.membershipPlans.platinum.discountPercent > 100 ||
+    !Number.isFinite(settings.membershipPlans.platinum.hotStoneDiscount) || settings.membershipPlans.platinum.hotStoneDiscount < 0 || settings.membershipPlans.platinum.hotStoneDiscount > 10000 ||
+    !Number.isFinite(settings.membershipPlans.silver.monthlyFee) || settings.membershipPlans.silver.monthlyFee < 0 || settings.membershipPlans.silver.monthlyFee > 100000 ||
+    !Number.isFinite(settings.membershipPlans.silver.discountPercent) || settings.membershipPlans.silver.discountPercent < 0 || settings.membershipPlans.silver.discountPercent > 100 ||
+    !Number.isInteger(settings.membershipPlans.silver.maxEmployees) || settings.membershipPlans.silver.maxEmployees < 1 || settings.membershipPlans.silver.maxEmployees > 5000 ||
     settings.tiers.length < 1 || settings.tiers.length > 6
   ) {
     throw new Error('Enter valid earning and redemption values, and configure between one and six loyalty tiers.');
@@ -591,7 +669,7 @@ async function enrollLoyaltyMember(sheets, payload) {
   }
   const result = await sheets.spreadsheets.values.get({
     spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-    range: 'LoyaltyMembers!A:E',
+    range: 'LoyaltyMembers!A:I',
   });
   const rows = result.data.values || [];
   const existingIndex = rows.findIndex((row, index) => index > 0 && normalizeLoyaltyEmail(row[0]) === email);
@@ -611,10 +689,110 @@ async function enrollLoyaltyMember(sheets, payload) {
   }
   await sheets.spreadsheets.values.append({
     spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-    range: 'LoyaltyMembers!A:E',
+    range: 'LoyaltyMembers!A:I',
     valueInputOption: 'RAW',
-    requestBody: { values: [[email, memberName, phone, now, now]] },
+    requestBody: { values: [[email, memberName, phone, now, now, 'regular', '', '']] },
   });
+}
+
+function isValidMembershipDate(value) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+function isMembershipActive(member, today = new Date().toISOString().slice(0, 10)) {
+  const type = String(member?.[5] || 'regular').toLowerCase();
+  return ['gold', 'silver'].includes(type) && isValidMembershipDate(String(member?.[7] || '')) && member[7] >= today;
+}
+
+function loyaltyHoursBalance(transactions, email) {
+  return transactions
+    .filter((transaction) => normalizeLoyaltyEmail(transaction[1]) === email)
+    .reduce((sum, transaction) => sum + (Number(transaction[8]) || 0), 0);
+}
+
+function currentLoyaltyMonth() {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    timeZone: CALENDAR_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+  }).formatToParts(new Date()).map((part) => [part.type, part.value]));
+  return `${parts.year}-${parts.month}`;
+}
+
+function loyaltyMonthForDate(value) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return '';
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    timeZone: CALENDAR_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+  }).formatToParts(date).map((part) => [part.type, part.value]));
+  return `${parts.year}-${parts.month}`;
+}
+
+function loyaltyHotStoneRedemptions(transactions, email, month = currentLoyaltyMonth()) {
+  return transactions.filter((transaction) =>
+    transaction[3] === 'HOTSTONE' &&
+    normalizeLoyaltyEmail(transaction[1]) === email &&
+    loyaltyMonthForDate(transaction[7]) === month,
+  ).length;
+}
+
+async function getMemberBenefit(sheets, email, settings) {
+  const normalizedEmail = normalizeLoyaltyEmail(email);
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) return null;
+  const [membersResult, ledgerResult] = await Promise.all([
+    sheets.spreadsheets.values.get({
+      spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+      range: 'LoyaltyMembers!A:I',
+    }),
+    sheets.spreadsheets.values.get({
+      spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+      range: 'LoyaltyLedger!A:J',
+    }),
+  ]);
+  const member = (membersResult.data.values || []).slice(1)
+    .find((row) => normalizeLoyaltyEmail(row[0]) === normalizedEmail);
+  if (!member) return null;
+  const type = String(member[5] || 'regular').toLowerCase();
+  const transactions = (ledgerResult.data.values || []).slice(1);
+  const hoursBalance = loyaltyHoursBalance(transactions, normalizedEmail);
+  const active = type === 'platinum' ? hoursBalance > 0 : isMembershipActive(member);
+  if (!active) return null;
+  const plan = settings.membershipPlans[type];
+  if (!plan) return null;
+  return {
+    type,
+    discountPercent: plan.discountPercent,
+    paidThrough: member[7],
+    pointsMultiplier: type === 'gold' ? plan.pointsMultiplier : 1,
+    freeHotStonePerMonth: type === 'gold' ? plan.freeHotStonePerMonth : 0,
+    freeHotStoneAvailable: type === 'gold' &&
+      loyaltyHotStoneRedemptions(transactions, normalizedEmail) < plan.freeHotStonePerMonth,
+    hotStoneDiscount: type === 'platinum' ? plan.hotStoneDiscount : 0,
+    hoursBalance,
+  };
+}
+
+function isSingleSessionPurchase(serviceName) {
+  return !/(package|bundle|add[\s-]?on|couple|gift\s*card|top[\s-]?up)/i.test(String(serviceName || ''));
+}
+
+function getFirstPaidSingleSessionBookingId(rows, email) {
+  const candidates = rows.filter((row) => {
+    const total = Number(row[11]) || 0;
+    const paidAmount = Number(row[10]) || 0;
+    return normalizeLoyaltyEmail(row[3]) === email &&
+      total > 0 && paidAmount > 0 && paidAmount + 0.005 >= total &&
+      isSingleSessionPurchase(row[5]) &&
+      isAppointmentCompleteByTime(row[7], row[8], row[12]);
+  });
+  candidates.sort((a, b) =>
+    parseBookingDateTime(a[7], a[8]).localeCompare(parseBookingDateTime(b[7], b[8])),
+  );
+  return String(candidates[0]?.[0] || '');
 }
 
 async function ensureReceiptHeaders(sheets) {
@@ -755,14 +933,16 @@ function parseAudienceQuery(query, bookingRows) {
   }
   const allOptedIn = /\b(all|everyone|everybody)\b/.test(normalized) &&
     /\b(subscribers|opted[ -]?in|customers|clients|patients|contacts)\b/.test(normalized);
-  if (!weekday && !recent && !branch && !service && !limit && !allOptedIn) {
-    throw new Error('I can find opted-in customers by weekday, recent visit, branch, service, or most recent customer count. Try “customers who visit every Wednesday at Oakville Downtown” or “most recent customers at Toronto West in the last 30 days”.');
+  const membershipType = /\b(gold|silver|regular|points)\s+(?:membership\s+)?(?:members?|customers?)\b/.exec(normalized)?.[1] || '';
+  if (!weekday && !recent && !branch && !service && !limit && !allOptedIn && !membershipType) {
+    throw new Error('I can find opted-in customers by membership, weekday, recent visit, branch, service, or most recent customer count. Try “Gold members” or “customers who visit every Wednesday at Oakville Downtown”.');
   }
   const descriptions = [];
   if (weekday) descriptions.push(`${recurring ? 'at least two past bookings on' : 'a past booking on'} ${weekday[0].charAt(0).toUpperCase()}${weekday[0].slice(1)}s`);
   if (days) descriptions.push(`a booking in the last ${days} days`);
   if (branch) descriptions.push(`the ${branch} branch`);
   if (service) descriptions.push(`${service} appointments`);
+  if (membershipType) descriptions.push(`${membershipType === 'points' ? 'regular points' : membershipType} members`);
   if (allOptedIn && descriptions.length === 0) descriptions.push('all active opted-in subscribers');
   if (limit) descriptions.push(`the ${limit} most recently active customers`);
   return {
@@ -772,6 +952,7 @@ function parseAudienceQuery(query, bookingRows) {
     days,
     branch,
     service,
+    membershipType: membershipType === 'points' ? 'regular' : membershipType,
     limit,
     allOptedIn,
     description: `Opted-in customers with ${descriptions.join(' and ')}.`,
@@ -791,13 +972,21 @@ function parseBookingDate(value) {
 async function resolveMarketingAudience(sheets, query) {
   const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
   if (!spreadsheetId) throw new Error('GOOGLE_SPREADSHEET_ID is not configured');
-  const [contacts, bookingResult] = await Promise.all([
+  const [contacts, bookingResult, membersResult] = await Promise.all([
     getMarketingContactRows(sheets),
     sheets.spreadsheets.values.get({ spreadsheetId, range: 'Sheet1!A:U' }),
+    sheets.spreadsheets.values.get({ spreadsheetId, range: 'LoyaltyMembers!A:H' }).catch((error) => {
+      if (error.code === 400) return { data: { values: [] } };
+      throw error;
+    }),
   ]);
   const allRows = bookingResult.data.values || [];
   const bookingRows = allRows[0]?.[0] === 'Booking ID' ? allRows.slice(1) : allRows;
   const criteria = parseAudienceQuery(query, bookingRows);
+  const membershipByEmail = new Map((membersResult.data.values || []).slice(1).map((row) => [
+    normalizeLoyaltyEmail(row[0]),
+    String(row[5] || 'regular').toLowerCase(),
+  ]));
   const now = new Date();
   const localDateParts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
     timeZone: CALENDAR_TIME_ZONE,
@@ -831,6 +1020,7 @@ async function resolveMarketingAudience(sheets, query) {
   let recipients = activeContacts
     .map((row) => {
       const email = String(row[0] || '').trim().toLowerCase();
+      if (criteria.membershipType && membershipByEmail.get(email) !== criteria.membershipType) return null;
       const history = bookingsByEmail.get(email) || [];
       const matchedHistory = history.filter((booking) =>
         (!criteria.branch || booking.branch.toLowerCase() === criteria.branch.toLowerCase()) &&
@@ -970,7 +1160,8 @@ async function sendMarketingEmail(gmail, campaign, recipient, businessProfile, u
   }
   const subject = String(campaign.subject || '').trim();
   const preview = String(campaign.preview || '').trim();
-  const message = String(campaign.message || '').trim();
+  const message = String(campaign.message || '').trim()
+    .replace(/{{\s*name\s*}}/gi, recipient.name || 'there');
   if (!subject || subject.length > 180 || /[\r\n]/.test(subject)) throw new Error('Enter a subject line of 1-180 characters');
   if (preview.length > 200) throw new Error('Preview text must be 200 characters or fewer');
   if (!message || message.length > 5000) throw new Error('Enter a campaign message of 1-5000 characters');
@@ -1026,6 +1217,54 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
+async function sendMembershipEmail(gmail, member, settings, businessProfile, event) {
+  const recipient = normalizeLoyaltyEmail(member.email);
+  if (!/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(recipient)) {
+    throw new Error('A valid member email is required for membership notifications.');
+  }
+  const type = String(member.membershipType || 'regular').toLowerCase();
+  const plan = settings.membershipPlans[type];
+  const title = type === 'gold' ? 'Gold membership' : type === 'platinum' ? 'Platinum company top-up' : type === 'silver' ? 'Silver corporate membership' : 'Points rewards membership';
+  const monthlyFee = plan?.monthlyFee || 0;
+  const discountPercent = plan?.discountPercent || 0;
+  const businessName = businessProfile.businessName || 'MY THAI THAI';
+  const details = event === 'payment'
+    ? `Your ${title} payment has been recorded through ${member.paidThrough}. You are eligible for ${discountPercent}% off eligible services while your membership is active.`
+    : type === 'regular'
+      ? `You are enrolled in the points rewards program. Earn ${settings.pointsPerDollar} points per $1 actually paid, with ${settings.firstSessionMultiplier}x points on your first single-session purchase. Redeem ${settings.redemptionPoints} points for $${settings.redemptionValue} off.`
+      : type === 'platinum'
+        ? `Your Platinum company membership has been recorded for ${member.organization || 'your company'}${member.companyId ? ` (company ID ${member.companyId})` : ''}. Each confirmed $${settings.membershipPlans.platinum.topUpPrice} top-up adds ${settings.membershipPlans.platinum.includedHours} prepaid hours. Active benefits include ${settings.membershipPlans.platinum.discountPercent}% off services and $${settings.membershipPlans.platinum.hotStoneDiscount} off each Hot Stone add-on. The owner must confirm each top-up payment before hours are added.`
+        : `Your ${title} has been recorded. The monthly fee is $${monthlyFee.toFixed(2)} and the benefit is ${discountPercent}% off services${type === 'gold' ? `, ${plan.pointsMultiplier}x points, and ${plan.freeHotStonePerMonth} free Hot Stone add-on(s) per month` : ` for up to ${settings.membershipPlans.silver.maxEmployees} employees at ${member.organization || 'your organization'}`}. Eligibility is active through ${member.paidThrough || 'only after an owner records payment'}.`;
+  const subject = event === 'payment' ? `${businessName} membership payment recorded` : `${businessName} rewards membership details`;
+  const greeting = member.name ? `Hello ${member.name},` : 'Hello,';
+  const text = `${greeting}\n\n${details}\n\nMembership fees are recorded by the business and are not automatically charged. Contact ${businessName} with questions.\n\n${businessName}`;
+  const escape = (value) => String(value ?? '')
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  const html = `<!doctype html><html lang="en"><meta charset="utf-8"><body style="font:15px Arial,sans-serif;color:#18251f"><main style="max-width:560px;margin:32px auto;padding:28px;border:1px solid #e2e9e5;border-radius:14px"><h1 style="color:#073d32">${escape(businessName)}</h1><p>${escape(greeting)}</p><p>${escape(details)}</p><p style="color:#64716b">Membership fees are recorded by the business and are not automatically charged. Contact ${escape(businessName)} with questions.</p></main></body></html>`;
+  const boundary = `membership_${crypto.randomBytes(12).toString('hex')}`;
+  const raw = [
+    `From: "${String(businessName).replace(/[\r\n"]/g, '')}" <${GOOGLE_GMAIL_SENDER_EMAIL}>`,
+    `To: ${recipient}`,
+    `Subject: =?UTF-8?B?${Buffer.from(subject).toString('base64')}?=`,
+    'MIME-Version: 1.0',
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    '',
+    `--${boundary}`,
+    'Content-Type: text/plain; charset=UTF-8',
+    'Content-Transfer-Encoding: base64',
+    '',
+    Buffer.from(text).toString('base64'),
+    `--${boundary}`,
+    'Content-Type: text/html; charset=UTF-8',
+    'Content-Transfer-Encoding: base64',
+    '',
+    Buffer.from(html).toString('base64'),
+    `--${boundary}--`,
+  ].join('\r\n');
+  await gmail.users.messages.send({ userId: 'me', requestBody: { raw: Buffer.from(raw).toString('base64url') } });
+}
+
 async function sendReceiptEmail(gmail, booking, receipt, businessProfile) {
   const recipient = String(booking.email || '').trim();
   if (!/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(recipient)) {
@@ -1041,12 +1280,20 @@ async function sendReceiptEmail(gmail, booking, receipt, businessProfile) {
     `Service date: ${booking.date}`,
     `Payment method: ${booking.paymentOption}`,
     `Subtotal: $${receipt.subtotal.toFixed(2)}`,
+    ...(receipt.loyaltyDiscount > 0 ? [`Loyalty discount: -$${receipt.loyaltyDiscount.toFixed(2)}`, `Points redeemed: ${receipt.pointsRedeemed.toLocaleString()}`] : []),
     `${receipt.taxLabel}: $${receipt.tax.toFixed(2)}`,
     `Total paid: $${receipt.total.toFixed(2)}`,
+    ...(receipt.loyaltyMember ? [`Loyalty points balance: ${receipt.pointsBalance.toLocaleString()} points`] : []),
     '',
     'Thank you for choosing us.',
   ].join('\n');
-  const html = `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Receipt ${escapeHtml(receipt.number)}</title></head><body style="margin:0;background:#f3f5f4;padding:28px 12px;font-family:Arial,Helvetica,sans-serif;color:#18251f"><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td align="center"><table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width:600px;width:100%;background:#fff;border:1px solid #e2e9e5;border-radius:14px;overflow:hidden"><tr><td style="padding:28px 32px;background:#073d32;color:#fff"><p style="margin:0 0 8px;font-size:12px;letter-spacing:2px">${escapeHtml(businessProfile.businessName).toUpperCase()}</p><h1 style="margin:0;font-size:25px">Payment receipt</h1></td></tr><tr><td style="padding:26px 32px"><p style="margin:0 0 6px;font-weight:bold">${escapeHtml(businessProfile.legalName || businessProfile.businessName)}</p><p style="margin:0 0 4px;color:#66736d">${escapeHtml(businessProfile.address)}</p><p style="margin:0 0 4px;color:#66736d">${escapeHtml(businessProfile.phone)} · ${escapeHtml(businessProfile.email)}</p>${businessProfile.taxRegistrationNumber ? `<p style="margin:0 0 20px;color:#66736d">GST/HST No.: ${escapeHtml(businessProfile.taxRegistrationNumber)}</p>` : '<div style="height:20px"></div>'}<p style="margin:0 0 6px"><strong>Receipt No.</strong> ${escapeHtml(receipt.number)}</p><p style="margin:0 0 22px;color:#66736d">Issued ${escapeHtml(receipt.issuedAt.slice(0, 10))}</p><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse"><tr><td style="padding:10px 0;border-bottom:1px solid #e6ebe8;color:#64716b">Client</td><td align="right" style="padding:10px 0;border-bottom:1px solid #e6ebe8;font-weight:bold">${escapeHtml(booking.customerName)}</td></tr><tr><td style="padding:10px 0;border-bottom:1px solid #e6ebe8;color:#64716b">Email</td><td align="right" style="padding:10px 0;border-bottom:1px solid #e6ebe8">${escapeHtml(booking.email)}</td></tr><tr><td style="padding:10px 0;border-bottom:1px solid #e6ebe8;color:#64716b">Service</td><td align="right" style="padding:10px 0;border-bottom:1px solid #e6ebe8">${escapeHtml(booking.serviceName)}</td></tr><tr><td style="padding:10px 0;border-bottom:1px solid #e6ebe8;color:#64716b">Service date</td><td align="right" style="padding:10px 0;border-bottom:1px solid #e6ebe8">${escapeHtml(booking.date)}</td></tr><tr><td style="padding:10px 0;color:#64716b">Payment method</td><td align="right" style="padding:10px 0">${escapeHtml(booking.paymentOption)}</td></tr></table><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-top:24px;border-top:2px solid #087765"><tr><td style="padding:10px 0;color:#64716b">Subtotal</td><td align="right" style="padding:10px 0">$${receipt.subtotal.toFixed(2)}</td></tr><tr><td style="padding:8px 0;color:#64716b">${escapeHtml(receipt.taxLabel)}</td><td align="right" style="padding:8px 0">$${receipt.tax.toFixed(2)}</td></tr><tr><td style="padding:14px 0;border-top:1px solid #d8e2dc;font-size:18px;font-weight:bold">Total paid</td><td align="right" style="padding:14px 0;border-top:1px solid #d8e2dc;font-size:18px;font-weight:bold">$${receipt.total.toFixed(2)}</td></tr></table><p style="margin:24px 0 0;text-align:center;color:#64716b">Thank you for choosing ${escapeHtml(businessProfile.businessName)}.</p></td></tr></table></td></tr></table></body></html>`;
+  const loyaltyRows = receipt.loyaltyDiscount > 0
+    ? `<tr><td style="padding:8px 0;color:#64716b">Loyalty discount · ${receipt.pointsRedeemed.toLocaleString()} points</td><td align="right" style="padding:8px 0">-$${receipt.loyaltyDiscount.toFixed(2)}</td></tr>`
+    : '';
+  const loyaltyBalance = receipt.loyaltyMember
+    ? `<p style="margin:18px 0 0;padding:12px;background:#eff6f3;border-radius:8px;font-size:13px"><strong>Loyalty balance:</strong> ${receipt.pointsBalance.toLocaleString()} points</p>`
+    : '';
+  const html = `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Receipt ${escapeHtml(receipt.number)}</title></head><body style="margin:0;background:#f3f5f4;padding:28px 12px;font-family:Arial,Helvetica,sans-serif;color:#18251f"><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td align="center"><table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width:600px;width:100%;background:#fff;border:1px solid #e2e9e5;border-radius:14px;overflow:hidden"><tr><td style="padding:28px 32px;background:#073d32;color:#fff"><p style="margin:0 0 8px;font-size:12px;letter-spacing:2px">${escapeHtml(businessProfile.businessName).toUpperCase()}</p><h1 style="margin:0;font-size:25px">Payment receipt</h1></td></tr><tr><td style="padding:26px 32px"><p style="margin:0 0 6px;font-weight:bold">${escapeHtml(businessProfile.legalName || businessProfile.businessName)}</p><p style="margin:0 0 4px;color:#66736d">${escapeHtml(businessProfile.address)}</p><p style="margin:0 0 4px;color:#66736d">${escapeHtml(businessProfile.phone)} · ${escapeHtml(businessProfile.email)}</p>${businessProfile.taxRegistrationNumber ? `<p style="margin:0 0 20px;color:#66736d">GST/HST No.: ${escapeHtml(businessProfile.taxRegistrationNumber)}</p>` : '<div style="height:20px"></div>'}<p style="margin:0 0 6px"><strong>Receipt No.</strong> ${escapeHtml(receipt.number)}</p><p style="margin:0 0 22px;color:#66736d">Issued ${escapeHtml(receipt.issuedAt.slice(0, 10))}</p><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse"><tr><td style="padding:10px 0;border-bottom:1px solid #e6ebe8;color:#64716b">Client</td><td align="right" style="padding:10px 0;border-bottom:1px solid #e6ebe8;font-weight:bold">${escapeHtml(booking.customerName)}</td></tr><tr><td style="padding:10px 0;border-bottom:1px solid #e6ebe8;color:#64716b">Email</td><td align="right" style="padding:10px 0;border-bottom:1px solid #e6ebe8">${escapeHtml(booking.email)}</td></tr><tr><td style="padding:10px 0;border-bottom:1px solid #e6ebe8;color:#64716b">Service</td><td align="right" style="padding:10px 0;border-bottom:1px solid #e6ebe8">${escapeHtml(booking.serviceName)}</td></tr><tr><td style="padding:10px 0;border-bottom:1px solid #e6ebe8;color:#64716b">Service date</td><td align="right" style="padding:10px 0;border-bottom:1px solid #e6ebe8">${escapeHtml(booking.date)}</td></tr><tr><td style="padding:10px 0;color:#64716b">Payment method</td><td align="right" style="padding:10px 0">${escapeHtml(booking.paymentOption)}</td></tr></table><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-top:24px;border-top:2px solid #087765"><tr><td style="padding:10px 0;color:#64716b">Subtotal</td><td align="right" style="padding:10px 0">$${receipt.subtotal.toFixed(2)}</td></tr>${loyaltyRows}<tr><td style="padding:8px 0;color:#64716b">${escapeHtml(receipt.taxLabel)}</td><td align="right" style="padding:8px 0">$${receipt.tax.toFixed(2)}</td></tr><tr><td style="padding:14px 0;border-top:1px solid #d8e2dc;font-size:18px;font-weight:bold">Total paid</td><td align="right" style="padding:14px 0;border-top:1px solid #d8e2dc;font-size:18px;font-weight:bold">$${receipt.total.toFixed(2)}</td></tr></table>${loyaltyBalance}<p style="margin:24px 0 0;text-align:center;color:#64716b">Thank you for choosing ${escapeHtml(businessProfile.businessName)}.</p></td></tr></table></td></tr></table></body></html>`;
   const boundary = `receipt_${crypto.randomBytes(12).toString('hex')}`;
   const encode = (value) => Buffer.from(value).toString('base64').match(/.{1,76}/g).join('\r\n');
   const message = [
@@ -1071,6 +1318,48 @@ async function sendReceiptEmail(gmail, booking, receipt, businessProfile) {
   await gmail.users.messages.send({ userId: 'me', requestBody: { raw: Buffer.from(message).toString('base64url') } });
 }
 
+async function sendLoyaltyRedemptionEmail(gmail, member, redemption, businessProfile) {
+  const recipient = normalizeLoyaltyEmail(member.email);
+  if (!/^[^\s<>@]+@[^\s<>@]+\.[^\s@]+$/.test(recipient)) {
+    throw new Error('A valid loyalty member email is required for redemption confirmation.');
+  }
+  const subject = `${businessProfile.businessName} rewards redemption confirmation`;
+  const text = [
+    `Hello ${member.name || 'there'},`,
+    '',
+    `You redeemed ${redemption.points.toLocaleString()} points for $${redemption.rewardValue.toFixed(2)} off your purchase.`,
+    `Booking: ${redemption.bookingId}`,
+    `Points remaining: ${redemption.pointsBalance.toLocaleString()}`,
+    `Current balance value: $${redemption.balanceValue.toFixed(2)} at the configured reward rate.`,
+    `Receipt number: pending; it will be emailed and linked when the receipt is issued.`,
+    '',
+    businessProfile.businessName,
+  ].join('\n');
+  const html = `<!doctype html><html lang="en"><meta charset="utf-8"><body style="font:15px Arial,sans-serif;color:#18251f"><main style="max-width:560px;margin:32px auto;padding:28px;border:1px solid #e2e9e5;border-radius:14px"><h1 style="color:#073d32">${escapeHtml(businessProfile.businessName)} Rewards</h1><p>Hello ${escapeHtml(member.name || 'there')},</p><p>You redeemed <strong>${redemption.points.toLocaleString()} points</strong> for <strong>$${redemption.rewardValue.toFixed(2)} off</strong> your purchase.</p><p>Booking: ${escapeHtml(redemption.bookingId)}<br>Points remaining: <strong>${redemption.pointsBalance.toLocaleString()}</strong><br>Current balance value: $${redemption.balanceValue.toFixed(2)} at the configured reward rate.<br>Receipt number: pending; it will be emailed and linked when the receipt is issued.</p></main></body></html>`;
+  const boundary = `loyalty_${crypto.randomBytes(12).toString('hex')}`;
+  const encode = (value) => Buffer.from(value).toString('base64').match(/.{1,76}/g).join('\r\n');
+  const raw = [
+    `From: ${GOOGLE_GMAIL_SENDER_EMAIL}`,
+    `To: ${recipient}`,
+    `Subject: =?UTF-8?B?${Buffer.from(subject).toString('base64')}?=`,
+    'MIME-Version: 1.0',
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    '',
+    `--${boundary}`,
+    'Content-Type: text/plain; charset=UTF-8',
+    'Content-Transfer-Encoding: base64',
+    '',
+    encode(text),
+    `--${boundary}`,
+    'Content-Type: text/html; charset=UTF-8',
+    'Content-Transfer-Encoding: base64',
+    '',
+    encode(html),
+    `--${boundary}--`,
+  ].join('\r\n');
+  await gmail.users.messages.send({ userId: 'me', requestBody: { raw: Buffer.from(raw).toString('base64url') } });
+}
+
 function validateBusinessProfile(input) {
   const profile = Object.fromEntries(BUSINESS_PROFILE_FIELDS.map((field) => [
     field,
@@ -1080,8 +1369,9 @@ function validateBusinessProfile(input) {
     throw new Error('Business name is required and must be 100 characters or fewer');
   }
   for (const field of BUSINESS_PROFILE_FIELDS.slice(1)) {
-    if (profile[field].length > 250) {
-      throw new Error(`${field} must be 250 characters or fewer`);
+    const maxLength = field === 'photoUrl' ? 2048 : 250;
+    if (profile[field].length > maxLength) {
+      throw new Error(`${field} must be ${maxLength} characters or fewer`);
     }
   }
   if (profile.email && !/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(profile.email)) {
@@ -1096,6 +1386,20 @@ function validateBusinessProfile(input) {
     }
     if (!['http:', 'https:'].includes(website.protocol)) {
       throw new Error('Website must use https:// or http://');
+    }
+  }
+  if (profile.photoUrl) {
+    let photoUrl;
+    try {
+      photoUrl = new URL(profile.photoUrl);
+    } catch {
+      throw new Error('Business photo URL must be a valid https:// or http:// URL');
+    }
+    if (!['http:', 'https:'].includes(photoUrl.protocol)) {
+      throw new Error('Business photo URL must use https:// or http://');
+    }
+    if (photoUrl.username || photoUrl.password) {
+      throw new Error('Business photo URL must not contain login credentials');
     }
   }
   return profile;
@@ -1150,6 +1454,7 @@ async function sendGmailConfirmation(gmail, payload) {
     'PAYMENT SUMMARY',
     `Payment method: ${payload.paymentOption}`,
     `Deposit paid: $${payload.paidAmount}`,
+    payload.membershipDiscountAmount > 0 ? `Membership discount (${payload.membershipDiscountPercent}%): -$${payload.membershipDiscountAmount}` : '',
     `Appointment total: $${payload.totalAmount}`,
     '',
     'Your appointment has been added to the therapist calendar.',
@@ -1164,6 +1469,9 @@ async function sendGmailConfirmation(gmail, payload) {
     ['Date', payload.date],
     ['Time', payload.time],
     ['Location', payload.branchName],
+    ...(payload.membershipDiscountAmount > 0
+      ? [['Membership discount', `${payload.membershipDiscountPercent}% · -$${payload.membershipDiscountAmount}`]]
+      : []),
   ];
   const html = `<!doctype html>
 <html lang="en">
@@ -1279,18 +1587,18 @@ export default async function handler(req, res) {
     }
 
     const view = String(req.query?.view || '');
-    const validGetViews = ['', 'calendar', 'patient-history', 'business-profile', 'business-name', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'therapist-dashboard', 'therapist-session', 'unsubscribe'];
+    const validGetViews = ['', 'calendar', 'patient-history', 'business-profile', 'business-name', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe'];
     if (req.method === 'GET' && !validGetViews.includes(view)) {
       return res.status(404).json({ message: 'Unknown booking view' });
     }
     const ownerOnlyRequest =
       (req.method === 'GET' && ['', 'calendar', 'patient-history', 'business-profile', 'google-ads-report', 'loyalty-dashboard'].includes(view)) ||
-      ['business-profile', 'mark-paid', 'issue-receipt', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-award', 'loyalty-redeem'].includes(view);
+      ['business-profile', 'mark-paid', 'issue-receipt', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem'].includes(view);
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
     if (ownerOnlyRequest && !getOwnerSession(req)) {
       return res.status(401).json({ message: 'Owner sign-in required' });
     }
-    if (['business-profile', 'mark-paid', 'issue-receipt', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-award', 'loyalty-redeem'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
+    if (['business-profile', 'mark-paid', 'issue-receipt', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
       return res.status(403).json({ message: 'Profile update origin is not allowed' });
     }
 
@@ -1311,7 +1619,10 @@ export default async function handler(req, res) {
     if (req.method === 'GET' && view === 'business-name') {
       res.setHeader('Cache-Control', 'no-store');
       const businessProfile = await getBusinessProfile(sheets);
-      return res.status(200).json({ businessName: businessProfile.businessName });
+      return res.status(200).json({
+        businessName: businessProfile.businessName,
+        photoUrl: businessProfile.photoUrl,
+      });
     }
 
     if (req.method === 'GET' && view === 'loyalty-program') {
@@ -1320,9 +1631,31 @@ export default async function handler(req, res) {
       return res.status(200).json({
         enabled: settings.enabled,
         pointsPerDollar: settings.pointsPerDollar,
+        firstSessionMultiplier: settings.firstSessionMultiplier,
         redemptionPoints: settings.redemptionPoints,
         redemptionValue: settings.redemptionValue,
+        membershipPlans: settings.membershipPlans,
         tiers: settings.tiers,
+      });
+    }
+
+    if (req.method === 'GET' && view === 'loyalty-eligibility') {
+      res.setHeader('Cache-Control', 'no-store');
+      const email = normalizeLoyaltyEmail(req.query.email);
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return res.status(400).json({ message: 'Enter a valid email address to check membership eligibility.' });
+      }
+      const settings = await getPublicLoyaltySettings(sheets);
+      const benefit = settings.enabled ? await getMemberBenefit(sheets, email, settings) : null;
+      return res.status(200).json({
+        eligible: Boolean(benefit),
+        membershipType: benefit?.type || '',
+        discountPercent: benefit?.discountPercent || 0,
+        pointsMultiplier: benefit?.pointsMultiplier || 1,
+        freeHotStonePerMonth: benefit?.freeHotStonePerMonth || 0,
+        freeHotStoneAvailable: Boolean(benefit?.freeHotStoneAvailable),
+        hotStoneDiscount: benefit?.hotStoneDiscount || 0,
+        hoursBalance: benefit?.hoursBalance || 0,
       });
     }
 
@@ -1332,11 +1665,11 @@ export default async function handler(req, res) {
       const [membersResult, ledgerResult, bookingsResult] = await Promise.all([
         sheets.spreadsheets.values.get({
           spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-          range: 'LoyaltyMembers!A:E',
+          range: 'LoyaltyMembers!A:I',
         }),
         sheets.spreadsheets.values.get({
           spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-          range: 'LoyaltyLedger!A:H',
+          range: 'LoyaltyLedger!A:J',
         }),
         sheets.spreadsheets.values.get({
           spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
@@ -1354,6 +1687,8 @@ export default async function handler(req, res) {
         rewardValue: Number(row[5]) || 0,
         description: row[6] || '',
         createdAt: row[7] || '',
+        hours: Number(row[8]) || 0,
+        receiptNumber: row[9] || '',
       }));
       const transactionByEmail = new Map();
       transactions.forEach((transaction) => {
@@ -1364,6 +1699,11 @@ export default async function handler(req, res) {
       const getTier = (lifetimePoints) => settings.tiers
         .filter((tier) => lifetimePoints >= tier.threshold)
         .at(-1)?.name || settings.tiers[0].name;
+      const bookingRows = bookingsResult.data.values || [];
+      const bookingDataRows = bookingRows[0]?.[0] === 'Booking ID' ? bookingRows.slice(1) : bookingRows;
+      const redemptionsByBooking = new Set(transactions
+        .filter((transaction) => transaction.type === 'REDEEM' && transaction.bookingId)
+        .map((transaction) => `${transaction.email}:${transaction.bookingId}`));
       const members = memberRows.map((row) => {
         const email = normalizeLoyaltyEmail(row[0]);
         const memberTransactions = transactionByEmail.get(email) || [];
@@ -1371,41 +1711,133 @@ export default async function handler(req, res) {
           .filter((transaction) => transaction.type === 'EARN')
           .reduce((sum, transaction) => sum + Math.max(0, transaction.points), 0);
         const pointsBalance = memberTransactions.reduce((sum, transaction) => sum + transaction.points, 0);
+        const hoursBalance = memberTransactions.reduce((sum, transaction) => sum + transaction.hours, 0);
+        const membershipType = String(row[5] || 'regular').toLowerCase();
+        const membershipActive = membershipType === 'platinum'
+          ? hoursBalance > 0
+          : isMembershipActive(row);
+        const freeHotStoneUsedThisMonth = memberTransactions.filter((transaction) =>
+          transaction.type === 'HOTSTONE' &&
+          loyaltyMonthForDate(transaction.createdAt) === currentLoyaltyMonth(),
+        ).length;
         return {
           email,
           name: row[1] || '',
           phone: row[2] || '',
           enrolledAt: row[3] || '',
+          membershipType,
+          organization: row[6] || '',
+          paidThrough: row[7] || '',
+          companyId: row[8] || '',
+          prepaidHoursBalance: hoursBalance,
+          membershipActive,
+          membershipDiscountPercent: membershipActive
+            ? settings.membershipPlans[membershipType]?.discountPercent || 0
+            : 0,
+          freeHotStoneUsedThisMonth,
+          freeHotStoneAvailable: membershipType === 'gold' && membershipActive &&
+            freeHotStoneUsedThisMonth < settings.membershipPlans.gold.freeHotStonePerMonth,
           pointsBalance,
           lifetimePoints,
           tier: getTier(lifetimePoints),
+          receiptCandidates: bookingDataRows.filter((booking) =>
+            normalizeLoyaltyEmail(booking[3]) === email &&
+            String(booking[0] || '') &&
+            !booking[18] &&
+            (Number(booking[11]) || 0) > 0 &&
+            (Number(booking[10]) || 0) + 0.005 >= (Number(booking[11]) || 0) &&
+            !redemptionsByBooking.has(`${email}:${String(booking[0])}`),
+          ).map((booking) => ({
+            bookingId: String(booking[0]),
+            serviceName: booking[5] || '',
+            date: booking[7] || '',
+            total: Number(booking[11]) || 0,
+          })),
           transactions: memberTransactions.sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 10),
         };
       });
       const membersByEmail = new Map(members.map((member) => [member.email, member]));
       const earnedBookingIds = new Set(transactions.filter((item) => item.type === 'EARN' && item.bookingId).map((item) => `${item.email}:${item.bookingId}`));
-      const bookingRows = bookingsResult.data.values || [];
-      const bookingDataRows = bookingRows[0]?.[0] === 'Booking ID' ? bookingRows.slice(1) : bookingRows;
+      const usedBookingIds = new Set(transactions.filter((item) => item.type === 'USE' && item.bookingId).map((item) => `${item.email}:${item.bookingId}`));
+      const hotStoneBookingIds = new Set(transactions.filter((item) => item.type === 'HOTSTONE' && item.bookingId).map((item) => `${item.email}:${item.bookingId}`));
+      const firstSessionBookingByEmail = new Map(members.map((member) => [
+        member.email,
+        getFirstPaidSingleSessionBookingId(bookingDataRows, member.email),
+      ]));
+      const customerDirectory = new Map();
+      bookingDataRows.forEach((row) => {
+        const email = normalizeLoyaltyEmail(row[3]);
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return;
+        const previous = customerDirectory.get(email) || {};
+        customerDirectory.set(email, {
+          email,
+          name: String(row[1] || previous.name || '').trim(),
+          phone: String(row[2] || previous.phone || '').trim(),
+        });
+      });
       const eligibleBookings = bookingDataRows.filter((row) => {
         const email = normalizeLoyaltyEmail(row[3]);
         const total = Number(row[11]) || 0;
         const paidAmount = Number(row[10]) || 0;
-        return email && membersByEmail.has(email) && isAppointmentCompleteByTime(row[7], row[8], row[12]) && total > 0 &&
-          paidAmount + 0.005 >= total && !earnedBookingIds.has(`${email}:${String(row[0] || '')}`);
-      }).map((row) => ({
-        id: String(row[0] || ''),
-        email: normalizeLoyaltyEmail(row[3]),
-        customerName: row[1] || '',
-        date: row[7] || '',
-        serviceName: row[5] || '',
-        paidAmount: Number(row[10]) || 0,
-        points: Math.floor((Number(row[10]) || 0) * settings.pointsPerDollar),
-      })).filter((booking) => booking.points > 0)
+        const member = membersByEmail.get(email);
+        const bookingKey = `${email}:${String(row[0] || '')}`;
+        const durationMinutes = Number(row[12]) || 60;
+        const coveredByTopUp = member?.membershipType === 'platinum' &&
+          !String(row[5] || '').toLowerCase().includes('hot stone add-on') &&
+          member.prepaidHoursBalance + 0.0001 >= durationMinutes / 60;
+        const freeHotStone = member?.membershipType === 'gold' &&
+          member.freeHotStoneAvailable &&
+          String(row[5] || '').toLowerCase().includes('hot stone add-on');
+        const fullyPaid = total > 0 && paidAmount + 0.005 >= total;
+        return email && member && isAppointmentCompleteByTime(row[7], row[8], durationMinutes) &&
+          !earnedBookingIds.has(bookingKey) && !usedBookingIds.has(bookingKey) && !hotStoneBookingIds.has(bookingKey) &&
+          (coveredByTopUp || freeHotStone || (fullyPaid && paidAmount > 0));
+      }).map((row) => {
+        const email = normalizeLoyaltyEmail(row[3]);
+        const member = membersByEmail.get(email);
+        const bookingId = String(row[0] || '');
+        const durationMinutes = Number(row[12]) || 60;
+        const hoursToUse = member.membershipType === 'platinum' &&
+          !String(row[5] || '').toLowerCase().includes('hot stone add-on') &&
+          member.prepaidHoursBalance + 0.0001 >= durationMinutes / 60
+          ? durationMinutes / 60
+          : 0;
+        const freeHotStone = member.membershipType === 'gold' &&
+          member.freeHotStoneAvailable &&
+          String(row[5] || '').toLowerCase().includes('hot stone add-on');
+        const firstSession = firstSessionBookingByEmail.get(email) === bookingId;
+        const plan = settings.membershipPlans[member.membershipType];
+        const pointsMultiplier = firstSession
+          ? settings.firstSessionMultiplier
+          : member.membershipActive && member.membershipType === 'gold'
+            ? plan.pointsMultiplier
+            : 1;
+        const paidAmount = Number(row[10]) || 0;
+        const points = paidAmount > 0 && (Number(row[11]) || 0) > 0 && paidAmount + 0.005 >= Number(row[11])
+          ? Math.floor(paidAmount * settings.pointsPerDollar * pointsMultiplier)
+          : 0;
+        return {
+          id: bookingId,
+          email,
+          customerName: row[1] || '',
+          date: row[7] || '',
+          serviceName: row[5] || '',
+          paidAmount,
+          points,
+          pointsMultiplier,
+          firstSession,
+          hoursToUse,
+          freeHotStone,
+        };
+      })
         .sort((a, b) => b.date.localeCompare(a.date));
       return res.status(200).json({
         settings,
         members: members.sort((a, b) => a.name.localeCompare(b.name)),
         eligibleBookings,
+        customerDirectory: [...customerDirectory.values()]
+          .filter((customer) => !membersByEmail.has(customer.email))
+          .sort((a, b) => a.name.localeCompare(b.name)),
         summary: {
           members: members.length,
           availablePoints: members.reduce((sum, member) => sum + member.pointsBalance, 0),
@@ -1426,6 +1858,175 @@ export default async function handler(req, res) {
       return res.status(200).json({ settings });
     }
 
+    if (req.method === 'POST' && view === 'loyalty-member') {
+      const email = normalizeLoyaltyEmail(req.body?.email);
+      const name = String(req.body?.name || '').trim().slice(0, 120);
+      const phone = String(req.body?.phone || '').trim().slice(0, 50);
+      const membershipType = String(req.body?.membershipType || '').toLowerCase();
+      const organization = String(req.body?.organization || '').trim().slice(0, 120);
+      const paidThrough = String(req.body?.paidThrough || '').trim();
+      const companyId = String(req.body?.companyId || '').trim().slice(0, 120);
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !name || !['regular', 'gold', 'platinum', 'silver'].includes(membershipType)) {
+        return res.status(400).json({ message: 'Enter a valid email, member name, and membership type.' });
+      }
+      if (['silver', 'platinum'].includes(membershipType) && !organization) {
+        return res.status(400).json({ message: 'Enter the company name for a corporate member.' });
+      }
+      if (paidThrough && !isValidMembershipDate(paidThrough)) {
+        return res.status(400).json({ message: 'Paid-through date must be a valid YYYY-MM-DD date.' });
+      }
+      const settings = await getLoyaltySettings(sheets);
+      if (!settings.enabled) return res.status(409).json({ message: 'The loyalty program is currently paused.' });
+      await ensureLoyaltySheets(sheets);
+      const membersResult = await sheets.spreadsheets.values.get({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: 'LoyaltyMembers!A:I',
+      });
+      const rows = membersResult.data.values || [];
+      const existingIndex = rows.findIndex((row, index) => index > 0 && normalizeLoyaltyEmail(row[0]) === email);
+      if (membershipType === 'silver') {
+        const employeeCount = rows.slice(1).filter((row, index) =>
+          index + 1 !== existingIndex &&
+          String(row[5] || '').toLowerCase() === 'silver' &&
+          String(row[6] || '').trim().toLowerCase() === organization.toLowerCase(),
+        ).length;
+        if (employeeCount >= settings.membershipPlans.silver.maxEmployees) {
+          return res.status(409).json({ message: `This corporate plan is limited to ${settings.membershipPlans.silver.maxEmployees} employees.` });
+        }
+      }
+      const now = new Date().toISOString();
+      const existing = existingIndex >= 1 ? rows[existingIndex] : [];
+      const member = {
+        email,
+        name,
+        phone,
+        enrolledAt: existing[3] || now,
+        membershipType,
+        organization: ['silver', 'platinum'].includes(membershipType) ? organization : '',
+        paidThrough: membershipType === 'regular' ? '' : paidThrough,
+        companyId: membershipType === 'platinum' ? companyId : '',
+      };
+      const values = [email, name, phone, member.enrolledAt, now, member.membershipType, member.organization, member.paidThrough, member.companyId];
+      if (existingIndex >= 1) {
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+          range: `LoyaltyMembers!A${existingIndex + 1}:I${existingIndex + 1}`,
+          valueInputOption: 'RAW',
+          requestBody: { values: [values] },
+        });
+      } else {
+        await sheets.spreadsheets.values.append({
+          spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+          range: 'LoyaltyMembers!A:I',
+          valueInputOption: 'RAW',
+          requestBody: { values: [values] },
+        });
+      }
+      let emailSent = false;
+      let emailError = '';
+      try {
+        await sendMembershipEmail(createGmailApi(), member, settings, await getBusinessProfile(sheets), 'welcome');
+        emailSent = true;
+      } catch (error) {
+        emailError = error.message || 'Membership email could not be sent.';
+        console.error('Membership onboarding email error:', emailError);
+      }
+      return res.status(200).json({ member, emailSent, emailError });
+    }
+
+    if (req.method === 'POST' && view === 'loyalty-topup') {
+      const email = normalizeLoyaltyEmail(req.body?.email);
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return res.status(400).json({ message: 'A valid Platinum member email is required.' });
+      }
+      const settings = await getLoyaltySettings(sheets);
+      if (!settings.enabled) return res.status(409).json({ message: 'The loyalty program is currently paused.' });
+      const membersResult = await sheets.spreadsheets.values.get({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: 'LoyaltyMembers!A:I',
+      });
+      const member = (membersResult.data.values || []).slice(1)
+        .find((row) => normalizeLoyaltyEmail(row[0]) === email && String(row[5] || '').toLowerCase() === 'platinum');
+      if (!member) return res.status(404).json({ message: 'No Platinum member was found for that email.' });
+      await sheets.spreadsheets.values.append({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: 'LoyaltyLedger!A:J',
+        valueInputOption: 'RAW',
+        requestBody: { values: [[
+          crypto.randomUUID(), email, '', 'TOPUP', 0, 0,
+          `Platinum top-up: $${settings.membershipPlans.platinum.topUpPrice.toFixed(2)} for ${settings.membershipPlans.platinum.includedHours} hours`,
+          new Date().toISOString(), settings.membershipPlans.platinum.includedHours,
+        ]] },
+      });
+      return res.status(200).json({
+        email,
+        hoursAdded: settings.membershipPlans.platinum.includedHours,
+        hoursBalance: loyaltyHoursBalance(
+          (await sheets.spreadsheets.values.get({
+            spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+            range: 'LoyaltyLedger!A:J',
+          })).data.values?.slice(1) || [],
+          email,
+        ),
+      });
+    }
+
+    if (req.method === 'POST' && view === 'loyalty-payment') {
+      const email = normalizeLoyaltyEmail(req.body?.email);
+      const organization = String(req.body?.organization || '').trim();
+      const paidThrough = String(req.body?.paidThrough || '').trim();
+      if (!isValidMembershipDate(paidThrough)) {
+        return res.status(400).json({ message: 'Paid-through date must be a valid YYYY-MM-DD date.' });
+      }
+      const settings = await getLoyaltySettings(sheets);
+      const membersResult = await sheets.spreadsheets.values.get({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: 'LoyaltyMembers!A:H',
+      });
+      const rows = membersResult.data.values || [];
+      const matches = rows.slice(1).map((row, index) => ({ row, rowNumber: index + 2 }))
+        .filter(({ row }) => organization
+          ? String(row[5] || '').toLowerCase() === 'silver' && String(row[6] || '').trim().toLowerCase() === organization.toLowerCase()
+          : normalizeLoyaltyEmail(row[0]) === email && String(row[5] || '').toLowerCase() === 'gold');
+      if (!matches.length) return res.status(404).json({ message: 'No matching Gold member or Silver corporate account was found.' });
+      if (organization && matches.length > settings.membershipPlans.silver.maxEmployees) {
+        return res.status(409).json({ message: 'The corporate account exceeds the configured employee limit; adjust the roster before recording payment.' });
+      }
+      const updatedMembers = [];
+      for (const { row, rowNumber } of matches) {
+        const member = {
+          email: normalizeLoyaltyEmail(row[0]),
+          name: row[1] || '',
+          membershipType: String(row[5] || '').toLowerCase(),
+          organization: row[6] || '',
+          paidThrough,
+        };
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+          range: `LoyaltyMembers!E${rowNumber}:H${rowNumber}`,
+          valueInputOption: 'RAW',
+          requestBody: { values: [[new Date().toISOString(), row[5] || '', row[6] || '', paidThrough]] },
+        });
+        updatedMembers.push(member);
+      }
+      const emailFailures = [];
+      const businessProfile = await getBusinessProfile(sheets);
+      for (const member of updatedMembers) {
+        try {
+          await sendMembershipEmail(createGmailApi(), member, settings, businessProfile, 'payment');
+        } catch (error) {
+          emailFailures.push({ email: member.email, reason: error.message || 'Payment email could not be sent.' });
+        }
+      }
+      if (emailFailures.length) console.error('Membership payment notification failures:', emailFailures);
+      return res.status(200).json({
+        updatedCount: updatedMembers.length,
+        paidThrough,
+        emailsSent: updatedMembers.length - emailFailures.length,
+        emailFailures,
+      });
+    }
+
     if (req.method === 'POST' && view === 'loyalty-award') {
       const bookingId = String(req.body?.bookingId || '').trim();
       if (!bookingId || bookingId.length > 100) {
@@ -1434,8 +2035,8 @@ export default async function handler(req, res) {
       const settings = await getLoyaltySettings(sheets);
       if (!settings.enabled) return res.status(409).json({ message: 'The loyalty program is currently paused.' });
       const [membersResult, ledgerResult, bookingsResult] = await Promise.all([
-        sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'LoyaltyMembers!A:E' }),
-        sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'LoyaltyLedger!A:H' }),
+        sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'LoyaltyMembers!A:I' }),
+        sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'LoyaltyLedger!A:J' }),
         sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'Sheet1!A:U' }),
       ]);
       const bookingRows = bookingsResult.data.values || [];
@@ -1444,62 +2045,165 @@ export default async function handler(req, res) {
       if (rowIndex < 0) return res.status(404).json({ message: 'Booking was not found.' });
       const booking = bookingRows[rowIndex];
       const email = normalizeLoyaltyEmail(booking[3]);
-      const memberExists = (membersResult.data.values || []).slice(1).some((row) => normalizeLoyaltyEmail(row[0]) === email);
-      if (!memberExists) return res.status(409).json({ message: 'This customer is not enrolled in the loyalty program.' });
+      const member = (membersResult.data.values || []).slice(1)
+        .find((row) => normalizeLoyaltyEmail(row[0]) === email);
+      if (!member) return res.status(409).json({ message: 'This customer is not enrolled in the loyalty program.' });
       const ledgerRows = (ledgerResult.data.values || []).slice(1);
-      if (ledgerRows.some((row) => row[3] === 'EARN' && normalizeLoyaltyEmail(row[1]) === email && String(row[2] || '') === bookingId)) {
+      if (ledgerRows.some((row) => ['EARN', 'USE', 'HOTSTONE'].includes(row[3]) && normalizeLoyaltyEmail(row[1]) === email && String(row[2] || '') === bookingId)) {
         return res.status(200).json({ alreadyAwarded: true, bookingId });
       }
       const total = Number(booking[11]) || 0;
       const paidAmount = Number(booking[10]) || 0;
+      const durationMinutes = Number(booking[12]) || 60;
+      const isPlatinum = String(member[5] || '').toLowerCase() === 'platinum';
+      const availableHours = loyaltyHoursBalance(ledgerRows, email);
+      const isHotStoneAddon = String(booking[5] || '').toLowerCase().includes('hot stone add-on');
+      const hoursUsed = isPlatinum && !isHotStoneAddon && availableHours + 0.0001 >= durationMinutes / 60
+        ? durationMinutes / 60
+        : 0;
+      const freeHotStone = String(member[5] || '').toLowerCase() === 'gold' &&
+        isMembershipActive(member) &&
+        String(booking[5] || '').toLowerCase().includes('hot stone add-on') &&
+        loyaltyHotStoneRedemptions(ledgerRows, email) < settings.membershipPlans.gold.freeHotStonePerMonth;
       if (!isAppointmentCompleteByTime(booking[7], booking[8], booking[12])) {
         return res.status(409).json({ message: 'Points can only be awarded after the appointment treatment time has passed.' });
       }
-      if (total <= 0 || paidAmount + 0.005 < total) {
+      const fullyPaid = total > 0 && paidAmount + 0.005 >= total;
+      if (!hoursUsed && !freeHotStone && !fullyPaid) {
         return res.status(409).json({ message: 'Record full payment before awarding points for this visit.' });
       }
-      const points = Math.floor(paidAmount * settings.pointsPerDollar);
-      if (points < 1) return res.status(409).json({ message: 'This visit does not qualify for loyalty points.' });
-      await sheets.spreadsheets.values.append({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'LoyaltyLedger!A:H',
-        valueInputOption: 'RAW',
-        requestBody: { values: [[crypto.randomUUID(), email, bookingId, 'EARN', points, 0, `Completed visit: ${booking[5] || 'massage service'}`, new Date().toISOString()]] },
-      });
-      return res.status(200).json({ awarded: true, points, bookingId, email });
+      const firstSession = getFirstPaidSingleSessionBookingId(
+        bookingRows[0]?.[0] === 'Booking ID' ? bookingRows.slice(1) : bookingRows,
+        email,
+      ) === bookingId;
+      const pointsMultiplier = firstSession
+        ? settings.firstSessionMultiplier
+        : String(member[5] || '').toLowerCase() === 'gold' && isMembershipActive(member)
+          ? settings.membershipPlans.gold.pointsMultiplier
+          : 1;
+      const points = fullyPaid
+        ? Math.floor(paidAmount * settings.pointsPerDollar * pointsMultiplier)
+        : 0;
+      const createdAt = new Date().toISOString();
+      const ledgerEntries = [];
+      if (hoursUsed) {
+        ledgerEntries.push([
+          crypto.randomUUID(), email, bookingId, 'USE', 0, 0,
+          `Platinum session usage: ${booking[5] || 'massage service'}`, createdAt, -hoursUsed,
+        ]);
+      }
+      if (freeHotStone) {
+        ledgerEntries.push([
+          crypto.randomUUID(), email, bookingId, 'HOTSTONE', 0, 0,
+          'Gold monthly free Hot Stone add-on', createdAt, 0,
+        ]);
+      }
+      if (points > 0) {
+        ledgerEntries.push([
+          crypto.randomUUID(), email, bookingId, 'EARN', points, 0,
+          `Completed visit: ${booking[5] || 'massage service'}${firstSession ? ` (first-session ${pointsMultiplier}x)` : ` (${pointsMultiplier}x)`}`,
+          createdAt, 0,
+        ]);
+      }
+      if (ledgerEntries.length) {
+        await sheets.spreadsheets.values.append({
+          spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+          range: 'LoyaltyLedger!A:J',
+          valueInputOption: 'RAW',
+          requestBody: { values: ledgerEntries },
+        });
+      }
+      if (!points && !hoursUsed && !freeHotStone) {
+        return res.status(409).json({ message: 'This visit does not qualify for points or prepaid hours.' });
+      }
+      return res.status(200).json({ awarded: points > 0, points, hoursUsed, freeHotStone, bookingId, email });
     }
 
     if (req.method === 'POST' && view === 'loyalty-redeem') {
       const email = normalizeLoyaltyEmail(req.body?.email);
       const points = Number(req.body?.points);
-      const reference = String(req.body?.reference || '').trim().slice(0, 100);
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-        return res.status(400).json({ message: 'A valid member email is required.' });
+      const bookingId = String(req.body?.bookingId || '').trim();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !bookingId || bookingId.length > 100) {
+        return res.status(400).json({ message: 'A valid member email and paid booking are required to link the reward to its receipt.' });
       }
       const settings = await getLoyaltySettings(sheets);
       if (!settings.enabled) return res.status(409).json({ message: 'The loyalty program is currently paused.' });
       if (!Number.isInteger(points) || points < settings.redemptionPoints || points > 1000000 || points % settings.redemptionPoints !== 0) {
         return res.status(400).json({ message: `Redeem points in multiples of ${settings.redemptionPoints}.` });
       }
-      const [membersResult, ledgerResult] = await Promise.all([
-        sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'LoyaltyMembers!A:E' }),
-        sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'LoyaltyLedger!A:H' }),
+      const [membersResult, ledgerResult, bookingsResult] = await Promise.all([
+        sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'LoyaltyMembers!A:I' }),
+        sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'LoyaltyLedger!A:J' }),
+        sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'Sheet1!A:U' }),
       ]);
       const member = (membersResult.data.values || []).slice(1)
         .find((row) => normalizeLoyaltyEmail(row[0]) === email);
       if (!member) return res.status(404).json({ message: 'Loyalty member was not found.' });
+      const bookingRows = bookingsResult.data.values || [];
+      const hasHeader = bookingRows[0]?.[0] === 'Booking ID';
+      const booking = bookingRows.find((row, index) =>
+        index >= (hasHeader ? 1 : 0) && String(row[0] || '') === bookingId,
+      );
+      if (!booking || normalizeLoyaltyEmail(booking[3]) !== email) {
+        return res.status(404).json({ message: 'The selected receipt booking was not found for this loyalty member.' });
+      }
+      const bookingTotal = Number(booking[11]) || 0;
+      if (!bookingTotal || (Number(booking[10]) || 0) + 0.005 < bookingTotal) {
+        return res.status(409).json({ message: 'A loyalty discount can only be linked to a fully paid booking.' });
+      }
+      if (booking[18]) {
+        return res.status(409).json({ message: `Receipt ${booking[18]} has already been issued. Select a paid booking before its receipt is issued.` });
+      }
       const memberTransactions = (ledgerResult.data.values || []).slice(1)
         .filter((row) => normalizeLoyaltyEmail(row[1]) === email);
+      if (memberTransactions.some((row) =>
+        row[3] === 'REDEEM' && String(row[2] || '') === bookingId,
+      )) {
+        return res.status(409).json({ message: 'A loyalty redemption is already linked to this booking.' });
+      }
       const balance = memberTransactions.reduce((sum, row) => sum + (Number(row[4]) || 0), 0);
       if (points > balance) return res.status(409).json({ message: `Insufficient points. Available balance: ${balance}.` });
       const rewardValue = (points / settings.redemptionPoints) * settings.redemptionValue;
+      const isTaxExempt = /registered massage therapy|\brmt\b|acupuncture/i.test(String(booking[5] || ''));
+      const preDiscountSubtotal = isTaxExempt ? bookingTotal : bookingTotal / 1.13;
+      if (rewardValue > preDiscountSubtotal + 0.005) {
+        return res.status(409).json({ message: 'The selected points redemption is greater than the eligible pre-tax purchase amount.' });
+      }
+      const now = new Date().toISOString();
       await sheets.spreadsheets.values.append({
         spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'LoyaltyLedger!A:H',
+        range: 'LoyaltyLedger!A:J',
         valueInputOption: 'RAW',
-        requestBody: { values: [[crypto.randomUUID(), email, '', 'REDEEM', -points, rewardValue, `Redeemed for $${rewardValue.toFixed(2)}${reference ? ` · ${reference}` : ''}`, new Date().toISOString()]] },
+        requestBody: { values: [[crypto.randomUUID(), email, bookingId, 'REDEEM', -points, rewardValue, `Redeemed for $${rewardValue.toFixed(2)}; pending receipt for booking ${bookingId}`, now, 0, '']] },
       });
-      return res.status(200).json({ email, redeemedPoints: points, rewardValue, remainingPoints: balance - points });
+      const pointsBalance = balance - points;
+      let emailSent = false;
+      let emailError = '';
+      try {
+        await sendLoyaltyRedemptionEmail(createGmailApi(), {
+          email,
+          name: member[1] || '',
+        }, {
+          points,
+          rewardValue,
+          bookingId,
+          pointsBalance,
+          balanceValue: pointsBalance / settings.redemptionPoints * settings.redemptionValue,
+        }, await getBusinessProfile(sheets));
+        emailSent = true;
+      } catch (error) {
+        emailError = error.message || 'Redemption confirmation email could not be sent.';
+        console.error('Loyalty redemption email error:', emailError);
+      }
+      return res.status(200).json({
+        email,
+        bookingId,
+        redeemedPoints: points,
+        rewardValue,
+        remainingPoints: pointsBalance,
+        emailSent,
+        emailError,
+      });
     }
 
     if (req.method === 'GET' && view === 'google-ads-report') {
@@ -2065,7 +2769,6 @@ export default async function handler(req, res) {
         }));
       return res.status(200).json({
         therapist: { name: account.name },
-        businessName: (await getBusinessProfile(sheets)).businessName,
         professionalProfile: {
           email: professionalProfileRow[1] || '',
           phone: professionalProfileRow[2] || '',
@@ -2098,7 +2801,7 @@ export default async function handler(req, res) {
         await ensureBusinessProfileSheet(sheets);
         const result = await sheets.spreadsheets.values.get({
           spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-          range: 'BusinessProfile!A1:H2',
+          range: 'BusinessProfile!A1:I2',
         });
         const row = result.data.values?.[1] || [];
         const profile = Object.fromEntries(BUSINESS_PROFILE_FIELDS.map((field, index) => [
@@ -2352,16 +3055,54 @@ export default async function handler(req, res) {
         return res.status(409).json({ message: 'A receipt can only be issued when the appointment is fully paid' });
       }
 
+      await ensureLoyaltySheets(sheets);
+      const loyaltyLedgerResult = await sheets.spreadsheets.values.get({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: 'LoyaltyLedger!A:J',
+      });
+      const loyaltyMembersResult = await sheets.spreadsheets.values.get({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: 'LoyaltyMembers!A:I',
+      });
+      const loyaltyRows = (loyaltyLedgerResult.data.values || []).slice(1);
+      const loyaltyMember = (loyaltyMembersResult.data.values || []).slice(1)
+        .some((loyaltyRow) => normalizeLoyaltyEmail(loyaltyRow[0]) === normalizeLoyaltyEmail(booking.email));
+      const linkedRedemptions = loyaltyRows
+        .map((loyaltyRow, index) => ({ row: loyaltyRow, rowNumber: index + 2 }))
+        .filter(({ row: loyaltyRow }) =>
+          loyaltyRow[3] === 'REDEEM' &&
+          normalizeLoyaltyEmail(loyaltyRow[1]) === normalizeLoyaltyEmail(booking.email) &&
+          String(loyaltyRow[2] || '') === bookingId,
+        );
+      if (linkedRedemptions.length > 1) {
+        return res.status(409).json({ message: 'Multiple loyalty redemptions are linked to this booking. Resolve the ledger entries before issuing a receipt.' });
+      }
+      const redemption = linkedRedemptions[0]?.row;
+      const loyaltyDiscount = Number(redemption?.[5]) || 0;
+      const pointsRedeemed = Math.abs(Number(redemption?.[4]) || 0);
+      const pointsBalance = loyaltyRows
+        .filter((loyaltyRow) => normalizeLoyaltyEmail(loyaltyRow[1]) === normalizeLoyaltyEmail(booking.email))
+        .reduce((sum, loyaltyRow) => sum + (Number(loyaltyRow[4]) || 0), 0);
       const businessProfile = await getBusinessProfile(sheets);
       const isTaxExempt = /registered massage therapy|\brmt\b|acupuncture/i.test(booking.serviceName);
-      const tax = isTaxExempt ? 0 : Math.round((booking.total - booking.total / 1.13) * 100) / 100;
+      const originalSubtotal = isTaxExempt ? booking.total : booking.total / 1.13;
+      if (loyaltyDiscount > originalSubtotal + 0.005) {
+        return res.status(409).json({ message: 'The loyalty redemption exceeds this receipt subtotal. Adjust the redemption before issuing this receipt.' });
+      }
+      const subtotal = Math.round(originalSubtotal * 100) / 100;
+      const discountedSubtotal = Math.round((originalSubtotal - loyaltyDiscount) * 100) / 100;
+      const tax = isTaxExempt ? 0 : Math.round(discountedSubtotal * 0.13 * 100) / 100;
       const receipt = {
         number: row[18] || `MTT-${new Date().getFullYear()}-${String(rowIndex + 1).padStart(6, '0')}`,
         issuedAt: row[19] || new Date().toISOString(),
-        subtotal: Math.round((booking.total - tax) * 100) / 100,
+        subtotal,
         tax,
         taxLabel: isTaxExempt ? 'HST exempt' : 'HST (13%)',
-        total: booking.total,
+        total: Math.round((discountedSubtotal + tax) * 100) / 100,
+        loyaltyDiscount,
+        pointsRedeemed,
+        pointsBalance,
+        loyaltyMember,
       };
       const sheetRow = rowIndex + 1;
       if (hasHeader) await ensureReceiptHeaders(sheets);
@@ -2371,6 +3112,14 @@ export default async function handler(req, res) {
         valueInputOption: 'RAW',
         requestBody: { values: [[receipt.number, receipt.issuedAt, row[20] || 'pending']] },
       });
+      for (const { rowNumber } of linkedRedemptions) {
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+          range: `LoyaltyLedger!J${rowNumber}`,
+          valueInputOption: 'RAW',
+          requestBody: { values: [[receipt.number]] },
+        });
+      }
 
       if (row[20] !== 'sent') {
         try {
@@ -2405,7 +3154,7 @@ export default async function handler(req, res) {
       await ensureBusinessProfileSheet(sheets);
       await sheets.spreadsheets.values.update({
         spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'BusinessProfile!A2:H2',
+        range: 'BusinessProfile!A2:I2',
         valueInputOption: 'RAW',
         requestBody: { values: [BUSINESS_PROFILE_FIELDS.map((field) => profile[field])] },
       });
@@ -2413,6 +3162,37 @@ export default async function handler(req, res) {
     }
 
     const payload = req.body;
+    const subtotal = Number(payload.subtotalAmount);
+    const taxRate = Number(payload.taxRate);
+    if (!Number.isFinite(subtotal) || subtotal <= 0 || subtotal > 100000 || !Number.isFinite(taxRate) || taxRate < 0 || taxRate > 1) {
+      return res.status(400).json({ message: 'The service subtotal and tax rate are invalid.' });
+    }
+    const loyaltySettings = await getLoyaltySettings(sheets);
+    const memberBenefit = loyaltySettings.enabled ? await getMemberBenefit(sheets, payload.email, loyaltySettings) : null;
+    const isHotStoneAddon = String(payload.serviceName || '').toLowerCase().includes('hot stone add-on');
+    const prepaidServiceHours = Math.max(0, Number(payload.durationMinutes) || 60) / 60;
+    const isPlatinumPrepaidSession = memberBenefit?.type === 'platinum' &&
+      !isHotStoneAddon &&
+      memberBenefit.hoursBalance + 0.0001 >= prepaidServiceHours;
+    const discountAmount = isHotStoneAddon && memberBenefit?.type === 'gold' && memberBenefit.freeHotStoneAvailable
+      ? subtotal
+      : isPlatinumPrepaidSession
+        ? subtotal
+        : isHotStoneAddon && memberBenefit?.type === 'platinum'
+          ? Math.min(subtotal, Number(memberBenefit.hotStoneDiscount) || 0)
+          : Math.round(subtotal * (memberBenefit?.discountPercent || 0)) / 100;
+    const discountPercent = subtotal > 0 ? discountAmount * 100 / subtotal : 0;
+    if (payload.expectedDiscountPercent !== undefined && Number(payload.expectedDiscountPercent) !== discountPercent) {
+      return res.status(409).json({ message: 'Membership eligibility changed. Please check your email again before submitting the booking.' });
+    }
+    const discountedSubtotal = subtotal - discountAmount;
+    const taxAmount = Math.round(discountedSubtotal * taxRate * 100) / 100;
+    const finalTotal = Math.round((discountedSubtotal + taxAmount) * 100) / 100;
+    payload.membershipType = memberBenefit?.type || '';
+    payload.membershipDiscountPercent = discountPercent;
+    payload.membershipDiscountAmount = discountAmount.toFixed(2);
+    payload.totalAmount = finalTotal.toFixed(2);
+    if (payload.paymentOption === 'full') payload.paidAmount = finalTotal.toFixed(2);
     let patientHistory = payload.patientHistory || {};
     if (patientHistory.reuseExisting) {
       patientHistory = await findExistingPatientHistory(sheets, payload);
@@ -2469,6 +3249,7 @@ export default async function handler(req, res) {
           `Payment: ${payload.paymentOption}`,
           `Paid: $${payload.paidAmount}`,
           `Total: $${payload.totalAmount}`,
+          memberBenefit ? `Membership benefit: ${memberBenefit.type} · ${discountPercent}% off ($${payload.membershipDiscountAmount})` : '',
           payload.intakeNotes ? `Intake notes: ${payload.intakeNotes}` : '',
         ].filter(Boolean).join('\n'),
         start: { dateTime: startDateTime, timeZone: CALENDAR_TIME_ZONE },
@@ -2495,11 +3276,17 @@ export default async function handler(req, res) {
       calendarId,
       calendarEvent.data.id || '',
       new Date().toISOString(),
+      '',
+      '',
+      '',
+      memberBenefit?.type || '',
+      discountPercent,
+      payload.membershipDiscountAmount,
     ];
 
     await sheets.spreadsheets.values.append({
       spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-      range: 'Sheet1!A:R',
+      range: 'Sheet1!A:X',
       valueInputOption: 'USER_ENTERED',
       requestBody: {
         values: [rowValues],
@@ -2602,6 +3389,11 @@ export default async function handler(req, res) {
       calendarEventId: calendarEvent.data.id,
       emailSent,
       emailError,
+      paidAmount: payload.paidAmount,
+      totalAmount: payload.totalAmount,
+      membershipType: payload.membershipType,
+      membershipDiscountPercent: payload.membershipDiscountPercent,
+      membershipDiscountAmount: payload.membershipDiscountAmount,
       therapistName,
       patientHistorySaved,
       patientHistoryError,
