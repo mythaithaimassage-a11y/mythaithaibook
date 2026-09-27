@@ -1279,7 +1279,7 @@ export default async function handler(req, res) {
     }
 
     const view = String(req.query?.view || '');
-    const validGetViews = ['', 'calendar', 'patient-history', 'business-profile', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'therapist-dashboard', 'therapist-session', 'unsubscribe'];
+    const validGetViews = ['', 'calendar', 'patient-history', 'business-profile', 'business-name', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'therapist-dashboard', 'therapist-session', 'unsubscribe'];
     if (req.method === 'GET' && !validGetViews.includes(view)) {
       return res.status(404).json({ message: 'Unknown booking view' });
     }
@@ -1307,6 +1307,12 @@ export default async function handler(req, res) {
 
     const sheets = google.sheets({ version: 'v4', auth });
     const calendarApi = google.calendar({ version: 'v3', auth });
+
+    if (req.method === 'GET' && view === 'business-name') {
+      res.setHeader('Cache-Control', 'no-store');
+      const businessProfile = await getBusinessProfile(sheets);
+      return res.status(200).json({ businessName: businessProfile.businessName });
+    }
 
     if (req.method === 'GET' && view === 'loyalty-program') {
       res.setHeader('Cache-Control', 'no-store');
@@ -2059,6 +2065,7 @@ export default async function handler(req, res) {
         }));
       return res.status(200).json({
         therapist: { name: account.name },
+        businessName: (await getBusinessProfile(sheets)).businessName,
         professionalProfile: {
           email: professionalProfileRow[1] || '',
           phone: professionalProfileRow[2] || '',

@@ -421,6 +421,7 @@ export default function App() {
 
 function TherapistPortal() {
   const [therapist, setTherapist] = useState(null);
+  const [businessName, setBusinessName] = useState(DEFAULT_BUSINESS_PROFILE.businessName);
   const [appointments, setAppointments] = useState([]);
   const [patientNotes, setPatientNotes] = useState([]);
   const [rebookingReminders, setRebookingReminders] = useState([]);
@@ -456,6 +457,7 @@ function TherapistPortal() {
     const data = await response.json();
     if (!response.ok) throw new Error(data.message || 'Unable to load therapist appointments');
     setTherapist(data.therapist);
+    setBusinessName(data.businessName || DEFAULT_BUSINESS_PROFILE.businessName);
     setAppointments(data.appointments || []);
     setPatientNotes(data.patientNotes || []);
     setRebookingReminders(data.rebookingReminders || []);
@@ -646,8 +648,8 @@ function TherapistPortal() {
     <div className="min-h-[calc(100vh-7rem)] bg-slate-100">
       <header className="flex min-h-14 items-center justify-between gap-4 bg-black px-4 py-2 text-white shadow-sm sm:px-6">
         <div className="flex items-center gap-3">
-          <div className="grid h-9 w-9 place-items-center rounded-lg border border-white/40 bg-white/10 text-xs font-black">MT</div>
-          <div><p className="text-sm font-black tracking-wide">MY THAI THAI</p><p className="text-[9px] uppercase tracking-[0.18em] text-blue-100">Therapist portal</p></div>
+          <div className="grid h-9 w-9 place-items-center rounded-lg border border-white/40 bg-white/10 text-xs font-black">{businessName.split(/\s+/).filter(Boolean).slice(0, 2).map((word) => word[0]).join('').toUpperCase() || 'MT'}</div>
+          <div><p className="text-sm font-black tracking-wide">{businessName}</p><p className="text-[9px] uppercase tracking-[0.18em] text-blue-100">Therapist portal</p></div>
         </div>
         <div className="flex items-center gap-3">
           <span className="hidden text-xs text-blue-100 sm:inline">{new Date().toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric' })}</span>
@@ -1305,6 +1307,8 @@ function AdminGate({ children }) {
 
 function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNewBooking }) {
   const [step, setStep] = useState(1);
+  const [businessName, setBusinessName] = useState(DEFAULT_BUSINESS_PROFILE.businessName);
+  const [businessNameError, setBusinessNameError] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [sheetsSyncStatus, setSheetsSyncStatus] = useState(null);
@@ -1354,6 +1358,23 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
   });
 
   const categories = ['All', 'Thai Traditional', 'Thai Combo Swedish', 'Hot Stone Combo', 'Add-On & Packages', 'RMT Healthcare'];
+
+  useEffect(() => {
+    let isCurrent = true;
+    fetch('/api/booking?view=business-name')
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+        if (typeof data.businessName !== 'string' || !data.businessName.trim()) {
+          throw new Error('The owner profile does not have a business display name.');
+        }
+        if (isCurrent) setBusinessName(data.businessName);
+      })
+      .catch(() => {
+        if (isCurrent) setBusinessNameError('The business name could not be synced from the owner profile.');
+      });
+    return () => { isCurrent = false; };
+  }, []);
 
   useEffect(() => {
     let isCurrent = true;
@@ -1503,8 +1524,9 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
       <div className="bg-slate-950 text-white p-6 sm:p-8 text-center relative overflow-hidden">
         <div className="absolute top-0 right-0 transform translate-x-8 -translate-y-8 w-40 h-40 bg-slate-700 rounded-full opacity-30 pointer-events-none"></div>
         <div className="relative z-10">
-          <h1 className="text-3xl sm:text-4xl font-serif tracking-tight font-bold text-amber-200">MY THAI THAI</h1>
+          <h1 className="text-3xl sm:text-4xl font-serif tracking-tight font-bold text-amber-200">{businessName}</h1>
           <p className="text-slate-300 font-medium text-sm sm:text-base mt-1">Thai Massage & Wellness • Ontario, Canada</p>
+          {businessNameError && <p role="status" className="mt-2 text-xs text-amber-200">{businessNameError}</p>}
           
           <div className="mt-4 inline-flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-xs sm:text-sm bg-white/5 backdrop-blur px-5 py-2 rounded-full border border-white/10">
             <a href="tel:+14378987424" className="flex items-center text-slate-200 hover:text-white transition">
@@ -1552,7 +1574,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
           <div className="space-y-6">
             <div>
               <h2 className="text-xl font-bold text-stone-900 mb-1">1. Choose Location</h2>
-              <p className="text-xs text-stone-500 mb-3">Select your preferred MY THAI THAI spa location</p>
+              <p className="text-xs text-stone-500 mb-3">Select your preferred {businessName} spa location</p>
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 {branches.map(b => (
                   <button
@@ -1855,7 +1877,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                   onChange={(event) => updateBooking('marketingOptIn', event.target.checked)}
                   className="mt-0.5 h-4 w-4 rounded border-stone-300 text-emerald-800 focus:ring-emerald-700"
                 />
-                <span>I agree to receive occasional promotional emails from MY THAI THAI. I can unsubscribe at any time. This is optional and is not required for booking or treatment.</span>
+                <span>I agree to receive occasional promotional emails from {businessName}. I can unsubscribe at any time. This is optional and is not required for booking or treatment.</span>
               </label>
               {loyaltyProgram?.enabled && (
                 <label className="mt-3 flex cursor-pointer items-start gap-3 rounded-xl border border-indigo-200 bg-indigo-50/70 p-3.5 text-xs leading-5 text-indigo-950">
@@ -1866,7 +1888,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                     className="mt-0.5 h-4 w-4 rounded border-indigo-300 text-indigo-700 focus:ring-indigo-600"
                   />
                   <span>
-                    <strong className="block text-sm">Join MY THAI THAI Rewards</strong>
+                    <strong className="block text-sm">Join {businessName} Rewards</strong>
                     <span className="block mt-0.5">Earn {loyaltyProgram.pointsPerDollar} point{loyaltyProgram.pointsPerDollar === 1 ? '' : 's'} per $1 paid. Redeem {loyaltyProgram.redemptionPoints} points for ${Number(loyaltyProgram.redemptionValue).toFixed(2)} off in clinic. Membership is optional and separate from marketing emails.</span>
                     <span className="mt-1 block text-indigo-700">Tiers: {loyaltyProgram.tiers.map((tier) => tier.name).join(' · ')}</span>
                   </span>
