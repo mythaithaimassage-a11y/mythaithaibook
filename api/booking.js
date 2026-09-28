@@ -3653,13 +3653,13 @@ export default async function handler(req, res) {
     }
     const ownerOnlyRequest =
       (req.method === 'GET' && ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'google-ads-report', 'loyalty-dashboard', 'google-reviews', 'unavailability', 'campaign-log', 'campaign-audience-options', 'review-request-audience'].includes(view)) ||
-      ['business-profile', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-clear-ledger', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-link', 'unavailability-delete', 'review-request-send'].includes(view) ||
+      ['business-profile', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-clear-ledger', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-link', 'unavailability-delete', 'review-request-send', 'reassign-therapist'].includes(view) ||
       (req.method === 'POST' && ['branches', 'services', 'therapists', 'unavailability'].includes(view));
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
     if (ownerOnlyRequest && !getOwnerSession(req)) {
       return res.status(401).json({ message: 'Owner sign-in required' });
     }
-    if (['business-profile', 'branches', 'services', 'therapists', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-clear-ledger', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-signup', 'company-portal-bulk-signup', 'company-portal-link', 'square-create-checkout', 'cancel-booking', 'reschedule-booking', 'unavailability', 'unavailability-delete', 'review-request-send'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
+    if (['business-profile', 'branches', 'services', 'therapists', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-clear-ledger', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-signup', 'company-portal-bulk-signup', 'company-portal-link', 'square-create-checkout', 'cancel-booking', 'reschedule-booking', 'unavailability', 'unavailability-delete', 'review-request-send', 'reassign-therapist'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
       return res.status(403).json({ message: 'Profile update origin is not allowed' });
     }
 
@@ -6698,6 +6698,116 @@ export default async function handler(req, res) {
         time: newTime,
         wasWithinPolicyWindow,
         emailSent,
+      });
+    }
+
+    if (req.method === 'POST' && req.query?.view === 'reassign-therapist') {
+      const bookingId = String(req.body?.bookingId || '').trim();
+      const therapistName = String(req.body?.therapistName || '').trim();
+      if (!bookingId || bookingId.length > 100) {
+        return res.status(400).json({ message: 'A booking reference is required.' });
+      }
+      if (!therapistName || therapistName.length > 200) {
+        return res.status(400).json({ message: 'Choose a therapist to assign.' });
+      }
+      const bigquery = getBigQueryClient();
+      const result = await bqFetchBookingRows(bigquery);
+      const rows = result.data.values || [];
+      const startIndex = rows[0]?.[0] === 'Booking ID' ? 1 : 0;
+      const row = rows.find((candidate, index) => index >= startIndex && String(candidate[0] || '') === bookingId);
+      if (!row) return res.status(404).json({ message: 'Booking was not found.' });
+      if (row[24] === 'Cancelled') {
+        return res.status(409).json({ message: 'This booking is cancelled, so its therapist cannot be changed.' });
+      }
+      const previousTherapist = row[6] || '';
+      if (previousTherapist === therapistName) {
+        return res.status(400).json({ message: `${therapistName} is already assigned to this appointment.` });
+      }
+      const date = row[7] || '';
+      const time = row[8] || '';
+      let startDateTime;
+      try {
+        startDateTime = parseBookingDateTime(date, time);
+      } catch (error) {
+        return res.status(400).json({ message: 'This booking has no valid date and time, so it cannot be reassigned.' });
+      }
+      const durationMinutes = Number(row[12]) || 60;
+      const endDateTime = addMinutes(startDateTime, durationMinutes);
+      const startInstant = `${startDateTime}-04:00`;
+      const endInstant = `${endDateTime}-04:00`;
+      // "Any Available" is a placeholder rather than a real person, so it is never
+      // treated as busy and never checked against time off.
+      const assignedNames = therapistName.split(',').map((name) => name.trim()).filter(Boolean);
+      const realNames = assignedNames.filter((name) => name !== 'Any Available');
+      const calendarId = row[15] || PRIMARY_CALENDAR_ID;
+      const calendarEventId = row[16] || '';
+
+      if (realNames.length) {
+        const unavailabilityBlocks = await getUnavailabilityBlocks(sheets);
+        const blockedName = realNames.find((name) => unavailabilityBlocks.some((block) =>
+          block.scope === 'therapist' &&
+          block.therapistName === name &&
+          blockOverlapsWindow(block, date, startInstant, endInstant),
+        ));
+        if (blockedName) {
+          return res.status(409).json({ message: `${blockedName} has time off during this appointment. Choose another therapist.` });
+        }
+        try {
+          const dayEvents = await calendarApi.events.list({
+            calendarId,
+            timeMin: `${date}T00:00:00Z`,
+            timeMax: `${date}T23:59:59Z`,
+            singleEvents: true,
+          });
+          // The booking's own event must be ignored or the therapist would always
+          // look busy against the appointment being reassigned.
+          const busyNames = new Set((dayEvents.data.items || [])
+            .filter((event) => event.id !== calendarEventId)
+            .filter((event) => {
+              const eventStart = event.start?.dateTime || event.start?.date || '';
+              const eventEnd = event.end?.dateTime || event.end?.date || '';
+              return eventStart && eventEnd && hasTimeOverlap(startInstant, endInstant, eventStart, eventEnd);
+            })
+            .flatMap((event) => getTherapistFromDescription(event.description).split(',').map((name) => name.trim()).filter(Boolean)));
+          const busyName = realNames.find((name) => busyNames.has(name));
+          if (busyName) {
+            return res.status(409).json({ message: `${busyName} already has another appointment at this time. Choose another therapist.` });
+          }
+        } catch (error) {
+          console.error('Reassign therapist availability lookup error:', error.message || error);
+          return res.status(502).json({ message: 'Therapist availability could not be checked right now. Please try again.' });
+        }
+      }
+
+      let calendarUpdated = false;
+      if (calendarEventId) {
+        try {
+          const existing = await calendarApi.events.get({ calendarId, eventId: calendarEventId });
+          const description = String(existing.data.description || '');
+          const nextDescription = /^Therapist:\s*.*$/m.test(description)
+            ? description.replace(/^Therapist:\s*.*$/m, `Therapist: ${therapistName}`)
+            : `${description}${description ? '\n' : ''}Therapist: ${therapistName}`;
+          await calendarApi.events.patch({
+            calendarId,
+            eventId: calendarEventId,
+            requestBody: { description: nextDescription },
+          });
+          calendarUpdated = true;
+        } catch (error) {
+          console.error('Reassign therapist calendar update error:', error.message || error);
+          return res.status(502).json({ message: 'The new therapist could not be saved to Google Calendar. Please try again.' });
+        }
+      }
+
+      const statusNotes = `Therapist reassigned ${new Date().toISOString()} from ${previousTherapist || 'Unassigned'} to ${therapistName}.`;
+      await bqUpdateBookingFields(bigquery, bookingId, { therapistName, statusNotes });
+
+      return res.status(200).json({
+        reassigned: true,
+        bookingId,
+        therapistName,
+        previousTherapist,
+        calendarUpdated,
       });
     }
 

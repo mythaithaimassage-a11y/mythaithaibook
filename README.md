@@ -560,6 +560,31 @@ issuing. If required details such as patient email or appointment total are
 missing, the appointment panel shows a short "Save details" form to complete
 only those missing fields.
 
+### Reassigning an appointment to a different therapist
+
+The appointment panel in the owner **Booking Calendar** includes a "Change
+therapist…" picker (`POST /api/booking?view=reassign-therapist`, owner-only).
+Selecting a therapist and pressing **Assign** validates the move before
+anything is written:
+
+- The booking must exist and must not be cancelled, and the chosen therapist
+  must differ from the one already assigned.
+- The therapist must not have a time-off block overlapping the appointment
+  window, and must not have another calendar appointment overlapping it. The
+  booking's *own* calendar event is excluded from this check, so reassigning
+  never conflicts with itself.
+- `Any Available` is always allowed, since it is a placeholder rather than a
+  person. Couple services store two comma-separated names and each real name is
+  checked independently.
+
+On success the linked Google Calendar event description is patched so its
+`Therapist:` line matches — the customer-facing availability check reads
+therapists from calendar descriptions, so this keeps future availability
+lookups correct. Only after the calendar update succeeds is column G
+(`Therapist`) rewritten, and column Z (`StatusNotes`) gains an audit line
+recording the timestamp, the previous therapist, and the new one. No email is
+sent for a reassignment.
+
 For new bookings to be written to the primary calendar, share that calendar
 with the service-account email as an Editor. For the embedded native calendar
 view to display appointments, share the calendar with the admin users or

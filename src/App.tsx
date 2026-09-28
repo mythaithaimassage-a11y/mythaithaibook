@@ -3537,6 +3537,8 @@ function AdminPortal({
   const [linkEventForm, setLinkEventForm] = useState(null);
   const [receiptError, setReceiptError] = useState('');
   const [receiptNotice, setReceiptNotice] = useState('');
+  const [therapistReassignTo, setTherapistReassignTo] = useState('');
+  const [isReassigningTherapist, setIsReassigningTherapist] = useState(false);
   const [appointmentNotes, setAppointmentNotes] = useState([]);
   const [isLoadingAppointmentNotes, setIsLoadingAppointmentNotes] = useState(false);
   const [appointmentNotesError, setAppointmentNotesError] = useState('');
@@ -3700,6 +3702,11 @@ function AdminPortal({
   useEffect(() => {
     if (activeTab === 'business-profile') loadBusinessProfile();
   }, [activeTab]);
+
+  // Clear any half-made therapist choice when a different appointment is opened.
+  useEffect(() => {
+    setTherapistReassignTo('');
+  }, [selectedCalendarEvent?.booking?.id]);
 
   const loadGoogleAdsReport = async (startDate = googleAdsStartDate, endDate = googleAdsEndDate) => {
     setIsLoadingGoogleAds(true);
@@ -4539,6 +4546,33 @@ function AdminPortal({
       setReceiptError(error.message || 'Unable to save these booking details');
     } finally {
       setIsLinkingEvent(false);
+    }
+  };
+
+  const reassignTherapist = async () => {
+    const booking = selectedCalendarEvent?.booking;
+    if (!booking || !therapistReassignTo) return;
+    setIsReassigningTherapist(true);
+    setReceiptError('');
+    setReceiptNotice('');
+    try {
+      const response = await fetch('/api/booking?view=reassign-therapist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bookingId: booking.id, therapistName: therapistReassignTo }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+      setSelectedCalendarEvent((current) => current
+        ? { ...current, therapistName: data.therapistName, booking: { ...current.booking, therapistName: data.therapistName } }
+        : current);
+      setBookings((current) => current.map((item) => item.id === booking.id ? { ...item, therapistName: data.therapistName } : item));
+      setTherapistReassignTo('');
+      setReceiptNotice(`Reassigned from ${data.previousTherapist || 'Unassigned'} to ${data.therapistName}.`);
+    } catch (error) {
+      setReceiptError(error.message || 'Unable to change the therapist for this appointment.');
+    } finally {
+      setIsReassigningTherapist(false);
     }
   };
 
@@ -6933,10 +6967,53 @@ function AdminPortal({
                         ['Booking reference', booking.id],
                         ['Service', booking.serviceName],
                         ['Service date', booking.date],
-                        ['Therapist', booking.therapistName || selectedCalendarEvent.therapistName],
                         ['Payment method', booking.paymentOption || 'Not recorded'],
                       ].map(([label, value]) => <div key={label} className="rounded-xl border border-slate-100 bg-slate-50 px-3.5 py-3"><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{label}</p><p className="mt-1 break-words text-sm font-semibold text-slate-800">{value || 'Not recorded'}</p></div>)}
                     </div>
+                    {(() => {
+                      const currentTherapist = booking.therapistName || selectedCalendarEvent.therapistName || '';
+                      const isCancelled = String(booking.status || '') === 'Cancelled';
+                      const options = therapists
+                        .filter((therapist) => therapist.active !== false)
+                        .map((therapist) => therapist.name)
+                        .filter((name) => name && name !== currentTherapist);
+                      return (
+                        <div className="rounded-xl border border-slate-200 px-3.5 py-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Therapist</p>
+                              <p className="mt-1 inline-flex items-center gap-1.5 break-words text-sm font-semibold text-slate-800"><UserRound className="h-3.5 w-3.5 shrink-0 text-slate-400" />{currentTherapist || 'Unassigned'}</p>
+                            </div>
+                            {!isCancelled && !issuedReceipt && (
+                              <div className="flex flex-wrap items-center gap-2">
+                                <select
+                                  value={therapistReassignTo}
+                                  onChange={(event) => setTherapistReassignTo(event.target.value)}
+                                  aria-label="Reassign this appointment to another therapist"
+                                  className="rounded-lg border border-slate-300 px-2.5 py-2 text-xs text-slate-800"
+                                >
+                                  <option value="">Change therapist…</option>
+                                  {currentTherapist !== 'Any Available' && <option value="Any Available">Any Available</option>}
+                                  {options.map((name) => <option key={name} value={name}>{name}</option>)}
+                                </select>
+                                <button
+                                  type="button"
+                                  onClick={reassignTherapist}
+                                  disabled={!therapistReassignTo || isReassigningTherapist}
+                                  className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-900 px-3 py-2 text-xs font-bold text-white transition hover:bg-emerald-800 disabled:opacity-50"
+                                >
+                                  {isReassigningTherapist ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                                  {isReassigningTherapist ? 'Saving…' : 'Assign'}
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                          {!isCancelled && !issuedReceipt && (
+                            <p className="mt-2 text-[11px] leading-4 text-slate-500">Only therapists who are free at this date and time can be assigned. The calendar event is updated to match.</p>
+                          )}
+                        </div>
+                      );
+                    })()}
                     <div className="rounded-xl border border-slate-200 px-4 py-3">
                       <div className="flex justify-between text-sm text-slate-500"><span>Amount paid</span><span>${Number(booking.paidAmount || 0).toFixed(2)}</span></div>
                       <div className="mt-2 flex justify-between text-sm font-bold text-slate-900"><span>Appointment total</span><span>${Number(booking.total || 0).toFixed(2)}</span></div>
