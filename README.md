@@ -51,6 +51,10 @@ Configure these Vercel environment variables before using it:
 - `BIGQUERY_SQUARE_PAYMENTS_TABLE` (optional; defaults to `square_payments`)
 - `BIGQUERY_CAMPAIGN_LOG_TABLE` (optional; defaults to `campaign_log`)
 - `BIGQUERY_CAMPAIGN_RECIPIENTS_TABLE` (optional; defaults to `campaign_recipients`)
+- `BIGQUERY_LOYALTY_SETTINGS_TABLE` (optional; defaults to `loyalty_settings`)
+- `BIGQUERY_LOYALTY_MEMBERS_TABLE` (optional; defaults to `loyalty_members`)
+- `BIGQUERY_LOYALTY_LEDGER_TABLE` (optional; defaults to `loyalty_ledger`)
+- `BIGQUERY_LOYALTY_COMPANIES_TABLE` (optional; defaults to `loyalty_companies`)
 - `BIGQUERY_LOCATION` (optional; defaults to `US`)
 - `GOOGLE_PLACES_API_KEY` / `GOOGLE_PLACE_ID` (optional; enables the Google
   Reviews section — requires the **Places API (New)** enabled on the project,
@@ -66,10 +70,11 @@ the primary calendar with `GOOGLE_PRIMARY_CALENDAR_ID`.
 Booking records (customer name, service, therapist, date/time, payment,
 receipt, cancellation status, etc.), Square payment link/checkout records, and
 targeted email campaign logs are stored in typed **BigQuery** tables rather
-than Google Sheets tabs. Every other data set used by this app (branches,
-services, therapists, loyalty program, patient history, marketing contacts,
-availability blocks) remains in Google Sheets and is unaffected by this
-section.
+than Google Sheets tabs. The **loyalty program** (settings, members, ledger,
+and companies) is stored in BigQuery as well — see "Loyalty program tables in
+BigQuery" below. Every other data set used by this app (branches, services,
+therapists, patient history, marketing contacts, availability blocks) remains
+in Google Sheets and is unaffected by this section.
 
 Enable the **BigQuery API** in the same Google Cloud project used for Sheets
 and Calendar, and grant the existing service account
@@ -83,7 +88,8 @@ the Google Cloud project ID, e.g. `my-thai-thai-booking-system`. The dataset
 (`BIGQUERY_DATASET`, default `booking_system`) and tables
 (`BIGQUERY_BOOKINGS_TABLE`, default `bookings`; `BIGQUERY_SQUARE_PAYMENTS_TABLE`,
 default `square_payments`; `BIGQUERY_CAMPAIGN_LOG_TABLE`/`BIGQUERY_CAMPAIGN_RECIPIENTS_TABLE`,
-default `campaign_log`/`campaign_recipients`) are **created automatically** on
+default `campaign_log`/`campaign_recipients`; and the four
+`BIGQUERY_LOYALTY_*_TABLE` loyalty tables) are **created automatically** on
 first use — no manual DDL is required. If your project is on **BigQuery
 Sandbox** (no billing account linked), link a billing account first: Sandbox
 datasets/tables auto-expire after 60 days of inactivity and have tighter
@@ -97,6 +103,28 @@ to the BigQuery client library's temporal wrapper objects. Square payment
 records are looked up and updated by `order_id` (the identifier Square's
 webhook payload provides) and are separately queried by `booking_id` for the
 refund lookup used during self-service cancellation.
+
+## Loyalty program tables in BigQuery
+
+The loyalty settings, members, ledger, and company registrations live in the
+same BigQuery dataset, in `loyalty_settings`, `loyalty_members`,
+`loyalty_ledger`, and `loyalty_companies` (override with the
+`BIGQUERY_LOYALTY_*_TABLE` variables). The column layout mirrors the previous
+`LoyaltySettings`/`LoyaltyMembers`/`LoyaltyLedger`/`LoyaltyCompanies`
+spreadsheet tabs one-for-one, with snake_case column names and an extra
+`row_index` column that preserves the original row ordering. As with bookings,
+every column is a `STRING` so the existing parsing and formatting code keeps
+working unchanged.
+
+**Existing spreadsheet data is migrated automatically.** The first time each
+loyalty table is created, the API copies whatever the matching tab in
+`GOOGLE_SPREADSHEET_ID` already contains into BigQuery. A missing tab or an
+empty spreadsheet is not an error — the program simply starts out empty. The
+migration is also available on demand: signed-in owners can `POST
+/api/booking?view=loyalty-migrate`, which imports any loyalty table that is
+still empty and returns the number of rows copied per table. The original
+spreadsheet tabs are left untouched as a backup; the app no longer reads or
+writes them.
 
 This migration only affects **new** bookings/payments going forward — no
 historical data was migrated. Older records remain archived in the original
@@ -286,10 +314,10 @@ receive the configured service discount. Customers can separately opt into
 Standard Rewards while booking; this consent is independent of marketing email
 consent.
 
-Members and the transaction ledger are stored in the owner's
-`GOOGLE_SPREADSHEET_ID` in `LoyaltySettings`, `LoyaltyMembers`, and
-`LoyaltyLedger` tabs, which the API creates and upgrades as needed. The service
-account needs Editor access to this spreadsheet. The owner can search recent
+Settings, members, and the transaction ledger are stored in the BigQuery
+`loyalty_settings`, `loyalty_members`, and `loyalty_ledger` tables, which the
+API creates automatically and seeds from the old spreadsheet tabs on first use
+(see "Loyalty program tables in BigQuery" above). The owner can search recent
 booking customers by name, email, or phone when enrolling them. Platinum
 employees are associated with a company name and optional company ID; the
 enrolled work email is their booking identifier. At booking, an employee can
@@ -361,8 +389,8 @@ automatically the first time a Platinum employee is enrolled or claims
 Platinum with a company contact email on file; the owner can also copy/
 re-share it any time from the **Members & balances** table with the **Copy
 portal link** button. Portal access, the token, and each company's
-registration details are stored in a `LoyaltyCompanies` tab (auto-created
-alongside the other loyalty tabs). Whenever an employee's completed visit
+registration details are stored in the BigQuery `loyalty_companies` table
+(auto-created alongside the other loyalty tables). Whenever an employee's completed visit
 deducts prepaid hours from the shared balance, the registered company contact
 is automatically emailed who used their benefit, the service, hours used, and
 the company's remaining shared balance, in addition to the employee's own
@@ -380,12 +408,31 @@ account must have Editor access to that spreadsheet.
 
 **Sales & reports** summarizes sales, collected payments, outstanding balances,
 appointments, tax estimates, and top services for a selectable date range.
-**Email marketing** includes a private, rule-based audience assistant, campaign
-previews, browser-local drafts, and Gmail campaign delivery to a maximum of 50
-active, opted-in contacts per send. The Vercel function allows up to 60 seconds
-for a campaign batch. The assistant matches historical booking
-dates, branches, and services; audience matching itself does not use an AI
-service and historical bookings do not prove attendance. An optional Gemini 3.8
+**Email marketing** includes an audience assistant, campaign previews,
+browser-local drafts, and Gmail campaign delivery to a maximum of 50 active,
+opted-in contacts per send. The Vercel function allows up to 60 seconds for a
+campaign batch. The assistant matches historical booking dates, branches, and
+services; historical bookings do not prove attendance.
+
+The audience can be built two ways. **Describe with Gemini** turns a free-text
+description ("gold members who come every Wednesday at Oakville Downtown") into
+structured filters; only the description itself and the list of branch, service,
+and membership names is sent to Gemini — never customer names, email addresses,
+patient data, or booking rows. When `GEMINI_API_KEY` is not configured, or when
+the Gemini request fails, the original offline keyword matcher is used instead.
+**Manual filters** builds the same audience from membership tier, branch,
+service, weekday (optionally regulars only), recent-visit window, and a
+most-recent-customer cap, entirely on your own data with no AI involved. The
+choices offered come from `GET /api/booking?view=campaign-audience-options`,
+which returns the branches, services, and membership tiers that actually occur
+in your records.
+
+The audience is always rebuilt from the live database at preview time **and**
+again at send time. Any marketing contact whose customer and patient records
+have all been deleted — through Delete booking, Delete patient history, or
+Loyalty remove member — is removed from the marketing list and therefore cannot
+receive a campaign. Those deletion endpoints run the same sync immediately and
+report the removed addresses in their responses. An optional Gemini 3.8
 Flash writing assistant uses Google's Interactions API to generate an editable
 subject, preview, and message from the owner's campaign goal and aggregate
 audience description. It never receives customer names, email addresses, or

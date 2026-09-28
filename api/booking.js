@@ -617,6 +617,293 @@ async function bqFetchRecentCampaigns(bigquery, limit) {
 }
 // --- end BigQuery-backed marketing campaign log -----------------------------
 
+// --- BigQuery-backed loyalty program tables ---------------------------------
+// The loyalty settings, member directory, points/hours ledger and company
+// portal registry now live in BigQuery instead of the spreadsheet. The column
+// layout mirrors the historical LOYALTY_SHEETS headers one-for-one (plus an
+// internal row_index bookkeeping column) so every existing positional `row[N]`
+// access keeps working unchanged.
+//
+// Values are stored as STRING for the same reason the bookings table does:
+// the rest of this file already formats and parses these fields itself
+// (ISO timestamps, `Number(row[4]) || 0`, "Y" flags, …).
+//
+// `row_index` keeps the spreadsheet row numbering contract alive: row 1 is the
+// header and data rows are numbered from 2 upwards with no gaps, so callers
+// that derive a row number as `arrayIndex + 1` / `arrayIndex + 2` still address
+// the right record. Deletes renumber the survivors to preserve that invariant.
+const LOYALTY_TABLE_NAMES = {
+  LoyaltySettings: process.env.BIGQUERY_LOYALTY_SETTINGS_TABLE || 'loyalty_settings',
+  LoyaltyMembers: process.env.BIGQUERY_LOYALTY_MEMBERS_TABLE || 'loyalty_members',
+  LoyaltyLedger: process.env.BIGQUERY_LOYALTY_LEDGER_TABLE || 'loyalty_ledger',
+  LoyaltyCompanies: process.env.BIGQUERY_LOYALTY_COMPANIES_TABLE || 'loyalty_companies',
+};
+const LOYALTY_TABLE_COLUMNS = {
+  LoyaltySettings: ['settings_json', 'updated_at'],
+  LoyaltyMembers: [
+    'email', 'name', 'phone', 'enrolled_at', 'updated_at', 'membership_type',
+    'organization', 'paid_through', 'company_id', 'company_contact_email', 'is_primary_contact',
+  ],
+  LoyaltyLedger: [
+    'transaction_id', 'email', 'booking_id', 'type', 'points', 'reward_value',
+    'description', 'created_at', 'hours', 'receipt_no',
+  ],
+  LoyaltyCompanies: ['organization', 'company_id', 'contact_email', 'access_token', 'created_at', 'updated_at'],
+};
+const LOYALTY_ROW_INDEX_COLUMN = 'row_index';
+const LOYALTY_FIRST_DATA_ROW = 2;
+
+function loyaltyTableRef(title) {
+  const tableName = LOYALTY_TABLE_NAMES[title];
+  if (!tableName) throw new Error(`Unknown loyalty table: ${title}`);
+  return `\`${BIGQUERY_PROJECT_ID}.${BIGQUERY_DATASET_ID}.${tableName}\``;
+}
+
+// Translates an A1 range such as "LoyaltyMembers!A:J", "LoyaltySettings!A1:B2",
+// "LoyaltyMembers!B7:J7" or "LoyaltyMembers!K4" into table/row/column bounds.
+function parseLoyaltyRange(range) {
+  const match = /^([A-Za-z]+)!([A-Z]+)(\d+)?(?::([A-Z]+)(\d+)?)?$/.exec(String(range || '').trim());
+  if (!match) throw new Error(`Unsupported loyalty range: ${range}`);
+  const [, title, startColumnLetters, startRowText, endColumnLetters, endRowText] = match;
+  if (!LOYALTY_TABLE_COLUMNS[title]) throw new Error(`Unknown loyalty table: ${title}`);
+  const columnIndex = (letters) => letters.split('').reduce((total, letter) => total * 26 + (letter.charCodeAt(0) - 64), 0) - 1;
+  const startColumn = columnIndex(startColumnLetters);
+  const endColumn = endColumnLetters ? columnIndex(endColumnLetters) : startColumn;
+  return {
+    title,
+    startColumn,
+    endColumn: Math.min(endColumn, LOYALTY_TABLE_COLUMNS[title].length - 1),
+    startRow: startRowText ? Number(startRowText) : null,
+    endRow: endRowText ? Number(endRowText) : (startRowText && !endColumnLetters ? Number(startRowText) : null),
+  };
+}
+
+let ensureLoyaltyTablesPromise = null;
+async function ensureLoyaltyTables(bigquery = getBigQueryClient()) {
+  if (!ensureLoyaltyTablesPromise) {
+    ensureLoyaltyTablesPromise = (async () => {
+      const dataset = bigquery.dataset(BIGQUERY_DATASET_ID);
+      const [datasetExists] = await dataset.exists();
+      if (!datasetExists) {
+        try {
+          await bigquery.createDataset(BIGQUERY_DATASET_ID, { location: process.env.BIGQUERY_LOCATION || 'US' });
+        } catch (error) {
+          const [existsNow] = await dataset.exists();
+          if (!existsNow) throw error;
+        }
+      }
+      const createdTitles = [];
+      for (const [title, columns] of Object.entries(LOYALTY_TABLE_COLUMNS)) {
+        const tableName = LOYALTY_TABLE_NAMES[title];
+        const table = dataset.table(tableName);
+        const [tableExists] = await table.exists();
+        if (tableExists) continue;
+        const schema = [
+          { name: LOYALTY_ROW_INDEX_COLUMN, type: 'INT64', mode: 'REQUIRED' },
+          ...columns.map((name) => ({ name, type: 'STRING', mode: 'NULLABLE' })),
+        ];
+        try {
+          await dataset.createTable(tableName, { schema });
+          createdTitles.push(title);
+        } catch (error) {
+          const [existsNow] = await table.exists();
+          if (!existsNow) throw error;
+        }
+      }
+      if (createdTitles.length) {
+        // One-time migration: copy whatever the spreadsheet already holds into the
+        // freshly created tables. Never fatal — a missing/empty spreadsheet simply
+        // means the program starts out empty in BigQuery.
+        try {
+          await importLoyaltySheetData(bigquery, createdTitles);
+        } catch (error) {
+          console.error('Loyalty spreadsheet migration skipped:', error.message || error);
+        }
+      }
+    })().catch((error) => {
+      ensureLoyaltyTablesPromise = null;
+      throw error;
+    });
+  }
+  return ensureLoyaltyTablesPromise;
+}
+
+function createSheetsClient() {
+  const auth = new google.auth.GoogleAuth({
+    credentials: {
+      client_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
+      private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+    },
+    scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+  });
+  return google.sheets({ version: 'v4', auth });
+}
+
+// Reads the legacy Loyalty* spreadsheet tabs and copies their rows into the
+// BigQuery tables. Only tables that are currently empty are filled, so running
+// this twice never duplicates data.
+async function importLoyaltySheetData(bigquery, titles = Object.keys(LOYALTY_TABLE_COLUMNS)) {
+  const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
+  if (!spreadsheetId) return {};
+  const sheetsClient = createSheetsClient();
+  const spreadsheet = await sheetsClient.spreadsheets.get({ spreadsheetId, fields: 'sheets.properties' });
+  const existingTitles = new Set((spreadsheet.data.sheets || []).map((sheet) => sheet.properties?.title));
+  const imported = {};
+  for (const title of titles) {
+    imported[title] = 0;
+    if (!existingTitles.has(title)) continue;
+    const columns = LOYALTY_TABLE_COLUMNS[title];
+    const [alreadyStored] = await bigquery.query({
+      query: `SELECT COUNT(*) AS total FROM ${loyaltyTableRef(title)}`,
+    });
+    if (Number(alreadyStored[0]?.total || 0) > 0) continue;
+    const endColumn = String.fromCharCode(64 + columns.length);
+    const result = await sheetsClient.spreadsheets.values.get({
+      spreadsheetId,
+      range: `${title}!A:${endColumn}`,
+    });
+    const dataRows = (result.data.values || []).slice(1)
+      .map((row) => columns.map((_, index) => (row[index] === null || row[index] === undefined ? '' : String(row[index]))))
+      .filter((row) => row.some((cell) => cell !== ''));
+    if (!dataRows.length) continue;
+    await bqLoyaltyInsertRows(bigquery, title, dataRows.map((row, index) => ({ rowNumber: LOYALTY_FIRST_DATA_ROW + index, values: row })));
+    imported[title] = dataRows.length;
+  }
+  return imported;
+}
+
+async function bqLoyaltyInsertRows(bigquery, title, entries) {
+  if (!entries.length) return;
+  const columns = LOYALTY_TABLE_COLUMNS[title];
+  const params = {};
+  const valuesSql = entries.map(({ rowNumber, values }, index) => {
+    params[`row_index_${index}`] = rowNumber;
+    columns.forEach((column, columnIndex) => {
+      const cell = values[columnIndex];
+      params[`${column}_${index}`] = cell === null || cell === undefined ? '' : String(cell);
+    });
+    return `(@row_index_${index}, ${columns.map((column) => `@${column}_${index}`).join(', ')})`;
+  }).join(', ');
+  await bigquery.query({
+    query: `INSERT INTO ${loyaltyTableRef(title)} (${LOYALTY_ROW_INDEX_COLUMN}, ${columns.join(', ')}) VALUES ${valuesSql}`,
+    params,
+  });
+}
+
+// Returns every stored data row as a full-width positional array, ordered by
+// the spreadsheet row number it occupies.
+async function bqLoyaltyFetchRows(bigquery, title) {
+  await ensureLoyaltyTables(bigquery);
+  const columns = LOYALTY_TABLE_COLUMNS[title];
+  const [records] = await bigquery.query({
+    query: `SELECT ${LOYALTY_ROW_INDEX_COLUMN}, ${columns.join(', ')} FROM ${loyaltyTableRef(title)} ORDER BY ${LOYALTY_ROW_INDEX_COLUMN} ASC`,
+  });
+  return records.map((record) => ({
+    rowNumber: Number(record[LOYALTY_ROW_INDEX_COLUMN]),
+    values: columns.map((column) => (record[column] === null || record[column] === undefined ? '' : String(record[column]))),
+  }));
+}
+
+// Drop-in replacement for `sheets.spreadsheets.values.get({ range })` on the
+// loyalty tabs: returns `{ data: { values } }` with the header row first, just
+// like the Sheets API did.
+async function bqLoyaltyValuesGet(range) {
+  const bigquery = getBigQueryClient();
+  const { title, startColumn, endColumn, startRow, endRow } = parseLoyaltyRange(range);
+  const stored = await bqLoyaltyFetchRows(bigquery, title);
+  const width = LOYALTY_TABLE_COLUMNS[title].length;
+  const lastRow = stored.length ? stored[stored.length - 1].rowNumber : 1;
+  const grid = [LOYALTY_SHEETS[title].slice()];
+  for (let rowNumber = LOYALTY_FIRST_DATA_ROW; rowNumber <= lastRow; rowNumber += 1) {
+    grid[rowNumber - 1] = stored.find((entry) => entry.rowNumber === rowNumber)?.values || new Array(width).fill('');
+  }
+  const firstRow = startRow || 1;
+  const lastRequestedRow = endRow || grid.length;
+  const values = grid.slice(firstRow - 1, lastRequestedRow)
+    .map((row) => (row || []).slice(startColumn, endColumn + 1));
+  // Sheets omits trailing empty rows; mirror that so existing emptiness checks behave.
+  while (values.length && values[values.length - 1].every((cell) => cell === '')) values.pop();
+  return { data: { values } };
+}
+
+// Drop-in replacement for `sheets.spreadsheets.values.update({ range, values })`.
+// Writes are addressed by spreadsheet row number and only touch the columns the
+// range covers; rows that do not exist yet are created (as Sheets would).
+async function bqLoyaltyValuesUpdate(range, values) {
+  const bigquery = getBigQueryClient();
+  const { title, startColumn, endColumn, startRow } = parseLoyaltyRange(range);
+  const columns = LOYALTY_TABLE_COLUMNS[title];
+  const stored = await bqLoyaltyFetchRows(bigquery, title);
+  const storedByRow = new Map(stored.map((entry) => [entry.rowNumber, entry.values]));
+  const inserts = [];
+  for (const [offset, rowValues] of (values || []).entries()) {
+    const rowNumber = (startRow || 1) + offset;
+    if (rowNumber < LOYALTY_FIRST_DATA_ROW) continue;
+    const current = storedByRow.get(rowNumber) || new Array(columns.length).fill('');
+    const next = current.slice();
+    for (let column = startColumn; column <= endColumn; column += 1) {
+      const cell = rowValues?.[column - startColumn];
+      next[column] = cell === null || cell === undefined ? '' : String(cell);
+    }
+    if (storedByRow.has(rowNumber)) {
+      const params = { where_row_index: rowNumber };
+      columns.forEach((column, index) => { params[`set_${column}`] = next[index]; });
+      await bigquery.query({
+        query: `UPDATE ${loyaltyTableRef(title)} SET ${columns.map((column) => `${column} = @set_${column}`).join(', ')} WHERE ${LOYALTY_ROW_INDEX_COLUMN} = @where_row_index`,
+        params,
+      });
+    } else {
+      inserts.push({ rowNumber, values: next });
+    }
+  }
+  if (inserts.length) await bqLoyaltyInsertRows(bigquery, title, inserts);
+}
+
+// Drop-in replacement for `sheets.spreadsheets.values.append({ range, values })`.
+async function bqLoyaltyValuesAppend(range, values) {
+  const bigquery = getBigQueryClient();
+  const { title, startColumn, endColumn } = parseLoyaltyRange(range);
+  const columns = LOYALTY_TABLE_COLUMNS[title];
+  const stored = await bqLoyaltyFetchRows(bigquery, title);
+  let nextRowNumber = stored.length
+    ? stored[stored.length - 1].rowNumber + 1
+    : LOYALTY_FIRST_DATA_ROW;
+  const entries = (values || []).map((rowValues) => {
+    const next = new Array(columns.length).fill('');
+    for (let column = startColumn; column <= endColumn; column += 1) {
+      const cell = rowValues?.[column - startColumn];
+      next[column] = cell === null || cell === undefined ? '' : String(cell);
+    }
+    return { rowNumber: nextRowNumber++, values: next };
+  });
+  await bqLoyaltyInsertRows(bigquery, title, entries);
+}
+
+// Removes rows by spreadsheet row number and closes the resulting gaps so the
+// "array position + 1 === row number" contract holds for later reads.
+async function bqLoyaltyDeleteRows(title, rowNumbers) {
+  const unique = [...new Set((rowNumbers || []).map((rowNumber) => Number(rowNumber)))]
+    .filter((rowNumber) => Number.isFinite(rowNumber) && rowNumber >= LOYALTY_FIRST_DATA_ROW);
+  if (!unique.length) return;
+  const bigquery = getBigQueryClient();
+  await ensureLoyaltyTables(bigquery);
+  await bigquery.query({
+    query: `DELETE FROM ${loyaltyTableRef(title)} WHERE ${LOYALTY_ROW_INDEX_COLUMN} IN UNNEST(@row_indexes)`,
+    params: { row_indexes: unique },
+  });
+  const stored = await bqLoyaltyFetchRows(bigquery, title);
+  const renumbered = stored
+    .map((entry, index) => ({ entry, nextRowNumber: LOYALTY_FIRST_DATA_ROW + index }))
+    .filter(({ entry, nextRowNumber }) => entry.rowNumber !== nextRowNumber);
+  for (const { entry, nextRowNumber } of renumbered) {
+    await bigquery.query({
+      query: `UPDATE ${loyaltyTableRef(title)} SET ${LOYALTY_ROW_INDEX_COLUMN} = @next WHERE ${LOYALTY_ROW_INDEX_COLUMN} = @current`,
+      params: { next: nextRowNumber, current: entry.rowNumber },
+    });
+  }
+}
+// --- end BigQuery-backed loyalty program tables -----------------------------
+
 function parseCookies(req) {
   return Object.fromEntries((req.headers.cookie || '').split(';').filter(Boolean).map((part) => {
     const index = part.indexOf('=');
@@ -1516,69 +1803,6 @@ async function saveTherapists(sheets, therapists) {
   return validated;
 }
 
-async function ensureLoyaltySheets(sheets) {
-  const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
-  if (!spreadsheetId) throw new Error('GOOGLE_SPREADSHEET_ID is not configured');
-  let spreadsheet = await sheets.spreadsheets.get({
-    spreadsheetId,
-    fields: 'sheets.properties',
-  });
-  let existingTitles = new Set((spreadsheet.data.sheets || []).map((sheet) => sheet.properties?.title));
-  const missing = Object.keys(LOYALTY_SHEETS).filter((title) => !existingTitles.has(title));
-  if (missing.length) {
-    try {
-      await sheets.spreadsheets.batchUpdate({
-        spreadsheetId,
-        requestBody: { requests: missing.map((title) => ({ addSheet: { properties: { title } } })) },
-      });
-    } catch (error) {
-      spreadsheet = await sheets.spreadsheets.get({
-        spreadsheetId,
-        fields: 'sheets.properties',
-      });
-      existingTitles = new Set((spreadsheet.data.sheets || []).map((sheet) => sheet.properties?.title));
-      if (missing.some((title) => !existingTitles.has(title))) throw error;
-    }
-  }
-
-  for (const [title, headers] of Object.entries(LOYALTY_SHEETS)) {
-    const endColumn = String.fromCharCode(64 + headers.length);
-    const result = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: `${title}!A1:${endColumn}1`,
-    });
-    const current = result.data.values?.[0] || [];
-    if (!current.length) {
-      await sheets.spreadsheets.values.update({
-        spreadsheetId,
-        range: `${title}!A1:${endColumn}1`,
-        valueInputOption: 'RAW',
-        requestBody: { values: [headers] },
-      });
-    } else if (
-      isCompatibleLoyaltyHeader(title, current, headers)
-    ) {
-      await sheets.spreadsheets.values.update({
-        spreadsheetId,
-        range: `${title}!A1:${endColumn}1`,
-        valueInputOption: 'RAW',
-        requestBody: { values: [headers] },
-      });
-    } else if (headers.some((header, index) => current[index] !== header)) {
-      throw new Error(`${title} sheet has an unexpected header format`);
-    }
-  }
-}
-
-function isCompatibleLoyaltyHeader(title, current, expected) {
-  if (!['LoyaltyMembers', 'LoyaltyLedger'].includes(title)) return false;
-  const minimumLength = title === 'LoyaltyMembers' ? 5 : 8;
-  if (current.length < minimumLength || current.length >= expected.length) return false;
-  return current.every((header, index) =>
-    String(header || '').trim() === expected[index],
-  );
-}
-
 async function deleteSheetRows(sheets, title, rowNumbers, spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID) {
   if (!rowNumbers.length) return;
   const spreadsheet = await sheets.spreadsheets.get({
@@ -1612,10 +1836,7 @@ function normalizeOrganizationKey(organization) {
 }
 
 async function getCompanyPortalRows(sheets) {
-  const result = await sheets.spreadsheets.values.get({
-    spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-    range: 'LoyaltyCompanies!A:F',
-  });
+  const result = await bqLoyaltyValuesGet('LoyaltyCompanies!A:F');
   return result.data.values || [];
 }
 
@@ -1626,7 +1847,7 @@ async function getCompanyPortalRows(sheets) {
 async function ensureCompanyPortalAccess(sheets, organization, companyId, contactEmail) {
   const orgKey = normalizeOrganizationKey(organization);
   if (!orgKey) throw new Error('A company name is required to set up the company portal.');
-  await ensureLoyaltySheets(sheets);
+  await ensureLoyaltyTables();
   const rows = await getCompanyPortalRows(sheets);
   const rowIndex = rows.findIndex((row, index) => index > 0 && normalizeOrganizationKey(row[0]) === orgKey);
   const now = new Date().toISOString();
@@ -1637,22 +1858,12 @@ async function ensureCompanyPortalAccess(sheets, organization, companyId, contac
     const nextCompanyId = companyId || existingCompanyId;
     const nextContactEmail = contactEmail || existingContactEmail;
     if (nextCompanyId !== existingCompanyId || nextContactEmail !== existingContactEmail) {
-      await sheets.spreadsheets.values.update({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: `LoyaltyCompanies!B${rowIndex + 1}:F${rowIndex + 1}`,
-        valueInputOption: 'RAW',
-        requestBody: { values: [[nextCompanyId, nextContactEmail, row[3] || '', row[4] || now, now]] },
-      });
+      await bqLoyaltyValuesUpdate(`LoyaltyCompanies!B${rowIndex + 1}:F${rowIndex + 1}`, [[nextCompanyId, nextContactEmail, row[3] || '', row[4] || now, now]]);
     }
     return { token: row[3] || '', isNew: false, contactEmail: nextContactEmail };
   }
   const token = crypto.randomBytes(24).toString('hex');
-  await sheets.spreadsheets.values.append({
-    spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-    range: 'LoyaltyCompanies!A:F',
-    valueInputOption: 'RAW',
-    requestBody: { values: [[organization.trim(), companyId || '', contactEmail || '', token, now, now]] },
-  });
+  await bqLoyaltyValuesAppend('LoyaltyCompanies!A:F', [[organization.trim(), companyId || '', contactEmail || '', token, now, now]]);
   return { token, isNew: true, contactEmail: contactEmail || '' };
 }
 
@@ -1672,12 +1883,7 @@ async function demoteOtherPrimaryContacts(sheets, memberRows, organization, keep
       isPrimaryContactFlag(row[10]),
     );
   for (const { rowNumber } of toDemote) {
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-      range: `LoyaltyMembers!K${rowNumber}`,
-      valueInputOption: 'RAW',
-      requestBody: { values: [['']] },
-    });
+    await bqLoyaltyValuesUpdate(`LoyaltyMembers!K${rowNumber}`, [['']]);
   }
 }
 
@@ -1771,12 +1977,9 @@ function validateLoyaltySettings(input) {
   return settings;
 }
 
-async function getLoyaltySettings(sheets) {
-  await ensureLoyaltySheets(sheets);
-  const result = await sheets.spreadsheets.values.get({
-    spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-    range: 'LoyaltySettings!A1:B2',
-  });
+async function getLoyaltySettings() {
+  await ensureLoyaltyTables();
+  const result = await bqLoyaltyValuesGet('LoyaltySettings!A1:B2');
   const settingsValue = result.data.values?.[1]?.[0];
   if (!settingsValue) return DEFAULT_LOYALTY_SETTINGS;
   let settings;
@@ -1788,20 +1991,8 @@ async function getLoyaltySettings(sheets) {
   return validateLoyaltySettings(settings);
 }
 
-async function getPublicLoyaltySettings(sheets) {
-  const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
-  if (!spreadsheetId) throw new Error('GOOGLE_SPREADSHEET_ID is not configured');
-  const spreadsheet = await sheets.spreadsheets.get({
-    spreadsheetId,
-    fields: 'sheets.properties',
-  });
-  const hasSettings = (spreadsheet.data.sheets || [])
-    .some((sheet) => sheet.properties?.title === 'LoyaltySettings');
-  if (!hasSettings) return DEFAULT_LOYALTY_SETTINGS;
-  const result = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: 'LoyaltySettings!A1:B2',
-  });
+async function getPublicLoyaltySettings() {
+  const result = await bqLoyaltyValuesGet('LoyaltySettings!A1:B2');
   const settingsValue = result.data.values?.[1]?.[0];
   if (!settingsValue) return DEFAULT_LOYALTY_SETTINGS;
   let settings;
@@ -1848,10 +2039,7 @@ async function enrollLoyaltyMember(sheets, payload) {
   if (platinumEnrollment && !organization) {
     throw new Error('Enter the company name to request Platinum enrollment.');
   }
-  const result = await sheets.spreadsheets.values.get({
-    spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-    range: 'LoyaltyMembers!A:J',
-  });
+  const result = await bqLoyaltyValuesGet('LoyaltyMembers!A:J');
   const rows = result.data.values || [];
   if (platinumEnrollment && !companyContactEmail) {
     companyContactEmail = normalizeLoyaltyEmail(rows.slice(1).find((row) =>
@@ -1876,11 +2064,7 @@ async function enrollLoyaltyMember(sheets, payload) {
         existingOrganization.toLowerCase() !== organization.toLowerCase()) {
       throw new Error('This email is already linked to a different company. Contact the clinic to update it.');
     }
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-      range: `LoyaltyMembers!B${rowNumber}:J${rowNumber}`,
-      valueInputOption: 'RAW',
-      requestBody: { values: [[
+    await bqLoyaltyValuesUpdate(`LoyaltyMembers!B${rowNumber}:J${rowNumber}`, [[
         memberName || row[1] || '',
         phone || row[2] || '',
         row[3] || now,
@@ -1890,14 +2074,10 @@ async function enrollLoyaltyMember(sheets, payload) {
         row[7] || '',
         platinumEnrollment ? companyId || row[8] || '' : row[8] || '',
         platinumEnrollment ? companyContactEmail || row[9] || '' : row[9] || '',
-      ]] },
-    });
+      ]]);
     const resultOrganization = platinumEnrollment ? organization : row[6] || '';
     const ledgerRows = platinumEnrollment
-      ? (await sheets.spreadsheets.values.get({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'LoyaltyLedger!A:J',
-      })).data.values?.slice(1) || []
+      ? (await bqLoyaltyValuesGet('LoyaltyLedger!A:J')).data.values?.slice(1) || []
       : [];
     return {
       created: false,
@@ -1906,12 +2086,7 @@ async function enrollLoyaltyMember(sheets, payload) {
       hoursBalance: platinumEnrollment ? loyaltyPlatinumHoursBalance(rows.slice(1), ledgerRows, resultOrganization, email) : 0,
     };
   }
-  await sheets.spreadsheets.values.append({
-    spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-    range: 'LoyaltyMembers!A:J',
-    valueInputOption: 'RAW',
-    requestBody: { values: [[email, memberName, phone, now, now, platinumEnrollment ? 'platinum' : 'regular', platinumEnrollment ? organization : '', '', platinumEnrollment ? companyId : '', platinumEnrollment ? companyContactEmail : '']] },
-  });
+  await bqLoyaltyValuesAppend('LoyaltyMembers!A:J', [[email, memberName, phone, now, now, platinumEnrollment ? 'platinum' : 'regular', platinumEnrollment ? organization : '', '', platinumEnrollment ? companyId : '', platinumEnrollment ? companyContactEmail : '']]);
   return {
     created: true,
     membershipType: platinumEnrollment ? 'platinum' : 'regular',
@@ -1994,14 +2169,8 @@ async function getMemberBenefit(sheets, email, settings) {
   const normalizedEmail = normalizeLoyaltyEmail(email);
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) return null;
   const [membersResult, ledgerResult] = await Promise.all([
-    sheets.spreadsheets.values.get({
-      spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-      range: 'LoyaltyMembers!A:J',
-    }),
-    sheets.spreadsheets.values.get({
-      spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-      range: 'LoyaltyLedger!A:J',
-    }),
+    bqLoyaltyValuesGet('LoyaltyMembers!A:J'),
+    bqLoyaltyValuesGet('LoyaltyLedger!A:J'),
   ]);
   const member = (membersResult.data.values || []).slice(1)
     .find((row) => normalizeLoyaltyEmail(row[0]) === normalizedEmail);
@@ -2133,6 +2302,68 @@ const WEEKDAYS = [
   ['sunday', 0], ['monday', 1], ['tuesday', 2], ['wednesday', 3],
   ['thursday', 4], ['friday', 5], ['saturday', 6],
 ];
+const AUDIENCE_MEMBERSHIP_TYPES = ['regular', 'silver', 'gold', 'platinum'];
+const AUDIENCE_HELP_MESSAGE = 'I can find opted-in customers by membership, weekday, recent visit, branch, service, or most recent customer count. Try “Gold members” or “customers who visit every Wednesday at Oakville Downtown”.';
+
+// The branch and service names that actually occur in booking history; used to
+// validate both assistant-parsed and manually chosen filters.
+function audienceFilterOptions(bookingRows) {
+  return {
+    branches: [...new Set(bookingRows.map((row) => String(row[4] || '').trim()).filter(Boolean))].sort(),
+    services: [...new Set(bookingRows.map((row) => String(row[5] || '').trim()).filter(Boolean))].sort(),
+    membershipTypes: AUDIENCE_MEMBERSHIP_TYPES,
+    weekdays: WEEKDAYS.map(([name]) => name),
+  };
+}
+
+// Shared validation + human-readable summary for every audience source
+// (keyword parsing, Gemini matching and manual filters) so they all produce
+// exactly the same criteria shape.
+function finalizeAudienceCriteria(input) {
+  const weekdayEntry = input.weekday === null || input.weekday === undefined
+    ? null
+    : WEEKDAYS.find(([, index]) => index === input.weekday) || null;
+  const days = input.days || null;
+  if (days !== null && (!Number.isFinite(days) || days < 1 || days > 365)) {
+    throw new Error('Choose a recent-visit window between 1 and 365 days.');
+  }
+  const limit = input.limit || null;
+  if (limit !== null && (!Number.isFinite(limit) || limit < 1 || limit > 50)) {
+    throw new Error('Choose between 1 and 50 most recent customers per campaign.');
+  }
+  const membershipType = input.membershipType === 'points' ? 'regular' : (input.membershipType || '');
+  if (membershipType && !AUDIENCE_MEMBERSHIP_TYPES.includes(membershipType)) {
+    throw new Error(`Choose one of these membership types: ${AUDIENCE_MEMBERSHIP_TYPES.join(', ')}.`);
+  }
+  const branch = input.branch || '';
+  const service = input.service || '';
+  const allOptedIn = Boolean(input.allOptedIn);
+  if (!weekdayEntry && !days && !branch && !service && !limit && !allOptedIn && !membershipType) {
+    throw new Error(input.emptyMessage || AUDIENCE_HELP_MESSAGE);
+  }
+  const recurring = Boolean(weekdayEntry && input.recurring);
+  const descriptions = [];
+  if (weekdayEntry) descriptions.push(`${recurring ? 'at least two past bookings on' : 'a past booking on'} ${weekdayEntry[0].charAt(0).toUpperCase()}${weekdayEntry[0].slice(1)}s`);
+  if (days) descriptions.push(`a booking in the last ${days} days`);
+  if (branch) descriptions.push(`the ${branch} branch`);
+  if (service) descriptions.push(`${service} appointments`);
+  if (membershipType) descriptions.push(`${membershipType} members`);
+  if (allOptedIn && descriptions.length === 0) descriptions.push('all active opted-in subscribers');
+  if (limit) descriptions.push(`the ${limit} most recently active customers`);
+  return {
+    query: input.query || '',
+    source: input.source || 'keyword',
+    weekday: weekdayEntry?.[1] ?? null,
+    recurring,
+    days,
+    branch,
+    service,
+    membershipType,
+    limit,
+    allOptedIn,
+    description: `Opted-in customers with ${descriptions.join(' and ')}.`,
+  };
+}
 
 function parseAudienceQuery(query, bookingRows) {
   const text = String(query || '').trim();
@@ -2147,16 +2378,12 @@ function parseAudienceQuery(query, bookingRows) {
   const days = rangeMatch
     ? Number(rangeMatch[1]) * ({ day: 1, week: 7, month: 30 }[rangeMatch[2]])
     : recent ? 30 : null;
-  if (days !== null && (days < 1 || days > 365)) {
-    throw new Error('Choose a recent-visit window between 1 and 365 days.');
-  }
-  const branches = [...new Set(bookingRows.map((row) => String(row[4] || '').trim()).filter(Boolean))];
+  const { branches, services } = audienceFilterOptions(bookingRows);
   const matchingBranches = branches.filter((branch) => normalized.includes(branch.toLowerCase()));
   if (/\b(branch|location)\b/.test(normalized) && matchingBranches.length > 1) {
     throw new Error('Please name one branch so I can build a precise audience.');
   }
   const branch = matchingBranches.length === 1 ? matchingBranches[0] : '';
-  const services = [...new Set(bookingRows.map((row) => String(row[5] || '').trim()).filter(Boolean))];
   const matchingServices = services.filter((service) => normalized.includes(service.toLowerCase()));
   if (matchingServices.length > 1) {
     throw new Error('Please name one service so I can build a precise audience.');
@@ -2164,35 +2391,163 @@ function parseAudienceQuery(query, bookingRows) {
   const service = matchingServices[0] || '';
   const countMatch = normalized.match(/\b(?:last|latest|most recent)\s+(\d{1,2})\s+(?:customers|clients|patients)\b/);
   const limit = countMatch ? Number(countMatch[1]) : null;
-  if (limit !== null && (limit < 1 || limit > 50)) {
-    throw new Error('Choose between 1 and 50 most recent customers per campaign.');
-  }
   const allOptedIn = /\b(all|everyone|everybody)\b/.test(normalized) &&
     /\b(subscribers|opted[ -]?in|customers|clients|patients|contacts)\b/.test(normalized);
-  const membershipType = /\b(gold|silver|regular|points)\s+(?:membership\s+)?(?:members?|customers?)\b/.exec(normalized)?.[1] || '';
-  if (!weekday && !recent && !branch && !service && !limit && !allOptedIn && !membershipType) {
-    throw new Error('I can find opted-in customers by membership, weekday, recent visit, branch, service, or most recent customer count. Try “Gold members” or “customers who visit every Wednesday at Oakville Downtown”.');
-  }
-  const descriptions = [];
-  if (weekday) descriptions.push(`${recurring ? 'at least two past bookings on' : 'a past booking on'} ${weekday[0].charAt(0).toUpperCase()}${weekday[0].slice(1)}s`);
-  if (days) descriptions.push(`a booking in the last ${days} days`);
-  if (branch) descriptions.push(`the ${branch} branch`);
-  if (service) descriptions.push(`${service} appointments`);
-  if (membershipType) descriptions.push(`${membershipType === 'points' ? 'regular points' : membershipType} members`);
-  if (allOptedIn && descriptions.length === 0) descriptions.push('all active opted-in subscribers');
-  if (limit) descriptions.push(`the ${limit} most recently active customers`);
-  return {
+  const membershipType = /\b(gold|silver|platinum|regular|points)\s+(?:membership\s+)?(?:members?|customers?)\b/.exec(normalized)?.[1] || '';
+  return finalizeAudienceCriteria({
     query: text,
+    source: 'keyword',
     weekday: weekday?.[1] ?? null,
     recurring,
     days,
     branch,
     service,
-    membershipType: membershipType === 'points' ? 'regular' : membershipType,
+    membershipType,
     limit,
     allOptedIn,
-    description: `Opted-in customers with ${descriptions.join(' and ')}.`,
-  };
+  });
+}
+
+function matchAudienceOption(value, options) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  return options.find((option) => option.toLowerCase() === text.toLowerCase()) || '';
+}
+
+// Builds criteria from filters the owner picked by hand in the dashboard, with
+// no AI involved at all.
+function buildManualAudienceCriteria(filters, bookingRows) {
+  const input = filters || {};
+  const { branches, services } = audienceFilterOptions(bookingRows);
+  const weekdayName = String(input.weekday || '').trim().toLowerCase();
+  const weekdayEntry = weekdayName ? WEEKDAYS.find(([name]) => name === weekdayName) : null;
+  if (weekdayName && !weekdayEntry) throw new Error('Choose a valid weekday.');
+  const branchInput = String(input.branch || '').trim();
+  const branch = matchAudienceOption(branchInput, branches);
+  if (branchInput && !branch) throw new Error(`No booking history exists for the branch “${branchInput}”.`);
+  const serviceInput = String(input.service || '').trim();
+  const service = matchAudienceOption(serviceInput, services);
+  if (serviceInput && !service) throw new Error(`No booking history exists for the service “${serviceInput}”.`);
+  const days = input.days === '' || input.days === null || input.days === undefined ? null : Number(input.days);
+  const limit = input.limit === '' || input.limit === null || input.limit === undefined ? null : Number(input.limit);
+  const membershipType = String(input.membershipType || '').trim().toLowerCase();
+  const summaryParts = [
+    weekdayEntry ? `${input.recurring ? 'every ' : ''}${weekdayEntry[0]}` : '',
+    days ? `last ${days} days` : '',
+    branch,
+    service,
+    membershipType ? `${membershipType} members` : '',
+    limit ? `${limit} most recent` : '',
+    input.allOptedIn ? 'all opted-in subscribers' : '',
+  ].filter(Boolean);
+  return finalizeAudienceCriteria({
+    query: summaryParts.join(', '),
+    source: 'manual',
+    weekday: weekdayEntry?.[1] ?? null,
+    recurring: Boolean(input.recurring),
+    days,
+    branch,
+    service,
+    membershipType,
+    limit,
+    allOptedIn: Boolean(input.allOptedIn),
+    emptyMessage: 'Choose at least one filter, or select “All active opted-in subscribers”.',
+  });
+}
+
+// Asks Gemini to turn a free-text audience description into structured filter
+// values. Only the description plus the branch/service/membership vocabulary is
+// sent — never customer, patient or booking data.
+async function buildGeminiAudienceCriteria(query, bookingRows) {
+  const { branches, services } = audienceFilterOptions(bookingRows);
+  const response = await fetch('https://generativelanguage.googleapis.com/v1beta/interactions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-goog-api-key': GEMINI_API_KEY,
+    },
+    body: JSON.stringify({
+      model: 'gemini-3.8-flash',
+      store: false,
+      system_instruction: 'You convert a marketing audience description for a Thai massage clinic into structured filter values. Only use the branch and service names supplied in the vocabulary; leave a field empty when the description does not clearly ask for it. weekday must be empty or one of sunday, monday, tuesday, wednesday, thursday, friday, saturday. recurring is true only when the description implies repeat visits on that weekday. days is a recent-visit window between 1 and 365, or 0 when not requested. limit is the number of most recent customers between 1 and 50, or 0 when not requested. membershipType must be empty or one of regular, silver, gold, platinum. allOptedIn is true only when the description asks for everyone or all subscribers. Set unsupported to true when the description asks for something these filters cannot express. Never invent branch or service names.',
+      input: JSON.stringify({
+        audienceDescription: String(query || '').slice(0, 300),
+        vocabulary: { branches, services, membershipTypes: AUDIENCE_MEMBERSHIP_TYPES },
+      }),
+      response_format: {
+        type: 'text',
+        mime_type: 'application/json',
+        schema: {
+          type: 'object',
+          properties: {
+            weekday: { type: 'string' },
+            recurring: { type: 'boolean' },
+            days: { type: 'integer' },
+            branch: { type: 'string' },
+            service: { type: 'string' },
+            membershipType: { type: 'string' },
+            limit: { type: 'integer' },
+            allOptedIn: { type: 'boolean' },
+            unsupported: { type: 'boolean' },
+          },
+          required: ['weekday', 'recurring', 'days', 'branch', 'service', 'membershipType', 'limit', 'allOptedIn', 'unsupported'],
+        },
+      },
+    }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error?.message || `Gemini returned status ${response.status}`);
+  }
+  const text = data.steps
+    ?.filter((step) => step.type === 'model_output')
+    .flatMap((step) => step.content || [])
+    .filter((part) => part.type === 'text')
+    .map((part) => part.text || '')
+    .join('')
+    .trim();
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error('Gemini returned an audience result that could not be read.');
+  }
+  if (parsed.unsupported === true) {
+    const error = new Error(AUDIENCE_HELP_MESSAGE);
+    error.audienceFatal = true;
+    throw error;
+  }
+  const weekdayEntry = WEEKDAYS.find(([name]) => name === String(parsed.weekday || '').trim().toLowerCase());
+  return finalizeAudienceCriteria({
+    query: String(query || '').trim(),
+    source: 'gemini',
+    weekday: weekdayEntry?.[1] ?? null,
+    recurring: parsed.recurring === true,
+    days: Number(parsed.days) > 0 ? Math.trunc(Number(parsed.days)) : null,
+    branch: matchAudienceOption(parsed.branch, branches),
+    service: matchAudienceOption(parsed.service, services),
+    membershipType: String(parsed.membershipType || '').trim().toLowerCase(),
+    limit: Number(parsed.limit) > 0 ? Math.trunc(Number(parsed.limit)) : null,
+    allOptedIn: parsed.allOptedIn === true,
+  });
+}
+
+// Assistant mode: Gemini does the matching when it is configured, and the
+// original keyword parser stays available as a fallback (and as an explicit
+// "keyword" mode) so the assistant keeps working without an API key.
+async function buildAssistantAudienceCriteria(query, bookingRows, mode) {
+  const text = String(query || '').trim();
+  if (!text || text.length > 300) {
+    throw new Error('Describe the audience in 1-300 characters.');
+  }
+  if (mode === 'keyword' || !GEMINI_API_KEY) return parseAudienceQuery(text, bookingRows);
+  try {
+    return await buildGeminiAudienceCriteria(text, bookingRows);
+  } catch (error) {
+    if (error.audienceFatal) throw error;
+    console.error('Gemini audience matching failed; falling back to keyword matching:', error.message || error);
+    return parseAudienceQuery(text, bookingRows);
+  }
 }
 
 function parseBookingDate(value) {
@@ -2205,21 +2560,102 @@ function parseBookingDate(value) {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
-async function resolveMarketingAudience(sheets, bigquery, query) {
-  const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
-  if (!spreadsheetId) throw new Error('GOOGLE_SPREADSHEET_ID is not configured');
-  const [contacts, bookingResult, membersResult] = await Promise.all([
+// Every email address the business still holds a customer/patient record for.
+// A marketing contact that is not in this set no longer has any record in the
+// system and must not appear in an audience or campaign.
+function collectKnownCustomerEmails(bookingRows, memberRows) {
+  const emails = new Set();
+  for (const row of bookingRows) {
+    const email = String(row[3] || '').trim().toLowerCase();
+    if (email) emails.add(email);
+  }
+  for (const row of memberRows) {
+    const email = normalizeLoyaltyEmail(row[0]);
+    if (email) emails.add(email);
+  }
+  return emails;
+}
+
+// Keeps the marketing list in step with the live database: any contact whose
+// customer/patient records have all been deleted is removed from the list, so
+// they immediately drop out of every audience and future campaign.
+// `contacts` must be header-stripped rows (sheet row number === index + 2).
+async function pruneDeletedMarketingContacts(sheets, contacts, bookingRows, memberRows) {
+  // A completely empty database almost always means a failed read rather than a
+  // real deletion, so never prune the whole list on that basis.
+  if (!bookingRows.length && !memberRows.length) return { contacts, removed: [] };
+  const known = collectKnownCustomerEmails(bookingRows, memberRows);
+  const stale = [];
+  const surviving = [];
+  contacts.forEach((row, index) => {
+    const email = String(row[0] || '').trim().toLowerCase();
+    if (email && !known.has(email)) stale.push({ rowNumber: index + 2, email });
+    else surviving.push(row);
+  });
+  if (!stale.length) return { contacts, removed: [] };
+  try {
+    await deleteSheetRows(sheets, 'MarketingContacts', stale.map(({ rowNumber }) => rowNumber));
+  } catch (error) {
+    console.error('Marketing contact cleanup failed:', error.message || error);
+    return { contacts, removed: [] };
+  }
+  return { contacts: surviving, removed: stale.map(({ email }) => email) };
+}
+
+// Standalone entry point used after a deletion (booking, patient history or
+// loyalty member) so the marketing list is refreshed right away instead of
+// waiting for the next audience lookup.
+async function syncMarketingContactsWithDatabase(sheets, bigquery) {
+  try {
+    const [contacts, bookingResult, membersResult] = await Promise.all([
+      getMarketingContactRows(sheets),
+      bqFetchBookingRows(bigquery),
+      bqLoyaltyValuesGet('LoyaltyMembers!A:J'),
+    ]);
+    const allRows = bookingResult.data.values || [];
+    const bookingRows = allRows[0]?.[0] === 'Booking ID' ? allRows.slice(1) : allRows;
+    const memberRows = (membersResult.data.values || []).slice(1);
+    const { removed } = await pruneDeletedMarketingContacts(sheets, contacts, bookingRows, memberRows);
+    return removed;
+  } catch (error) {
+    console.error('Marketing contact sync failed:', error.message || error);
+    return [];
+  }
+}
+
+// Normalizes the audience selection sent by the dashboard: either an assistant
+// query ("assistant" = Gemini when configured, "keyword" = offline matching)
+// or the explicit filters picked in manual mode.
+function readAudienceRequest(body) {
+  const mode = String(body?.mode || 'assistant').trim().toLowerCase();
+  return {
+    query: String(body?.query || ''),
+    mode: ['assistant', 'keyword', 'manual'].includes(mode) ? mode : 'assistant',
+    filters: body?.filters && typeof body.filters === 'object' ? body.filters : null,
+  };
+}
+
+async function resolveMarketingAudience(sheets, bigquery, request) {
+  const { query = '', mode = 'assistant', filters = null } = typeof request === 'string'
+    ? { query: request }
+    : (request || {});
+  const [rawContacts, bookingResult, membersResult] = await Promise.all([
     getMarketingContactRows(sheets),
     bqFetchBookingRows(bigquery),
-    sheets.spreadsheets.values.get({ spreadsheetId, range: 'LoyaltyMembers!A:J' }).catch((error) => {
-      if (error.code === 400) return { data: { values: [] } };
-      throw error;
-    }),
+    bqLoyaltyValuesGet('LoyaltyMembers!A:J'),
   ]);
   const allRows = bookingResult.data.values || [];
   const bookingRows = allRows[0]?.[0] === 'Booking ID' ? allRows.slice(1) : allRows;
-  const criteria = parseAudienceQuery(query, bookingRows);
-  const membershipByEmail = new Map((membersResult.data.values || []).slice(1).map((row) => [
+  const memberRows = (membersResult.data.values || []).slice(1);
+  // The audience is always built from the live database: contacts whose records
+  // have been deleted are dropped from the list before anyone is selected.
+  const { contacts, removed: removedContacts } = await pruneDeletedMarketingContacts(
+    sheets, rawContacts, bookingRows, memberRows,
+  );
+  const criteria = mode === 'manual'
+    ? buildManualAudienceCriteria(filters, bookingRows)
+    : await buildAssistantAudienceCriteria(query, bookingRows, mode);
+  const membershipByEmail = new Map(memberRows.map((row) => [
     normalizeLoyaltyEmail(row[0]),
     String(row[5] || 'regular').toLowerCase(),
   ]));
@@ -2283,7 +2719,12 @@ async function resolveMarketingAudience(sheets, bigquery, query) {
   recipients = [...uniqueRecipients.values()];
   recipients.sort((a, b) => b.lastVisit - a.lastVisit || b.consentAt.localeCompare(a.consentAt));
   if (criteria.limit) recipients = recipients.slice(0, criteria.limit);
-  return { criteria, recipients, subscriberCount: new Set(activeContacts.map((row) => String(row[0] || '').trim().toLowerCase())).size };
+  return {
+    criteria,
+    recipients,
+    subscriberCount: new Set(activeContacts.map((row) => String(row[0] || '').trim().toLowerCase())).size,
+    removedContacts,
+  };
 }
 
 function getCampaignUnsubscribeUrl(req, token) {
@@ -3018,19 +3459,19 @@ export default async function handler(req, res) {
     }
 
     const view = String(req.query?.view || '');
-    const validGetViews = ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'business-name', 'square-config', 'google-reviews', 'branches', 'services', 'therapists', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal', 'find-booking', 'availability', 'unavailability', 'campaign-log'];
+    const validGetViews = ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'business-name', 'square-config', 'google-reviews', 'branches', 'services', 'therapists', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal', 'find-booking', 'availability', 'unavailability', 'campaign-log', 'campaign-audience-options'];
     if (req.method === 'GET' && !validGetViews.includes(view)) {
       return res.status(404).json({ message: 'Unknown booking view' });
     }
     const ownerOnlyRequest =
-      (req.method === 'GET' && ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'google-ads-report', 'loyalty-dashboard', 'google-reviews', 'unavailability', 'campaign-log'].includes(view)) ||
-      ['business-profile', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-link', 'unavailability-delete'].includes(view) ||
+      (req.method === 'GET' && ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'google-ads-report', 'loyalty-dashboard', 'google-reviews', 'unavailability', 'campaign-log', 'campaign-audience-options'].includes(view)) ||
+      ['business-profile', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-link', 'unavailability-delete'].includes(view) ||
       (req.method === 'POST' && ['branches', 'services', 'therapists', 'unavailability'].includes(view));
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
     if (ownerOnlyRequest && !getOwnerSession(req)) {
       return res.status(401).json({ message: 'Owner sign-in required' });
     }
-    if (['business-profile', 'branches', 'services', 'therapists', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-signup', 'company-portal-bulk-signup', 'company-portal-link', 'square-create-checkout', 'cancel-booking', 'reschedule-booking', 'unavailability', 'unavailability-delete'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
+    if (['business-profile', 'branches', 'services', 'therapists', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-signup', 'company-portal-bulk-signup', 'company-portal-link', 'square-create-checkout', 'cancel-booking', 'reschedule-booking', 'unavailability', 'unavailability-delete'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
       return res.status(403).json({ message: 'Profile update origin is not allowed' });
     }
 
@@ -3275,7 +3716,7 @@ export default async function handler(req, res) {
 
     if (req.method === 'GET' && view === 'loyalty-program') {
       res.setHeader('Cache-Control', 'no-store');
-      const settings = await getPublicLoyaltySettings(sheets);
+      const settings = await getPublicLoyaltySettings();
       return res.status(200).json({
         enabled: settings.enabled,
         pointsPerDollar: settings.pointsPerDollar,
@@ -3293,7 +3734,7 @@ export default async function handler(req, res) {
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
         return res.status(400).json({ message: 'Enter a valid email address to check membership eligibility.' });
       }
-      const settings = await getPublicLoyaltySettings(sheets);
+      const settings = await getPublicLoyaltySettings();
       const benefit = settings.enabled ? await getMemberBenefit(sheets, email, settings) : null;
       return res.status(200).json({
         eligible: Boolean(benefit),
@@ -3309,17 +3750,11 @@ export default async function handler(req, res) {
 
     if (req.method === 'GET' && view === 'loyalty-dashboard') {
       res.setHeader('Cache-Control', 'no-store');
-      const settings = await getLoyaltySettings(sheets);
+      const settings = await getLoyaltySettings();
       const bigquery = getBigQueryClient();
       const [membersResult, ledgerResult, bookingsResult] = await Promise.all([
-        sheets.spreadsheets.values.get({
-          spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-          range: 'LoyaltyMembers!A:K',
-        }),
-        sheets.spreadsheets.values.get({
-          spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-          range: 'LoyaltyLedger!A:J',
-        }),
+        bqLoyaltyValuesGet('LoyaltyMembers!A:K'),
+        bqLoyaltyValuesGet('LoyaltyLedger!A:J'),
         bqFetchBookingRows(bigquery),
       ]);
       const memberRows = (membersResult.data.values || []).slice(1).filter((row) => row[0]);
@@ -3498,15 +3933,17 @@ export default async function handler(req, res) {
       });
     }
 
+    if (req.method === 'POST' && view === 'loyalty-migrate') {
+      await ensureLoyaltyTables();
+      // Only tables that are still empty are filled, so re-running this is safe.
+      const imported = await importLoyaltySheetData(getBigQueryClient());
+      return res.status(200).json({ imported });
+    }
+
     if (req.method === 'POST' && view === 'loyalty-settings') {
       const settings = validateLoyaltySettings(req.body?.settings);
-      await ensureLoyaltySheets(sheets);
-      await sheets.spreadsheets.values.update({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'LoyaltySettings!A2:B2',
-        valueInputOption: 'RAW',
-        requestBody: { values: [[JSON.stringify(settings), new Date().toISOString()]] },
-      });
+      await ensureLoyaltyTables();
+      await bqLoyaltyValuesUpdate('LoyaltySettings!A2:B2', [[JSON.stringify(settings), new Date().toISOString()]]);
       return res.status(200).json({ settings });
     }
 
@@ -3536,13 +3973,10 @@ export default async function handler(req, res) {
       if (paidThrough && !isValidMembershipDate(paidThrough)) {
         return res.status(400).json({ message: 'Paid-through date must be a valid YYYY-MM-DD date.' });
       }
-      const settings = await getLoyaltySettings(sheets);
+      const settings = await getLoyaltySettings();
       if (!settings.enabled) return res.status(409).json({ message: 'The loyalty program is currently paused.' });
-      await ensureLoyaltySheets(sheets);
-      const membersResult = await sheets.spreadsheets.values.get({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'LoyaltyMembers!A:K',
-      });
+      await ensureLoyaltyTables();
+      const membersResult = await bqLoyaltyValuesGet('LoyaltyMembers!A:K');
       const rows = membersResult.data.values || [];
       const existingIndex = rows.findIndex((row, index) => index > 0 && normalizeLoyaltyEmail(row[0]) === email);
       if (membershipType === 'platinum' && !companyContactEmail) {
@@ -3587,19 +4021,9 @@ export default async function handler(req, res) {
       };
       const values = [email, name, phone, member.enrolledAt, now, member.membershipType, member.organization, member.paidThrough, member.companyId, member.companyContactEmail, isPrimaryOwner ? 'Y' : ''];
       if (existingIndex >= 1) {
-        await sheets.spreadsheets.values.update({
-          spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-          range: `LoyaltyMembers!A${existingIndex + 1}:K${existingIndex + 1}`,
-          valueInputOption: 'RAW',
-          requestBody: { values: [values] },
-        });
+        await bqLoyaltyValuesUpdate(`LoyaltyMembers!A${existingIndex + 1}:K${existingIndex + 1}`, [values]);
       } else {
-        await sheets.spreadsheets.values.append({
-          spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-          range: 'LoyaltyMembers!A:K',
-          valueInputOption: 'RAW',
-          requestBody: { values: [values] },
-        });
+        await bqLoyaltyValuesAppend('LoyaltyMembers!A:K', [values]);
       }
       if (membershipType === 'platinum' && isPrimaryOwner) {
         await demoteOtherPrimaryContacts(sheets, rows.slice(1), organization, email);
@@ -3612,35 +4036,22 @@ export default async function handler(req, res) {
             normalizeLoyaltyEmail(row[9]) !== companyContactEmail
           ) {
             const rowNumber = index + 2;
-            await sheets.spreadsheets.values.update({
-              spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-              range: `LoyaltyMembers!J${rowNumber}`,
-              valueInputOption: 'RAW',
-              requestBody: { values: [[companyContactEmail]] },
-            });
+            await bqLoyaltyValuesUpdate(`LoyaltyMembers!J${rowNumber}`, [[companyContactEmail]]);
           }
         }
       }
       let hoursBalance = 0;
       if (initialTopUpPaid) {
-        await sheets.spreadsheets.values.append({
-          spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-          range: 'LoyaltyLedger!A:J',
-          valueInputOption: 'RAW',
-          requestBody: { values: [[
+        await bqLoyaltyValuesAppend('LoyaltyLedger!A:J', [[
             crypto.randomUUID(), email, '', 'TOPUP', 0, 0,
             `Platinum top-up: $${settings.membershipPlans.platinum.topUpPrice.toFixed(2)} for ${settings.membershipPlans.platinum.includedHours} hours`,
             now, settings.membershipPlans.platinum.includedHours,
-          ]] },
-        });
+          ]]);
       }
       if (membershipType === 'platinum') {
         hoursBalance = loyaltyPlatinumHoursBalance(
           rows.slice(1),
-          (await sheets.spreadsheets.values.get({
-            spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-            range: 'LoyaltyLedger!A:J',
-          })).data.values?.slice(1) || [],
+          (await bqLoyaltyValuesGet('LoyaltyLedger!A:J')).data.values?.slice(1) || [],
           organization,
           email,
         );
@@ -3681,11 +4092,8 @@ export default async function handler(req, res) {
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
         return res.status(400).json({ message: 'A valid member email is required.' });
       }
-      await ensureLoyaltySheets(sheets);
-      const membersResult = await sheets.spreadsheets.values.get({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'LoyaltyMembers!A:J',
-      });
+      await ensureLoyaltyTables();
+      const membersResult = await bqLoyaltyValuesGet('LoyaltyMembers!A:J');
       const rows = membersResult.data.values || [];
       const rowIndex = rows.findIndex((row, index) => index > 0 && normalizeLoyaltyEmail(row[0]) === email);
       if (rowIndex < 1) return res.status(404).json({ message: 'No loyalty member was found for that email.' });
@@ -3695,7 +4103,7 @@ export default async function handler(req, res) {
         membershipType: String(rows[rowIndex][5] || '').toLowerCase(),
         organization: rows[rowIndex][6] || '',
       };
-      await deleteSheetRows(sheets, 'LoyaltyMembers', [rowIndex + 1]);
+      await bqLoyaltyDeleteRows('LoyaltyMembers', [rowIndex + 1]);
       let emailSent = false;
       let emailError = '';
       try {
@@ -3719,7 +4127,12 @@ export default async function handler(req, res) {
         emailError = error.message || 'Removal confirmation email could not be sent.';
         console.error('Loyalty member removal email error:', emailError);
       }
-      return res.status(200).json({ removed: removedMember, emailSent, emailError });
+      return res.status(200).json({
+        removed: removedMember,
+        emailSent,
+        emailError,
+        removedContacts: await syncMarketingContactsWithDatabase(sheets, getBigQueryClient()),
+      });
     }
 
     if (req.method === 'POST' && view === 'company-portal-link') {
@@ -3730,7 +4143,7 @@ export default async function handler(req, res) {
       if (!companyContactEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(companyContactEmail)) {
         return res.status(400).json({ message: 'A valid company contact email on file is required to create a portal link.' });
       }
-      await ensureLoyaltySheets(sheets);
+      await ensureLoyaltyTables();
       const access = await ensureCompanyPortalAccess(sheets, organization, companyId, companyContactEmail);
       return res.status(200).json({ organization, portalUrl: getCompanyPortalUrl(req, access.token) });
     }
@@ -3740,11 +4153,8 @@ export default async function handler(req, res) {
       if (!organization) {
         return res.status(400).json({ message: 'A company/organization name is required.' });
       }
-      await ensureLoyaltySheets(sheets);
-      const membersResult = await sheets.spreadsheets.values.get({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'LoyaltyMembers!A:J',
-      });
+      await ensureLoyaltyTables();
+      const membersResult = await bqLoyaltyValuesGet('LoyaltyMembers!A:J');
       const rows = membersResult.data.values || [];
       const matches = rows
         .map((row, index) => ({ row, rowNumber: index + 1 }))
@@ -3756,11 +4166,11 @@ export default async function handler(req, res) {
       if (!matches.length) return res.status(404).json({ message: 'No company members were found for that organization name.' });
       const removedEmails = matches.map(({ row }) => normalizeLoyaltyEmail(row[0]));
       const companyContactEmail = matches.find(({ row }) => row[9])?.row[9] || '';
-      await deleteSheetRows(sheets, 'LoyaltyMembers', matches.map(({ rowNumber }) => rowNumber));
+      await bqLoyaltyDeleteRows('LoyaltyMembers', matches.map(({ rowNumber }) => rowNumber));
       try {
         const companyRows = await getCompanyPortalRows(sheets);
         const companyRowIndex = companyRows.findIndex((row, index) => index > 0 && normalizeOrganizationKey(row[0]) === normalizeOrganizationKey(organization));
-        if (companyRowIndex >= 1) await deleteSheetRows(sheets, 'LoyaltyCompanies', [companyRowIndex + 1]);
+        if (companyRowIndex >= 1) await bqLoyaltyDeleteRows('LoyaltyCompanies', [companyRowIndex + 1]);
       } catch (error) {
         console.error('Company portal cleanup error:', error.message || error);
       }
@@ -3794,12 +4204,9 @@ export default async function handler(req, res) {
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
         return res.status(400).json({ message: 'A valid Platinum member email is required.' });
       }
-      const settings = await getLoyaltySettings(sheets);
+      const settings = await getLoyaltySettings();
       if (!settings.enabled) return res.status(409).json({ message: 'The loyalty program is currently paused.' });
-      const membersResult = await sheets.spreadsheets.values.get({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'LoyaltyMembers!A:K',
-      });
+      const membersResult = await bqLoyaltyValuesGet('LoyaltyMembers!A:K');
       const memberRows = membersResult.data.values || [];
       const member = memberRows.slice(1)
         .find((row) => normalizeLoyaltyEmail(row[0]) === email && String(row[5] || '').toLowerCase() === 'platinum');
@@ -3815,20 +4222,12 @@ export default async function handler(req, res) {
         const primaryHint = existingPrimary ? ` This company's primary contact on file is ${existingPrimary[1] || existingPrimary[0]}.` : '';
         return res.status(400).json({ message: `Only the company's primary owner/contact can receive a Platinum top-up.${primaryHint} Mark this person as the primary owner/contact to top them up.` });
       }
-      await sheets.spreadsheets.values.append({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'LoyaltyLedger!A:J',
-        valueInputOption: 'RAW',
-        requestBody: { values: [[
+      await bqLoyaltyValuesAppend('LoyaltyLedger!A:J', [[
           crypto.randomUUID(), email, '', 'TOPUP', 0, 0,
           `Platinum top-up: $${settings.membershipPlans.platinum.topUpPrice.toFixed(2)} for ${settings.membershipPlans.platinum.includedHours} hours`,
           new Date().toISOString(), settings.membershipPlans.platinum.includedHours,
-        ]] },
-      });
-      const ledgerResult = await sheets.spreadsheets.values.get({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'LoyaltyLedger!A:J',
-      });
+        ]]);
+      const ledgerResult = await bqLoyaltyValuesGet('LoyaltyLedger!A:J');
       const hoursBalance = loyaltyPlatinumHoursBalance(memberRows.slice(1), ledgerResult.data.values?.slice(1) || [], member[6], email);
       let emailSent = false;
       let emailError = '';
@@ -3861,21 +4260,13 @@ export default async function handler(req, res) {
         return res.status(400).json({ message: 'A valid Platinum member email is required.' });
       }
       const makePrimary = req.body?.isPrimaryOwner === true;
-      await ensureLoyaltySheets(sheets);
-      const membersResult = await sheets.spreadsheets.values.get({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'LoyaltyMembers!A:K',
-      });
+      await ensureLoyaltyTables();
+      const membersResult = await bqLoyaltyValuesGet('LoyaltyMembers!A:K');
       const rows = membersResult.data.values || [];
       const rowIndex = rows.findIndex((row, index) => index > 0 && normalizeLoyaltyEmail(row[0]) === email && String(row[5] || '').toLowerCase() === 'platinum');
       if (rowIndex < 1) return res.status(404).json({ message: 'No Platinum member was found for that email.' });
       const organization = rows[rowIndex][6] || '';
-      await sheets.spreadsheets.values.update({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: `LoyaltyMembers!K${rowIndex + 1}`,
-        valueInputOption: 'RAW',
-        requestBody: { values: [[makePrimary ? 'Y' : '']] },
-      });
+      await bqLoyaltyValuesUpdate(`LoyaltyMembers!K${rowIndex + 1}`, [[makePrimary ? 'Y' : '']]);
       if (makePrimary) {
         await demoteOtherPrimaryContacts(sheets, rows.slice(1), organization, email);
       }
@@ -3889,11 +4280,8 @@ export default async function handler(req, res) {
       if (!isValidMembershipDate(paidThrough)) {
         return res.status(400).json({ message: 'Paid-through date must be a valid YYYY-MM-DD date.' });
       }
-      const settings = await getLoyaltySettings(sheets);
-      const membersResult = await sheets.spreadsheets.values.get({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'LoyaltyMembers!A:J',
-      });
+      const settings = await getLoyaltySettings();
+      const membersResult = await bqLoyaltyValuesGet('LoyaltyMembers!A:J');
       const rows = membersResult.data.values || [];
       const matches = rows.slice(1).map((row, index) => ({ row, rowNumber: index + 2 }))
         .filter(({ row }) => organization
@@ -3912,12 +4300,7 @@ export default async function handler(req, res) {
           organization: row[6] || '',
           paidThrough,
         };
-        await sheets.spreadsheets.values.update({
-          spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-          range: `LoyaltyMembers!E${rowNumber}:H${rowNumber}`,
-          valueInputOption: 'RAW',
-          requestBody: { values: [[new Date().toISOString(), row[5] || '', row[6] || '', paidThrough]] },
-        });
+        await bqLoyaltyValuesUpdate(`LoyaltyMembers!E${rowNumber}:H${rowNumber}`, [[new Date().toISOString(), row[5] || '', row[6] || '', paidThrough]]);
         updatedMembers.push(member);
       }
       const emailFailures = [];
@@ -3943,12 +4326,12 @@ export default async function handler(req, res) {
       if (!bookingId || bookingId.length > 100) {
         return res.status(400).json({ message: 'A valid booking ID is required.' });
       }
-      const settings = await getLoyaltySettings(sheets);
+      const settings = await getLoyaltySettings();
       if (!settings.enabled) return res.status(409).json({ message: 'The loyalty program is currently paused.' });
       const bigquery = getBigQueryClient();
       const [membersResult, ledgerResult, bookingsResult] = await Promise.all([
-        sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'LoyaltyMembers!A:K' }),
-        sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'LoyaltyLedger!A:J' }),
+        bqLoyaltyValuesGet('LoyaltyMembers!A:K'),
+        bqLoyaltyValuesGet('LoyaltyLedger!A:J'),
         bqFetchBookingRows(bigquery),
       ]);
       const bookingRows = bookingsResult.data.values || [];
@@ -4018,12 +4401,7 @@ export default async function handler(req, res) {
         ]);
       }
       if (ledgerEntries.length) {
-        await sheets.spreadsheets.values.append({
-          spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-          range: 'LoyaltyLedger!A:J',
-          valueInputOption: 'RAW',
-          requestBody: { values: ledgerEntries },
-        });
+        await bqLoyaltyValuesAppend('LoyaltyLedger!A:J', ledgerEntries);
       }
       if (!points && !hoursUsed && !freeHotStone) {
         return res.status(409).json({ message: 'This visit does not qualify for points or prepaid hours.' });
@@ -4089,15 +4467,15 @@ export default async function handler(req, res) {
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !bookingId || bookingId.length > 100) {
         return res.status(400).json({ message: 'A valid member email and paid booking are required to link the reward to its receipt.' });
       }
-      const settings = await getLoyaltySettings(sheets);
+      const settings = await getLoyaltySettings();
       if (!settings.enabled) return res.status(409).json({ message: 'The loyalty program is currently paused.' });
       if (!Number.isInteger(points) || points < settings.redemptionPoints || points > 1000000 || points % settings.redemptionPoints !== 0) {
         return res.status(400).json({ message: `Redeem points in multiples of ${settings.redemptionPoints}.` });
       }
       const bigquery = getBigQueryClient();
       const [membersResult, ledgerResult, bookingsResult] = await Promise.all([
-        sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'LoyaltyMembers!A:J' }),
-        sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'LoyaltyLedger!A:J' }),
+        bqLoyaltyValuesGet('LoyaltyMembers!A:J'),
+        bqLoyaltyValuesGet('LoyaltyLedger!A:J'),
         bqFetchBookingRows(bigquery),
       ]);
       const member = (membersResult.data.values || []).slice(1)
@@ -4134,12 +4512,7 @@ export default async function handler(req, res) {
         return res.status(409).json({ message: 'The selected points redemption is greater than the eligible pre-tax purchase amount.' });
       }
       const now = new Date().toISOString();
-      await sheets.spreadsheets.values.append({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'LoyaltyLedger!A:J',
-        valueInputOption: 'RAW',
-        requestBody: { values: [[crypto.randomUUID(), email, bookingId, 'REDEEM', -points, rewardValue, `Redeemed for $${rewardValue.toFixed(2)}; pending receipt for booking ${bookingId}`, now, 0, '']] },
-      });
+      await bqLoyaltyValuesAppend('LoyaltyLedger!A:J', [[crypto.randomUUID(), email, bookingId, 'REDEEM', -points, rewardValue, `Redeemed for $${rewardValue.toFixed(2)}; pending receipt for booking ${bookingId}`, now, 0, '']]);
       const pointsBalance = balance - points;
       let emailSent = false;
       let emailError = '';
@@ -4403,12 +4776,12 @@ export default async function handler(req, res) {
       if (!/^[a-f0-9]{48}$/.test(token)) {
         return res.status(400).json({ message: 'This company portal link is invalid or incomplete.' });
       }
-      await ensureLoyaltySheets(sheets);
+      await ensureLoyaltyTables();
       const company = await findCompanyPortalByToken(sheets, token);
       if (!company) return res.status(404).json({ message: 'This company portal link is invalid or no longer active.' });
       const [membersResult, ledgerResult] = await Promise.all([
-        sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'LoyaltyMembers!A:K' }),
-        sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'LoyaltyLedger!A:J' }),
+        bqLoyaltyValuesGet('LoyaltyMembers!A:K'),
+        bqLoyaltyValuesGet('LoyaltyLedger!A:J'),
       ]);
       const orgKey = normalizeOrganizationKey(company.organization);
       const memberRows = (membersResult.data.values || []).slice(1);
@@ -4482,10 +4855,10 @@ export default async function handler(req, res) {
       if (!/^[a-f0-9]{48}$/.test(token)) {
         return res.status(400).json({ message: 'This company portal link is invalid or incomplete.' });
       }
-      await ensureLoyaltySheets(sheets);
+      await ensureLoyaltyTables();
       const company = await findCompanyPortalByToken(sheets, token);
       if (!company) return res.status(404).json({ message: 'This company portal link is invalid or no longer active.' });
-      const settings = await getLoyaltySettings(sheets);
+      const settings = await getLoyaltySettings();
       if (!settings.enabled) return res.status(409).json({ message: 'The loyalty program is currently paused.' });
       const email = normalizeLoyaltyEmail(req.body?.email);
       const name = String(req.body?.name || '').trim().slice(0, 120);
@@ -4493,10 +4866,7 @@ export default async function handler(req, res) {
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !name) {
         return res.status(400).json({ message: 'Enter a valid employee email and name.' });
       }
-      const membersResult = await sheets.spreadsheets.values.get({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'LoyaltyMembers!A:K',
-      });
+      const membersResult = await bqLoyaltyValuesGet('LoyaltyMembers!A:K');
       const rows = membersResult.data.values || [];
       const existingIndex = rows.findIndex((row, index) => index > 0 && normalizeLoyaltyEmail(row[0]) === email);
       if (existingIndex >= 1) {
@@ -4512,16 +4882,8 @@ export default async function handler(req, res) {
       // company portal link cannot be used to enroll an employee under a different company. The new employee is
       // never marked as the primary contact (column K left blank) — only staff can designate a primary owner/contact,
       // and only that person's top-ups fund the company's shared prepaid-hour pool.
-      await sheets.spreadsheets.values.append({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'LoyaltyMembers!A:K',
-        valueInputOption: 'RAW',
-        requestBody: { values: [[email, name, phone, now, now, 'platinum', company.organization, '', company.companyId, company.contactEmail, '']] },
-      });
-      const ledgerRows = (await sheets.spreadsheets.values.get({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'LoyaltyLedger!A:J',
-      })).data.values?.slice(1) || [];
+      await bqLoyaltyValuesAppend('LoyaltyMembers!A:K', [[email, name, phone, now, now, 'platinum', company.organization, '', company.companyId, company.contactEmail, '']]);
+      const ledgerRows = (await bqLoyaltyValuesGet('LoyaltyLedger!A:J')).data.values?.slice(1) || [];
       const hoursBalance = loyaltyPlatinumHoursBalance(rows.slice(1), ledgerRows, company.organization, email);
       const member = {
         email, name, phone, membershipType: 'platinum', organization: company.organization, companyId: company.companyId, hoursBalance,
@@ -4543,17 +4905,14 @@ export default async function handler(req, res) {
       if (!/^[a-f0-9]{48}$/.test(token)) {
         return res.status(400).json({ message: 'This company portal link is invalid or incomplete.' });
       }
-      await ensureLoyaltySheets(sheets);
+      await ensureLoyaltyTables();
       const company = await findCompanyPortalByToken(sheets, token);
       if (!company) return res.status(404).json({ message: 'This company portal link is invalid or no longer active.' });
-      const settings = await getLoyaltySettings(sheets);
+      const settings = await getLoyaltySettings();
       if (!settings.enabled) return res.status(409).json({ message: 'The loyalty program is currently paused.' });
       const incoming = Array.isArray(req.body?.employees) ? req.body.employees.slice(0, 200) : [];
       if (!incoming.length) return res.status(400).json({ message: 'Upload a file with at least one employee row.' });
-      const membersResult = await sheets.spreadsheets.values.get({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'LoyaltyMembers!A:K',
-      });
+      const membersResult = await bqLoyaltyValuesGet('LoyaltyMembers!A:K');
       const rows = membersResult.data.values || [];
       const existingEmails = new Set(rows.slice(1).map((row) => normalizeLoyaltyEmail(row[0])));
       const now = new Date().toISOString();
@@ -4577,18 +4936,10 @@ export default async function handler(req, res) {
         results.push({ email, name, status: 'created' });
       }
       if (toCreate.length) {
-        await sheets.spreadsheets.values.append({
-          spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-          range: 'LoyaltyMembers!A:K',
-          valueInputOption: 'RAW',
-          requestBody: { values: toCreate },
-        });
+        await bqLoyaltyValuesAppend('LoyaltyMembers!A:K', toCreate);
       }
       const businessProfile = await getBusinessProfile(sheets);
-      const ledgerRows = (await sheets.spreadsheets.values.get({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'LoyaltyLedger!A:J',
-      })).data.values?.slice(1) || [];
+      const ledgerRows = (await bqLoyaltyValuesGet('LoyaltyLedger!A:J')).data.values?.slice(1) || [];
       const hoursBalance = loyaltyPlatinumHoursBalance(rows.slice(1), ledgerRows, company.organization, '');
       const emailResults = await Promise.allSettled(toCreate.map(([email, name, phone]) => sendMembershipEmail(createGmailApi(), {
         email, name, phone, membershipType: 'platinum', organization: company.organization, companyId: company.companyId, hoursBalance,
@@ -4647,10 +4998,32 @@ export default async function handler(req, res) {
       return res.status(200).send('<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Email preferences</title><body style="font:16px Arial,sans-serif;background:#f3f5f4;color:#18251f;padding:32px"><main style="max-width:520px;margin:10vh auto;background:white;border:1px solid #e2e9e5;border-radius:16px;padding:28px"><h1 style="font-size:22px">You are unsubscribed</h1><p>You will no longer receive marketing emails from MY THAI THAI. Booking and receipt emails are not affected.</p></main></body></html>');
     }
 
-    if (req.method === 'POST' && view === 'campaign-audience') {
-      const query = String(req.body?.query || '');
+    if (req.method === 'GET' && view === 'campaign-audience-options') {
       const bigquery = getBigQueryClient();
-      const audience = await resolveMarketingAudience(sheets, bigquery, query);
+      const [bookingResult, membersResult] = await Promise.all([
+        bqFetchBookingRows(bigquery),
+        bqLoyaltyValuesGet('LoyaltyMembers!A:J'),
+      ]);
+      const allRows = bookingResult.data.values || [];
+      const bookingRows = allRows[0]?.[0] === 'Booking ID' ? allRows.slice(1) : allRows;
+      const memberRows = (membersResult.data.values || []).slice(1);
+      const options = audienceFilterOptions(bookingRows);
+      const usedTiers = new Set(memberRows.map((row) => String(row[5] || 'regular').toLowerCase()));
+      return res.status(200).json({
+        branches: options.branches,
+        services: options.services,
+        membershipTypes: options.membershipTypes.filter((tier) => usedTiers.has(tier)),
+        weekdays: options.weekdays,
+        geminiReady: Boolean(GEMINI_API_KEY),
+        geminiBlockReason: GEMINI_API_KEY
+          ? ''
+          : 'Add GEMINI_API_KEY to Vercel Environment Variables and redeploy to enable Gemini audience matching. Keyword matching is used until then.',
+      });
+    }
+
+    if (req.method === 'POST' && view === 'campaign-audience') {
+      const bigquery = getBigQueryClient();
+      const audience = await resolveMarketingAudience(sheets, bigquery, readAudienceRequest(req.body));
       const businessProfile = await getBusinessProfile(sheets);
       const sendBlockReason = getCampaignSendBlockReason(businessProfile);
       return res.status(200).json({
@@ -4659,6 +5032,8 @@ export default async function handler(req, res) {
         subscriberCount: audience.subscriberCount,
         sampleNames: audience.recipients.slice(0, 3).map((recipient) => recipient.name || 'Subscriber'),
         senderEmail: MARKETING_SENDER_EMAIL,
+        audienceMode: audience.criteria.source,
+        removedContacts: audience.removedContacts,
         copyAssistantReady: Boolean(GEMINI_API_KEY),
         copyAssistantBlockReason: GEMINI_API_KEY
           ? ''
@@ -4669,9 +5044,8 @@ export default async function handler(req, res) {
     }
 
     if (req.method === 'POST' && view === 'campaign-generate') {
-      const query = String(req.body?.query || '');
       const bigquery = getBigQueryClient();
-      const audience = await resolveMarketingAudience(sheets, bigquery, query);
+      const audience = await resolveMarketingAudience(sheets, bigquery, readAudienceRequest(req.body));
       const draft = await generateCampaignCopy(
         req.body?.goal,
         audience.criteria.description,
@@ -4697,7 +5071,7 @@ export default async function handler(req, res) {
         return res.status(400).json({ message: 'Preview text must be 200 characters or fewer and the message must be 1-5000 characters.' });
       }
       const bigquery = getBigQueryClient();
-      const audience = await resolveMarketingAudience(sheets, bigquery, String(req.body?.query || ''));
+      const audience = await resolveMarketingAudience(sheets, bigquery, readAudienceRequest(req.body));
       if (audience.recipients.length === 0) {
         return res.status(409).json({ message: 'This audience has no active, opted-in recipients.' });
       }
@@ -5452,7 +5826,7 @@ export default async function handler(req, res) {
       }
       const email = String(row[3] || '').trim();
       const customerName = String(row[1] || '').trim();
-      await ensureLoyaltySheets(sheets);
+      await ensureLoyaltyTables();
       const idempotencyKey = crypto.randomUUID();
       const businessProfile = await getBusinessProfile(sheets);
       const businessName = businessProfile?.name || 'My Thai Thai Massage';
@@ -5570,12 +5944,9 @@ export default async function handler(req, res) {
         }
 
         try {
-          const loyaltySettings = await getLoyaltySettings(sheets);
+          const loyaltySettings = await getLoyaltySettings();
           if (loyaltySettings.enabled) {
-            const membersResult = await sheets.spreadsheets.values.get({
-              spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-              range: 'LoyaltyMembers!A:J',
-            });
+            const membersResult = await bqLoyaltyValuesGet('LoyaltyMembers!A:J');
             const alreadyEnrolled = (membersResult.data.values || []).slice(1)
               .some((row) => normalizeLoyaltyEmail(row[0]) === normalizeLoyaltyEmail(payerEmail));
             if (!alreadyEnrolled) {
@@ -5678,15 +6049,9 @@ export default async function handler(req, res) {
         return res.status(409).json({ message: 'A receipt can only be issued when the appointment is fully paid' });
       }
 
-      await ensureLoyaltySheets(sheets);
-      const loyaltyLedgerResult = await sheets.spreadsheets.values.get({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'LoyaltyLedger!A:J',
-      });
-      const loyaltyMembersResult = await sheets.spreadsheets.values.get({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'LoyaltyMembers!A:J',
-      });
+      await ensureLoyaltyTables();
+      const loyaltyLedgerResult = await bqLoyaltyValuesGet('LoyaltyLedger!A:J');
+      const loyaltyMembersResult = await bqLoyaltyValuesGet('LoyaltyMembers!A:J');
       const loyaltyRows = (loyaltyLedgerResult.data.values || []).slice(1);
       const loyaltyMember = (loyaltyMembersResult.data.values || []).slice(1)
         .some((loyaltyRow) => normalizeLoyaltyEmail(loyaltyRow[0]) === normalizeLoyaltyEmail(booking.email));
@@ -5733,12 +6098,7 @@ export default async function handler(req, res) {
         receiptEmailStatus: row[20] || 'pending',
       });
       for (const { rowNumber } of linkedRedemptions) {
-        await sheets.spreadsheets.values.update({
-          spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-          range: `LoyaltyLedger!J${rowNumber}`,
-          valueInputOption: 'RAW',
-          requestBody: { values: [[receipt.number]] },
-        });
+        await bqLoyaltyValuesUpdate(`LoyaltyLedger!J${rowNumber}`, [[receipt.number]]);
       }
 
       if (row[20] !== 'sent') {
@@ -5816,11 +6176,13 @@ export default async function handler(req, res) {
         }
       }
       await bqDeleteBookingRow(bigquery, bookingId);
+      const removedContacts = await syncMarketingContactsWithDatabase(sheets, bigquery);
       return res.status(200).json({
         deleted: true,
         bookingId,
         calendarDeleted,
         calendarError,
+        removedContacts,
       });
     }
 
@@ -5845,7 +6207,8 @@ export default async function handler(req, res) {
       if (rowIndex < 0) return res.status(404).json({ message: 'Patient history record was not found' });
 
       await deleteSheetRows(sheets, 'PatientHistory', [rowIndex + 1], PATIENT_HISTORY_SPREADSHEET_ID);
-      return res.status(200).json({ deleted: true, bookingId });
+      const removedContacts = await syncMarketingContactsWithDatabase(sheets, getBigQueryClient());
+      return res.status(200).json({ deleted: true, bookingId, removedContacts });
     }
 
     if (req.method === 'POST' && req.query?.view === 'cancel-booking') {
@@ -6061,7 +6424,7 @@ export default async function handler(req, res) {
     if (!Number.isFinite(subtotal) || subtotal <= 0 || subtotal > 100000 || !Number.isFinite(taxRate) || taxRate < 0 || taxRate > 1) {
       return res.status(400).json({ message: 'The service subtotal and tax rate are invalid.' });
     }
-    const loyaltySettings = await getLoyaltySettings(sheets);
+    const loyaltySettings = await getLoyaltySettings();
     const memberBenefit = loyaltySettings.enabled ? await getMemberBenefit(sheets, payload.email, loyaltySettings) : null;
     const isHotStoneAddon = String(payload.serviceName || '').toLowerCase().includes('hot stone add-on');
     const prepaidServiceHours = Math.max(0, Number(payload.durationMinutes) || 60) / 60;
@@ -6229,7 +6592,7 @@ export default async function handler(req, res) {
     let loyaltyCompanyEmailNotified = false;
     if (hasLoyaltyEnrollmentRequest) {
       try {
-        const loyaltySettings = await getLoyaltySettings(sheets);
+        const loyaltySettings = await getLoyaltySettings();
         if (!loyaltySettings.enabled) throw new Error('The loyalty program is currently paused.');
         const enrollment = await enrollLoyaltyMember(sheets, payload);
         loyaltyEnrollmentSaved = true;
