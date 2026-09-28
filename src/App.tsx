@@ -536,35 +536,32 @@ export default function App() {
           <span className={`text-lg font-bold tracking-tight ${viewMode === 'therapist' ? 'text-white' : 'text-slate-950'}`}>MedBook</span>
           <span className={`hidden rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider sm:inline-flex ${viewMode === 'therapist' ? 'border border-slate-700 bg-slate-900 text-slate-300' : 'border border-emerald-100 bg-emerald-50 text-emerald-800'}`}>Practice platform</span>
         </div>
-        <nav aria-label="Platform views" className="flex items-center gap-1.5">
-          <button
-            onClick={() => setViewMode('customer')}
-            className={`px-3 py-1.5 rounded-md font-medium transition-all ${
-              viewMode === 'customer'
-                ? 'bg-emerald-950 text-white shadow-sm'
-                : viewMode === 'therapist' ? 'text-slate-300 hover:bg-slate-800 hover:text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
-            }`}
-          >
-            Booking portal
-          </button>
-          <button
-            onClick={() => setViewMode('admin')}
-            className={`px-3 py-1.5 rounded-md font-medium transition-all ${
-              viewMode === 'admin'
-                ? 'bg-emerald-950 text-white shadow-sm'
-                : viewMode === 'therapist' ? 'text-slate-300 hover:bg-slate-800 hover:text-white' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
-            }`}
-          >
-            Owner dashboard
-          </button>
-          <button
-            onClick={() => setViewMode('therapist')}
-            className={`px-3 py-1.5 rounded-md font-medium transition-all ${
-              viewMode === 'therapist' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-950'
-            }`}
-          >
-            Therapist
-          </button>
+        <nav aria-label="Platform views" className={`flex items-center gap-1 rounded-full p-1 ${viewMode === 'therapist' ? 'bg-slate-900' : 'bg-slate-100'}`}>
+          {[
+            { mode: 'customer', label: 'Booking', Icon: CalendarDays },
+            { mode: 'admin', label: 'Dashboard', Icon: BarChart3 },
+            { mode: 'therapist', label: 'Therapist', Icon: Stethoscope },
+          ].map(({ mode, label, Icon }) => {
+            const isActive = viewMode === mode;
+            return (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => setViewMode(mode)}
+                aria-current={isActive ? 'page' : undefined}
+                aria-label={label}
+                title={label}
+                className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-xs font-semibold transition-all sm:px-3 ${
+                  isActive
+                    ? `${mode === 'therapist' ? 'bg-slate-700' : 'bg-emerald-950'} text-white shadow-sm`
+                    : viewMode === 'therapist' ? 'text-slate-400 hover:bg-slate-800 hover:text-white' : 'text-slate-500 hover:bg-white hover:text-slate-950'
+                }`}
+              >
+                <Icon className="h-4 w-4 shrink-0" />
+                <span className="hidden sm:inline">{label}</span>
+              </button>
+            );
+          })}
         </nav>
       </header>
 
