@@ -8,7 +8,7 @@ import {
   TrendingUp, ChevronRight, AlertCircle, Sparkles, ShieldCheck, Check, X,
   DollarSign, Users, Award, Briefcase, RefreshCw, Layers, CheckSquare, Stethoscope, Database,
   Menu, Home, CalendarDays, UserRound, BarChart3, ChevronRight as ChevronRightIcon,
-  Megaphone, ReceiptText, Download, Eye, MousePointerClick, Upload, Crown, Star
+  Megaphone, ReceiptText, Download, Eye, MousePointerClick, Upload, Crown, Star, CalendarX, CalendarOff, Ban
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
@@ -974,6 +974,10 @@ function TherapistPortal() {
   const [isSignup, setIsSignup] = useState(false);
   const [name, setName] = useState('');
   const [signupComplete, setSignupComplete] = useState('');
+  const [myUnavailability, setMyUnavailability] = useState([]);
+  const [unavailabilityForm, setUnavailabilityForm] = useState({ date: new Date().toISOString().slice(0, 10), startTime: '12:00', endTime: '13:00', reason: '' });
+  const [unavailabilitySaving, setUnavailabilitySaving] = useState(false);
+  const [unavailabilityError, setUnavailabilityError] = useState('');
 
   const loadAppointments = async () => {
     const response = await fetch(`/api/booking?view=therapist-dashboard&calendarView=${calendarView}&date=${encodeURIComponent(calendarDate)}`);
@@ -997,6 +1001,7 @@ function TherapistPortal() {
     });
     setAttendedClients(data.attended || []);
     setCalendarEvents(data.calendarEvents || []);
+    setMyUnavailability(data.myUnavailability || []);
   };
 
   const savePatientNote = async (event) => {
@@ -1019,6 +1024,43 @@ function TherapistPortal() {
       setNoteError(requestError.message || 'Unable to save patient note.');
     } finally {
       setNoteSaving(false);
+    }
+  };
+
+  const createUnavailabilityBlock = async (event) => {
+    event.preventDefault();
+    setUnavailabilitySaving(true);
+    setUnavailabilityError('');
+    try {
+      const response = await fetch('/api/booking?view=therapist-unavailability', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(unavailabilityForm),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Unable to save this block.');
+      setMyUnavailability((current) => [data.block, ...current]);
+      setUnavailabilityForm((current) => ({ ...current, reason: '' }));
+    } catch (requestError) {
+      setUnavailabilityError(requestError.message || 'Unable to save this block.');
+    } finally {
+      setUnavailabilitySaving(false);
+    }
+  };
+
+  const deleteUnavailabilityBlock = async (id) => {
+    setUnavailabilityError('');
+    try {
+      const response = await fetch('/api/booking?view=therapist-unavailability-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Unable to remove this block.');
+      setMyUnavailability((current) => current.filter((block) => block.id !== id));
+    } catch (requestError) {
+      setUnavailabilityError(requestError.message || 'Unable to remove this block.');
     }
   };
 
@@ -1227,6 +1269,14 @@ function TherapistPortal() {
             <Clock className="h-4 w-4" />
             <span className="flex-1 whitespace-nowrap">Rebooking reminders</span>
             {rebookingReminders.length > 0 && <span className="rounded-full bg-amber-400 px-1.5 py-0.5 text-[10px] font-bold text-slate-950">{rebookingReminders.length}</span>}
+          </button>
+          <button
+            type="button"
+            onClick={() => setWorkspaceView('availability')}
+            className={`flex shrink-0 items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium transition lg:w-full ${workspaceView === 'availability' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-300 hover:bg-slate-900 hover:text-white'}`}
+          >
+            <CalendarX className="h-4 w-4" />
+            <span className="flex-1 whitespace-nowrap">My availability</span>
           </button>
           <div className={`relative rounded-lg ${workspaceView === 'profile' ? 'bg-slate-800' : ''}`}>
             <button
@@ -1505,6 +1555,48 @@ function TherapistPortal() {
               </div>
             ) : <p className="p-5 text-sm text-slate-500">No past appointments are available.</p>}
           </section>
+        </section>
+      ) : workspaceView === 'availability' ? (
+        <section className="space-y-5">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Schedule</p>
+            <h1 className="mt-1 text-2xl font-semibold tracking-tight text-slate-950">My availability</h1>
+            <p className="mt-1 text-sm text-slate-600">Block off breaks, days off, or other times you cannot take appointments. Blocks are removed automatically from the booking calendar.</p>
+          </div>
+          <form onSubmit={createUnavailabilityBlock} className="grid grid-cols-1 gap-3 rounded-xl border border-slate-200 bg-white p-5 shadow-sm sm:grid-cols-2 lg:grid-cols-5">
+            <label className="text-xs font-semibold text-slate-600">Date
+              <input type="date" required value={unavailabilityForm.date} onChange={(e) => setUnavailabilityForm((current) => ({ ...current, date: e.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+            </label>
+            <label className="text-xs font-semibold text-slate-600">Start time
+              <input type="time" required value={unavailabilityForm.startTime} onChange={(e) => setUnavailabilityForm((current) => ({ ...current, startTime: e.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+            </label>
+            <label className="text-xs font-semibold text-slate-600">End time
+              <input type="time" required value={unavailabilityForm.endTime} onChange={(e) => setUnavailabilityForm((current) => ({ ...current, endTime: e.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+            </label>
+            <label className="text-xs font-semibold text-slate-600 lg:col-span-1">Reason (optional)
+              <input type="text" value={unavailabilityForm.reason} onChange={(e) => setUnavailabilityForm((current) => ({ ...current, reason: e.target.value }))} placeholder="Lunch break" className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+            </label>
+            <div className="flex items-end">
+              <button type="submit" disabled={unavailabilitySaving} className="w-full rounded-lg bg-slate-950 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 disabled:opacity-60">{unavailabilitySaving ? 'Saving…' : 'Add block'}</button>
+            </div>
+          </form>
+          {unavailabilityError && <p className="text-sm font-medium text-red-600">{unavailabilityError}</p>}
+          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div className="border-b border-slate-100 px-5 py-4"><h2 className="text-base font-semibold text-slate-900">Upcoming blocks</h2></div>
+            {myUnavailability.length ? (
+              <div className="divide-y divide-slate-100">
+                {myUnavailability.map((block) => (
+                  <div key={block.id} className="flex flex-wrap items-center justify-between gap-3 px-5 py-3">
+                    <div>
+                      <p className="text-sm font-semibold text-slate-800">{block.date} · {block.startTime}–{block.endTime}</p>
+                      {block.reason && <p className="mt-1 text-xs text-slate-500">{block.reason}</p>}
+                    </div>
+                    <button type="button" onClick={() => deleteUnavailabilityBlock(block.id)} className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-50"><Trash2 className="h-3.5 w-3.5" />Remove</button>
+                  </div>
+                ))}
+              </div>
+            ) : <p className="p-5 text-sm text-slate-500">No blocks scheduled. Add one above.</p>}
+          </div>
         </section>
       ) : (
         <>
@@ -3558,6 +3650,13 @@ function AdminPortal({
   const [calendarLoadError, setCalendarLoadError] = useState('');
   const [calendarUrl, setCalendarUrl] = useState('');
   const [calendarWarnings, setCalendarWarnings] = useState([]);
+  const [calendarUnavailability, setCalendarUnavailability] = useState([]);
+  const [unavailabilityBlocks, setUnavailabilityBlocks] = useState([]);
+  const [isLoadingUnavailability, setIsLoadingUnavailability] = useState(false);
+  const [unavailabilityLoadError, setUnavailabilityLoadError] = useState('');
+  const [unavailabilityForm, setUnavailabilityForm] = useState({ scope: 'business', branchName: '', therapistName: '', date: new Date().toISOString().slice(0, 10), startTime: '12:00', endTime: '13:00', reason: '' });
+  const [isSavingUnavailability, setIsSavingUnavailability] = useState(false);
+  const [unavailabilitySaveError, setUnavailabilitySaveError] = useState('');
   const [patientHistory, setPatientHistory] = useState([]);
   const [selectedPatientHistory, setSelectedPatientHistory] = useState(null);
   const [isLoadingPatientHistory, setIsLoadingPatientHistory] = useState(false);
@@ -4387,6 +4486,7 @@ function AdminPortal({
       setCalendarEvents(data.events || []);
       setCalendarUrl(data.calendarUrl || '');
       setCalendarWarnings(data.errors || []);
+      setCalendarUnavailability(data.unavailability || []);
     } catch (error) {
       setCalendarLoadError(error.message || 'Unable to load Google Calendar events');
     } finally {
@@ -4397,6 +4497,62 @@ function AdminPortal({
   useEffect(() => {
     if (activeTab === 'calendar') loadCalendar();
   }, [activeTab, calendarDate, calendarBranch, calendarTherapist]);
+
+  const loadUnavailability = async () => {
+    setIsLoadingUnavailability(true);
+    setUnavailabilityLoadError('');
+    try {
+      const response = await fetch('/api/booking?view=unavailability');
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+      setUnavailabilityBlocks(data.blocks || []);
+    } catch (error) {
+      setUnavailabilityLoadError(error.message || 'Unable to load availability blocks');
+    } finally {
+      setIsLoadingUnavailability(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'availability') loadUnavailability();
+  }, [activeTab]);
+
+  const createUnavailabilityBlock = async (event) => {
+    event.preventDefault();
+    setIsSavingUnavailability(true);
+    setUnavailabilitySaveError('');
+    try {
+      const response = await fetch('/api/booking?view=unavailability', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(unavailabilityForm),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Unable to save this block.');
+      setUnavailabilityBlocks((current) => [data.block, ...current]);
+      setUnavailabilityForm((current) => ({ ...current, reason: '' }));
+    } catch (error) {
+      setUnavailabilitySaveError(error.message || 'Unable to save this block.');
+    } finally {
+      setIsSavingUnavailability(false);
+    }
+  };
+
+  const deleteUnavailabilityBlock = async (id) => {
+    setUnavailabilitySaveError('');
+    try {
+      const response = await fetch('/api/booking?view=unavailability-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Unable to remove this block.');
+      setUnavailabilityBlocks((current) => current.filter((block) => block.id !== id));
+    } catch (error) {
+      setUnavailabilitySaveError(error.message || 'Unable to remove this block.');
+    }
+  };
 
   const loadPatientHistory = async () => {
     setIsLoadingPatientHistory(true);
@@ -4461,6 +4617,7 @@ function AdminPortal({
     { id: 'services', label: 'Service catalogue', icon: Layers, section: 'Manage' },
     { id: 'staff', label: 'Staff', icon: Users, section: 'Manage' },
     { id: 'branches', label: 'Branches', icon: MapPin, section: 'Manage' },
+    { id: 'availability', label: 'Availability', icon: CalendarX, section: 'Manage' },
     { id: 'patient-history', label: 'Patients', icon: UserRound, section: 'Manage' },
     { id: 'business-profile', label: 'Business profile', icon: Building, section: 'Manage' },
     { id: 'loyalty', label: 'Loyalty program', icon: Award, section: 'Grow' },
@@ -4480,6 +4637,7 @@ function AdminPortal({
     services: t.services,
     staff: t.staff,
     branches: 'Branches',
+    availability: 'Availability',
     'patient-history': 'Patient Summary',
     'business-profile': 'Business profile',
   }[activeTab] || 'Owner dashboard';
@@ -4745,6 +4903,18 @@ function AdminPortal({
               Calendar access warning: {calendarWarnings.join(' · ')}
             </div>
           )}
+          {calendarUnavailability.length > 0 && (
+            <div className="p-3 bg-stone-100 border border-stone-300 text-stone-800 rounded-xl text-xs space-y-1.5">
+              <p className="font-bold uppercase tracking-wide text-stone-600">Blocked / unavailable this day</p>
+              {calendarUnavailability.map((block) => (
+                <p key={block.id} className="flex items-center gap-1.5">
+                  <CalendarX className="w-3.5 h-3.5 shrink-0 text-stone-500" />
+                  <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase ${block.scope === 'business' ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800'}`}>{block.scope === 'business' ? 'Business-wide' : block.therapistName}</span>
+                  {block.startTime}–{block.endTime}{block.reason ? ` · ${block.reason}` : ''}
+                </p>
+              ))}
+            </div>
+          )}
           {calendarUrl && (
             <a href={calendarUrl} target="_blank" rel="noreferrer" className="inline-flex text-xs font-semibold text-emerald-800 underline">
               Open the primary Google Calendar
@@ -4762,10 +4932,17 @@ function AdminPortal({
               {Array.from({ length: 12 }, (_, index) => index + 8).map((hour) => {
                 const hourLabel = new Date(2000, 0, 1, hour).toLocaleTimeString([], { hour: 'numeric' });
                 const hourEvents = calendarEvents.filter((event) => Number(event.localTime?.split(':')[0]) === hour);
+                const hourBlocks = calendarUnavailability.filter((block) => Number(block.startTime?.split(':')[0]) <= hour && Number(block.endTime?.split(':')[0]) > hour);
                 return (
                   <div key={hour} className="grid grid-cols-[72px_1fr] min-h-[58px] border-b border-stone-100">
                     <div className="p-2 text-[11px] text-stone-400 text-right border-r border-stone-100">{hourLabel}</div>
                     <div className="p-1.5 space-y-1">
+                      {hourBlocks.map((block) => (
+                        <div key={`block-${block.id}`} className="flex items-center gap-1.5 rounded-lg border-l-4 border-stone-400 bg-stone-100 px-3 py-2 text-xs text-stone-600">
+                          <CalendarX className="w-3.5 h-3.5 shrink-0" />
+                          <span>{block.scope === 'business' ? 'Business-wide unavailable' : `${block.therapistName} unavailable`}{block.reason ? ` · ${block.reason}` : ''}</span>
+                        </div>
+                      ))}
                       {hourEvents.map((event) => (
                         <button key={event.id} type="button" onClick={() => { setSelectedCalendarEvent(event); setIssuedReceipt(null); setReceiptError(''); setReceiptNotice(''); }} className={`block w-full rounded-lg border-l-4 px-3 py-2 text-left text-xs transition hover:brightness-95 ${getTherapistCalendarColor(event.therapistName, therapists).event}`}>
                           <div className={`font-bold flex items-center gap-1.5 ${getTherapistCalendarColor(event.therapistName, therapists).text}`}>
@@ -5067,6 +5244,79 @@ function AdminPortal({
             >
               {isSavingBranches ? 'Saving…' : 'Save branches'}
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* TAB CONTENT: AVAILABILITY */}
+      {activeTab === 'availability' && (
+        <div className="space-y-4">
+          <div className="bg-white rounded-2xl p-6 border border-stone-200 shadow-sm space-y-4">
+            <div>
+              <h2 className="text-lg font-bold text-stone-900">Availability</h2>
+              <p className="text-xs text-stone-500">Block off business-wide closures or a single therapist's breaks/time off. Blocks automatically stop new bookings and show up on the Booking Calendar and in the therapist portal.</p>
+            </div>
+            <form onSubmit={createUnavailabilityBlock} className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <label className="text-xs font-semibold text-stone-600">Scope
+                <select value={unavailabilityForm.scope} onChange={(e) => setUnavailabilityForm((current) => ({ ...current, scope: e.target.value, therapistName: e.target.value === 'business' ? '' : current.therapistName }))} className="mt-1 w-full rounded-lg border border-stone-300 px-3 py-2 text-sm">
+                  <option value="business">Business-wide closure</option>
+                  <option value="therapist">Single therapist</option>
+                </select>
+              </label>
+              <label className="text-xs font-semibold text-stone-600">Branch (optional)
+                <select value={unavailabilityForm.branchName} onChange={(e) => setUnavailabilityForm((current) => ({ ...current, branchName: e.target.value }))} className="mt-1 w-full rounded-lg border border-stone-300 px-3 py-2 text-sm">
+                  <option value="">All branches</option>
+                  {branches.map((branch) => <option key={branch.id} value={branch.address || branch.name}>{branch.name}</option>)}
+                </select>
+              </label>
+              {unavailabilityForm.scope === 'therapist' && (
+                <label className="text-xs font-semibold text-stone-600">Therapist
+                  <select required value={unavailabilityForm.therapistName} onChange={(e) => setUnavailabilityForm((current) => ({ ...current, therapistName: e.target.value }))} className="mt-1 w-full rounded-lg border border-stone-300 px-3 py-2 text-sm">
+                    <option value="">Select therapist</option>
+                    {therapists.map((therapist) => <option key={therapist.id} value={therapist.name}>{therapist.name}</option>)}
+                  </select>
+                </label>
+              )}
+              <label className="text-xs font-semibold text-stone-600">Date
+                <input type="date" required value={unavailabilityForm.date} onChange={(e) => setUnavailabilityForm((current) => ({ ...current, date: e.target.value }))} className="mt-1 w-full rounded-lg border border-stone-300 px-3 py-2 text-sm" />
+              </label>
+              <label className="text-xs font-semibold text-stone-600">Start time
+                <input type="time" required value={unavailabilityForm.startTime} onChange={(e) => setUnavailabilityForm((current) => ({ ...current, startTime: e.target.value }))} className="mt-1 w-full rounded-lg border border-stone-300 px-3 py-2 text-sm" />
+              </label>
+              <label className="text-xs font-semibold text-stone-600">End time
+                <input type="time" required value={unavailabilityForm.endTime} onChange={(e) => setUnavailabilityForm((current) => ({ ...current, endTime: e.target.value }))} className="mt-1 w-full rounded-lg border border-stone-300 px-3 py-2 text-sm" />
+              </label>
+              <label className="text-xs font-semibold text-stone-600 sm:col-span-2">Reason (optional)
+                <input type="text" value={unavailabilityForm.reason} onChange={(e) => setUnavailabilityForm((current) => ({ ...current, reason: e.target.value }))} placeholder="Holiday closure, staff training, break…" className="mt-1 w-full rounded-lg border border-stone-300 px-3 py-2 text-sm" />
+              </label>
+              <div className="flex items-end">
+                <button type="submit" disabled={isSavingUnavailability} className="w-full rounded-lg bg-emerald-800 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-900 disabled:opacity-50">{isSavingUnavailability ? 'Saving…' : 'Add block'}</button>
+              </div>
+            </form>
+            {unavailabilitySaveError && <p className="text-sm font-medium text-red-600">{unavailabilitySaveError}</p>}
+          </div>
+          <div className="bg-white rounded-2xl border border-stone-200 shadow-sm overflow-hidden">
+            <div className="px-6 py-4 border-b border-stone-100 flex items-center justify-between">
+              <h3 className="text-sm font-bold text-stone-900">Scheduled blocks</h3>
+              <button onClick={loadUnavailability} disabled={isLoadingUnavailability} className="text-xs font-semibold text-emerald-800 hover:underline disabled:opacity-50">Refresh</button>
+            </div>
+            {unavailabilityLoadError && <p className="px-6 py-3 text-sm text-red-600">{unavailabilityLoadError}</p>}
+            {unavailabilityBlocks.length ? (
+              <div className="divide-y divide-stone-100">
+                {unavailabilityBlocks.map((block) => (
+                  <div key={block.id} className="flex flex-wrap items-center justify-between gap-3 px-6 py-3">
+                    <div>
+                      <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${block.scope === 'business' ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800'}`}>{block.scope === 'business' ? 'Business-wide' : block.therapistName}</span>
+                      <p className="mt-1 text-sm font-semibold text-stone-800">{block.date} · {block.startTime}–{block.endTime} {block.branchName ? `· ${block.branchName}` : ''}</p>
+                      {block.reason && <p className="text-xs text-stone-500">{block.reason}</p>}
+                    </div>
+                    <button onClick={() => deleteUnavailabilityBlock(block.id)} className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-50"><Trash2 className="h-3.5 w-3.5" />Remove</button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="px-6 py-6 text-sm text-stone-500">{isLoadingUnavailability ? 'Loading…' : 'No blocks scheduled.'}</p>
+            )}
           </div>
         </div>
       )}

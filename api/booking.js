@@ -139,7 +139,6 @@ const LOYALTY_SHEETS = {
   LoyaltyMembers: ['Email', 'Name', 'Phone', 'Enrolled At', 'Updated At', 'Membership Type', 'Organization', 'Paid Through', 'Company ID', 'Company Contact Email', 'Is Primary Contact'],
   LoyaltyLedger: ['Transaction ID', 'Email', 'Booking ID', 'Type', 'Points', 'Reward Value', 'Description', 'Created At', 'Hours', 'Receipt No.'],
   LoyaltyCompanies: ['Organization', 'Company ID', 'Contact Email', 'Access Token', 'Created At', 'Updated At'],
-  SquarePayments: ['Payment Link ID', 'Order ID', 'Booking ID', 'Amount', 'Status', 'Email', 'Created At', 'Purpose', 'Square Payment ID'],
 };
 const MARKETING_CONTACT_HEADERS = [
   'Email',
@@ -339,6 +338,136 @@ async function bqDeleteBookingRow(bigquery, bookingId) {
   });
 }
 // --- end BigQuery-backed booking records ----------------------------------
+
+// --- BigQuery-backed Square payment records ---------------------------------
+// Square payment link/checkout records (formerly the SquarePayments sheet tab)
+// are stored in a typed BigQuery table since payment volume is expected to
+// grow much larger than the booking table. Same design conventions as the
+// bookings table above (query-based INSERT to avoid the streaming buffer,
+// STRING-typed timestamps).
+const BIGQUERY_SQUARE_PAYMENTS_TABLE = process.env.BIGQUERY_SQUARE_PAYMENTS_TABLE || 'square_payments';
+const SQUARE_PAYMENT_TABLE_FIELDS = [
+  { name: 'payment_link_id', type: 'STRING', mode: 'REQUIRED' },
+  { name: 'order_id', type: 'STRING' },
+  { name: 'booking_id', type: 'STRING' },
+  { name: 'amount', type: 'FLOAT64' },
+  { name: 'status', type: 'STRING' },
+  { name: 'email', type: 'STRING' },
+  { name: 'created_at', type: 'STRING' },
+  { name: 'purpose', type: 'STRING' },
+  { name: 'square_payment_id', type: 'STRING' },
+];
+
+function squarePaymentsTableRef() {
+  return `\`${BIGQUERY_PROJECT_ID}.${BIGQUERY_DATASET_ID}.${BIGQUERY_SQUARE_PAYMENTS_TABLE}\``;
+}
+
+let ensureSquarePaymentsTablePromise = null;
+async function ensureSquarePaymentsTable(bigquery) {
+  if (!ensureSquarePaymentsTablePromise) {
+    ensureSquarePaymentsTablePromise = (async () => {
+      const dataset = bigquery.dataset(BIGQUERY_DATASET_ID);
+      const [datasetExists] = await dataset.exists();
+      if (!datasetExists) {
+        try {
+          await bigquery.createDataset(BIGQUERY_DATASET_ID, { location: process.env.BIGQUERY_LOCATION || 'US' });
+        } catch (error) {
+          const [existsNow] = await dataset.exists();
+          if (!existsNow) throw error;
+        }
+      }
+      const table = dataset.table(BIGQUERY_SQUARE_PAYMENTS_TABLE);
+      const [tableExists] = await table.exists();
+      if (!tableExists) {
+        const schema = SQUARE_PAYMENT_TABLE_FIELDS.map(({ name, type, mode }) => ({ name, type, mode: mode || 'NULLABLE' }));
+        try {
+          await dataset.createTable(BIGQUERY_SQUARE_PAYMENTS_TABLE, { schema });
+        } catch (error) {
+          const [existsNow] = await table.exists();
+          if (!existsNow) throw error;
+        }
+      }
+    })().catch((error) => {
+      ensureSquarePaymentsTablePromise = null;
+      throw error;
+    });
+  }
+  return ensureSquarePaymentsTablePromise;
+}
+
+function squarePaymentRecordFromRow(record) {
+  return {
+    paymentLinkId: record.payment_link_id || '',
+    orderId: record.order_id || '',
+    bookingId: record.booking_id || '',
+    amount: Number(record.amount) || 0,
+    status: record.status || '',
+    email: record.email || '',
+    createdAt: record.created_at || '',
+    purpose: record.purpose || '',
+    squarePaymentId: record.square_payment_id || '',
+  };
+}
+
+async function bqInsertSquarePayment(bigquery, payment) {
+  await ensureSquarePaymentsTable(bigquery);
+  const params = {
+    payment_link_id: payment.paymentLinkId || '',
+    order_id: payment.orderId || '',
+    booking_id: payment.bookingId || '',
+    amount: Number(payment.amount) || 0,
+    status: payment.status || '',
+    email: payment.email || '',
+    created_at: payment.createdAt || new Date().toISOString(),
+    purpose: payment.purpose || '',
+    square_payment_id: payment.squarePaymentId || '',
+  };
+  const columnNames = Object.keys(params);
+  await bigquery.query({
+    query: `INSERT INTO ${squarePaymentsTableRef()} (${columnNames.join(', ')}) VALUES (${columnNames.map((name) => `@${name}`).join(', ')})`,
+    params,
+  });
+}
+
+async function bqFindSquarePaymentByOrderId(bigquery, orderId) {
+  await ensureSquarePaymentsTable(bigquery);
+  const [rows] = await bigquery.query({
+    query: `SELECT * FROM ${squarePaymentsTableRef()} WHERE order_id = @order_id ORDER BY created_at DESC LIMIT 1`,
+    params: { order_id: orderId },
+  });
+  return rows[0] ? squarePaymentRecordFromRow(rows[0]) : null;
+}
+
+async function bqFindCompletedSquarePaymentsByBookingId(bigquery, bookingId) {
+  await ensureSquarePaymentsTable(bigquery);
+  const [rows] = await bigquery.query({
+    query: `SELECT * FROM ${squarePaymentsTableRef()} WHERE booking_id = @booking_id AND status = 'COMPLETED' AND square_payment_id IS NOT NULL AND square_payment_id != ''`,
+    params: { booking_id: bookingId },
+  });
+  return rows.map(squarePaymentRecordFromRow);
+}
+
+// fields uses the same camelCase keys as squarePaymentRecordFromRow.
+async function bqUpdateSquarePaymentByOrderId(bigquery, orderId, fields) {
+  await ensureSquarePaymentsTable(bigquery);
+  const fieldNameMap = {
+    status: 'status', email: 'email', createdAt: 'created_at', purpose: 'purpose', squarePaymentId: 'square_payment_id',
+  };
+  const entries = Object.entries(fields).map(([prop, value]) => {
+    const column = fieldNameMap[prop];
+    if (!column) throw new Error(`Unknown square payment field: ${prop}`);
+    return { column, value };
+  });
+  if (!entries.length) return;
+  const setClauses = entries.map(({ column }) => `${column} = @set_${column}`);
+  const params = { where_order_id: orderId };
+  entries.forEach(({ column, value }) => { params[`set_${column}`] = value === null || value === undefined ? '' : String(value); });
+  await bigquery.query({
+    query: `UPDATE ${squarePaymentsTableRef()} SET ${setClauses.join(', ')} WHERE order_id = @where_order_id`,
+    params,
+  });
+}
+// --- end BigQuery-backed Square payment records -----------------------------
 
 function parseCookies(req) {
   return Object.fromEntries((req.headers.cookie || '').split(';').filter(Boolean).map((part) => {
@@ -801,6 +930,83 @@ async function getBusinessProfile(sheets) {
     field,
     row[index] === undefined ? DEFAULT_BUSINESS_PROFILE[field] : row[index],
   ]));
+}
+
+// --- Therapist / business unavailability blocks ----------------------------
+// Owner-configurable "Availability" tab (business-wide closures/holidays) and
+// therapist self-service breaks/day-off blocks, stored in an Unavailability
+// sheet alongside Branches/Services/Therapists. These are checked against
+// new bookings (server-side) and surfaced in the owner Booking Calendar.
+const UNAVAILABILITY_HEADERS = ['Block ID', 'Scope', 'Branch', 'Therapist', 'Date', 'Start Time', 'End Time', 'Reason', 'Created By', 'Created At'];
+async function ensureUnavailabilitySheet(sheets) {
+  const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
+  if (!spreadsheetId) throw new Error('GOOGLE_SPREADSHEET_ID is not configured');
+  const spreadsheet = await sheets.spreadsheets.get({
+    spreadsheetId,
+    fields: 'sheets.properties',
+  });
+  const exists = (spreadsheet.data.sheets || [])
+    .some((sheet) => sheet.properties?.title === 'Unavailability');
+  if (!exists) {
+    try {
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: { requests: [{ addSheet: { properties: { title: 'Unavailability' } } }] },
+      });
+    } catch (error) {
+      const refreshed = await sheets.spreadsheets.get({
+        spreadsheetId,
+        fields: 'sheets.properties',
+      });
+      const createdByConcurrentRequest = (refreshed.data.sheets || [])
+        .some((sheet) => sheet.properties?.title === 'Unavailability');
+      if (!createdByConcurrentRequest) throw error;
+    }
+  }
+  const header = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: 'Unavailability!A1:J1',
+  });
+  if (!header.data.values?.[0]?.length) {
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: 'Unavailability!A1:J1',
+      valueInputOption: 'RAW',
+      requestBody: { values: [UNAVAILABILITY_HEADERS] },
+    });
+  }
+}
+
+async function getUnavailabilityBlocks(sheets) {
+  await ensureUnavailabilitySheet(sheets);
+  const result = await sheets.spreadsheets.values.get({
+    spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+    range: 'Unavailability!A:J',
+  });
+  const rows = result.data.values || [];
+  const startIndex = rows[0]?.[0] === 'Block ID' ? 1 : 0;
+  return rows.slice(startIndex).filter((row) => row[0]).map((row) => ({
+    id: row[0] || '',
+    scope: row[1] || 'business',
+    branchName: row[2] || '',
+    therapistName: row[3] || '',
+    date: row[4] || '',
+    startTime: row[5] || '',
+    endTime: row[6] || '',
+    reason: row[7] || '',
+    createdBy: row[8] || '',
+    createdAt: row[9] || '',
+  }));
+}
+
+// True when a block's [date startTime, date endTime) window overlaps the
+// given ISO-with-offset instant window (matching hasTimeOverlap's format).
+function blockOverlapsWindow(block, date, startInstant, endInstant) {
+  if (block.date !== date) return false;
+  if (!/^\d{2}:\d{2}$/.test(block.startTime) || !/^\d{2}:\d{2}$/.test(block.endTime)) return false;
+  const blockStart = `${block.date}T${block.startTime}:00-04:00`;
+  const blockEnd = `${block.date}T${block.endTime}:00-04:00`;
+  return hasTimeOverlap(startInstant, endInstant, blockStart, blockEnd);
 }
 
 async function ensureBranchesSheet(sheets) {
@@ -2660,19 +2866,19 @@ export default async function handler(req, res) {
     }
 
     const view = String(req.query?.view || '');
-    const validGetViews = ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'business-name', 'square-config', 'google-reviews', 'branches', 'services', 'therapists', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal', 'find-booking'];
+    const validGetViews = ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'business-name', 'square-config', 'google-reviews', 'branches', 'services', 'therapists', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal', 'find-booking', 'availability', 'unavailability'];
     if (req.method === 'GET' && !validGetViews.includes(view)) {
       return res.status(404).json({ message: 'Unknown booking view' });
     }
     const ownerOnlyRequest =
-      (req.method === 'GET' && ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'google-ads-report', 'loyalty-dashboard', 'google-reviews'].includes(view)) ||
-      ['business-profile', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-link'].includes(view) ||
-      (req.method === 'POST' && ['branches', 'services', 'therapists'].includes(view));
+      (req.method === 'GET' && ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'google-ads-report', 'loyalty-dashboard', 'google-reviews', 'unavailability'].includes(view)) ||
+      ['business-profile', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-link', 'unavailability-delete'].includes(view) ||
+      (req.method === 'POST' && ['branches', 'services', 'therapists', 'unavailability'].includes(view));
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
     if (ownerOnlyRequest && !getOwnerSession(req)) {
       return res.status(401).json({ message: 'Owner sign-in required' });
     }
-    if (['business-profile', 'branches', 'services', 'therapists', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-signup', 'company-portal-bulk-signup', 'company-portal-link', 'square-create-checkout', 'cancel-booking', 'reschedule-booking'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
+    if (['business-profile', 'branches', 'services', 'therapists', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-signup', 'company-portal-bulk-signup', 'company-portal-link', 'square-create-checkout', 'cancel-booking', 'reschedule-booking', 'unavailability', 'unavailability-delete'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
       return res.status(403).json({ message: 'Profile update origin is not allowed' });
     }
 
@@ -2756,6 +2962,163 @@ export default async function handler(req, res) {
       } catch (validationError) {
         return res.status(400).json({ message: validationError.message || 'Unable to save therapists' });
       }
+    }
+
+    if (req.method === 'GET' && view === 'availability') {
+      res.setHeader('Cache-Control', 'no-store');
+      const date = String(req.query?.date || '').trim();
+      const branchName = String(req.query?.branch || '').trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return res.status(400).json({ message: 'A valid date is required' });
+      }
+      const blocks = (await getUnavailabilityBlocks(sheets))
+        .filter((block) => block.date === date)
+        .filter((block) => block.scope !== 'business' || !branchName || !block.branchName || block.branchName === branchName)
+        .map((block) => ({
+          scope: block.scope,
+          branchName: block.branchName,
+          therapistName: block.therapistName,
+          startTime: block.startTime,
+          endTime: block.endTime,
+          reason: block.reason,
+        }));
+      return res.status(200).json({ date, blocks });
+    }
+
+    if (req.method === 'GET' && view === 'unavailability') {
+      res.setHeader('Cache-Control', 'no-store');
+      const blocks = await getUnavailabilityBlocks(sheets);
+      return res.status(200).json({ blocks: blocks.sort((a, b) => `${b.date} ${b.startTime}`.localeCompare(`${a.date} ${a.startTime}`)) });
+    }
+
+    if (req.method === 'POST' && view === 'unavailability') {
+      const scope = req.body?.scope === 'therapist' ? 'therapist' : 'business';
+      const branchName = String(req.body?.branchName || '').trim();
+      const therapistName = String(req.body?.therapistName || '').trim();
+      const date = String(req.body?.date || '').trim();
+      const startTime = String(req.body?.startTime || '').trim();
+      const endTime = String(req.body?.endTime || '').trim();
+      const reason = String(req.body?.reason || '').trim().slice(0, 500);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return res.status(400).json({ message: 'Choose a valid date' });
+      }
+      if (!/^\d{2}:\d{2}$/.test(startTime) || !/^\d{2}:\d{2}$/.test(endTime) || startTime >= endTime) {
+        return res.status(400).json({ message: 'Choose a valid start and end time (end must be after start)' });
+      }
+      if (scope === 'therapist' && !therapistName) {
+        return res.status(400).json({ message: 'Choose which therapist this block applies to' });
+      }
+      await ensureUnavailabilitySheet(sheets);
+      const block = {
+        id: crypto.randomUUID(),
+        scope,
+        branchName: scope === 'business' ? branchName : '',
+        therapistName: scope === 'therapist' ? therapistName : '',
+        date,
+        startTime,
+        endTime,
+        reason,
+        createdBy: 'owner',
+        createdAt: new Date().toISOString(),
+      };
+      await sheets.spreadsheets.values.append({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: 'Unavailability!A:J',
+        valueInputOption: 'RAW',
+        requestBody: { values: [[
+          block.id, block.scope, block.branchName, block.therapistName, block.date, block.startTime, block.endTime, block.reason, block.createdBy, block.createdAt,
+        ]] },
+      });
+      return res.status(201).json({ block });
+    }
+
+    if (req.method === 'POST' && view === 'unavailability-delete') {
+      const id = String(req.body?.id || '').trim();
+      if (!id) return res.status(400).json({ message: 'A block ID is required' });
+      const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
+      const result = await sheets.spreadsheets.values.get({ spreadsheetId, range: 'Unavailability!A:J' });
+      const rows = result.data.values || [];
+      const startIndex = rows[0]?.[0] === 'Block ID' ? 1 : 0;
+      const rowIndex = rows.findIndex((row, index) => index >= startIndex && row[0] === id);
+      if (rowIndex < 0) return res.status(404).json({ message: 'Block was not found' });
+      await deleteSheetRows(sheets, 'Unavailability', [rowIndex + 1]);
+      return res.status(200).json({ deleted: true, id });
+    }
+
+    if (req.method === 'POST' && view === 'therapist-unavailability') {
+      if (!isSameOriginRequest(req)) {
+        return res.status(403).json({ message: 'Request origin is not allowed' });
+      }
+      const session = getTherapistSession(req);
+      if (!session) return res.status(401).json({ message: 'Therapist sign-in required' });
+      const date = String(req.body?.date || '').trim();
+      const startTime = String(req.body?.startTime || '').trim();
+      const endTime = String(req.body?.endTime || '').trim();
+      const reason = String(req.body?.reason || '').trim().slice(0, 500);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return res.status(400).json({ message: 'Choose a valid date' });
+      }
+      if (!/^\d{2}:\d{2}$/.test(startTime) || !/^\d{2}:\d{2}$/.test(endTime) || startTime >= endTime) {
+        return res.status(400).json({ message: 'Choose a valid start and end time (end must be after start)' });
+      }
+      const accountsResult = await sheets.spreadsheets.values.get({
+        spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+        range: 'TherapistAccounts!A:F',
+      }).catch(() => ({ data: { values: [] } }));
+      const sheetAccount = (accountsResult.data.values || []).slice(1)
+        .map((row) => ({ id: row[0], name: row[2], status: row[4] }))
+        .find((item) => item.id === session.therapistId && item.status === 'approved');
+      const account = sheetAccount || getTherapistAccounts().find((item) => item.id === session.therapistId);
+      if (!account) return res.status(401).json({ message: 'Therapist account is not available' });
+      await ensureUnavailabilitySheet(sheets);
+      const block = {
+        id: crypto.randomUUID(),
+        scope: 'therapist',
+        branchName: '',
+        therapistName: account.name,
+        date,
+        startTime,
+        endTime,
+        reason,
+        createdBy: account.name,
+        createdAt: new Date().toISOString(),
+      };
+      await sheets.spreadsheets.values.append({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: 'Unavailability!A:J',
+        valueInputOption: 'RAW',
+        requestBody: { values: [[
+          block.id, block.scope, block.branchName, block.therapistName, block.date, block.startTime, block.endTime, block.reason, block.createdBy, block.createdAt,
+        ]] },
+      });
+      return res.status(201).json({ block });
+    }
+
+    if (req.method === 'POST' && view === 'therapist-unavailability-delete') {
+      if (!isSameOriginRequest(req)) {
+        return res.status(403).json({ message: 'Request origin is not allowed' });
+      }
+      const session = getTherapistSession(req);
+      if (!session) return res.status(401).json({ message: 'Therapist sign-in required' });
+      const id = String(req.body?.id || '').trim();
+      if (!id) return res.status(400).json({ message: 'A block ID is required' });
+      const accountsResult = await sheets.spreadsheets.values.get({
+        spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+        range: 'TherapistAccounts!A:F',
+      }).catch(() => ({ data: { values: [] } }));
+      const sheetAccount = (accountsResult.data.values || []).slice(1)
+        .map((row) => ({ id: row[0], name: row[2], status: row[4] }))
+        .find((item) => item.id === session.therapistId && item.status === 'approved');
+      const account = sheetAccount || getTherapistAccounts().find((item) => item.id === session.therapistId);
+      if (!account) return res.status(401).json({ message: 'Therapist account is not available' });
+      const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
+      const result = await sheets.spreadsheets.values.get({ spreadsheetId, range: 'Unavailability!A:J' });
+      const rows = result.data.values || [];
+      const startIndex = rows[0]?.[0] === 'Block ID' ? 1 : 0;
+      const rowIndex = rows.findIndex((row, index) => index >= startIndex && row[0] === id && row[3] === account.name);
+      if (rowIndex < 0) return res.status(404).json({ message: 'Block was not found for your account' });
+      await deleteSheetRows(sheets, 'Unavailability', [rowIndex + 1]);
+      return res.status(200).json({ deleted: true, id });
     }
 
     if (req.method === 'GET' && view === 'loyalty-program') {
@@ -4428,6 +4791,9 @@ export default async function handler(req, res) {
         }));
       const rosterEntry = roster.find((item) => String(item.name || '').trim().toLowerCase() === String(account.name || '').trim().toLowerCase());
       const branchById = new Map(allBranches.map((branch) => [Number(branch.id), branch.name]));
+      const myUnavailability = (await getUnavailabilityBlocks(sheets))
+        .filter((block) => block.scope === 'therapist' && block.therapistName === account.name)
+        .sort((a, b) => `${b.date} ${b.startTime}`.localeCompare(`${a.date} ${a.startTime}`));
       const weeklySchedule = WEEKDAY_KEYS.map((dayKey) => {
         const branchId = rosterEntry?.schedule?.[dayKey];
         return { day: dayKey, branchId: branchId || null, branchName: branchId ? (branchById.get(Number(branchId)) || null) : null };
@@ -4455,6 +4821,7 @@ export default async function handler(req, res) {
         calendarEvents,
         calendarDate,
         calendarView,
+        myUnavailability,
         profile: {
           branchNames,
           attendedHours,
@@ -4740,12 +5107,27 @@ export default async function handler(req, res) {
           await bqAppendBookingRows(bigquery, pendingAutoLinks);
         }
 
+        const unavailability = (await getUnavailabilityBlocks(sheets))
+          .filter((block) => block.date === date)
+          .filter((block) => block.scope !== 'business' || !branch || !block.branchName || block.branchName.toLowerCase() === branch)
+          .filter((block) => block.scope !== 'therapist' || !therapist || block.therapistName.toLowerCase() === therapist)
+          .map((block) => ({
+            id: block.id,
+            scope: block.scope,
+            branchName: block.branchName,
+            therapistName: block.therapistName,
+            startTime: block.startTime,
+            endTime: block.endTime,
+            reason: block.reason,
+          }));
+
         return res.status(200).json({
           date,
           calendarId: PRIMARY_CALENDAR_ID,
           calendarUrl: `https://calendar.google.com/calendar/u/0/r?cid=${encodeURIComponent(PRIMARY_CALENDAR_ID)}`,
           events,
           errors: calendarErrors,
+          unavailability,
         });
       }
 
@@ -4906,21 +5288,16 @@ export default async function handler(req, res) {
       if (!paymentLink?.url) {
         return res.status(502).json({ message: 'Square did not return a payment link. Please try again.' });
       }
-      await sheets.spreadsheets.values.append({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'SquarePayments!A:I',
-        valueInputOption: 'RAW',
-        requestBody: { values: [[
-          paymentLink.id || '',
-          paymentLink.order_id || '',
-          bookingId,
-          requestedAmount,
-          'PENDING',
-          email,
-          new Date().toISOString(),
-          purpose,
-          '',
-        ]] },
+      await bqInsertSquarePayment(getBigQueryClient(), {
+        paymentLinkId: paymentLink.id || '',
+        orderId: paymentLink.order_id || '',
+        bookingId,
+        amount: requestedAmount,
+        status: 'PENDING',
+        email,
+        createdAt: new Date().toISOString(),
+        purpose,
+        squarePaymentId: '',
       });
       return res.status(200).json({
         url: paymentLink.url,
@@ -4951,34 +5328,26 @@ export default async function handler(req, res) {
       }
       const orderId = String(paymentObject.order_id || '');
       const squarePaymentId = String(paymentObject.id || '');
-      const paymentsResult = await sheets.spreadsheets.values.get({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'SquarePayments!A:I',
-      });
-      const paymentRows = paymentsResult.data.values || [];
-      const paymentRowIndex = paymentRows.findIndex((row, index) => index > 0 && orderId && String(row[1] || '') === orderId);
-      if (paymentRowIndex < 0) {
+      const bigquery = getBigQueryClient();
+      const paymentRecord = await bqFindSquarePaymentByOrderId(bigquery, orderId);
+      if (!paymentRecord) {
         // Unknown or already-cleaned-up payment link; acknowledge so Square stops retrying.
         return res.status(200).json({ received: true, matched: false });
       }
-      const paymentRow = paymentRows[paymentRowIndex];
-      if (String(paymentRow[4] || '') === 'COMPLETED') {
+      if (paymentRecord.status === 'COMPLETED') {
         return res.status(200).json({ received: true, alreadyProcessed: true });
       }
-      const bookingId = String(paymentRow[2] || '');
-      const amountPaid = Number(paymentRow[3]) || 0;
-      const payerEmail = String(paymentRow[5] || '').trim();
-      const paymentRowNumber = paymentRowIndex + 1;
-      await sheets.spreadsheets.values.update({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: `SquarePayments!E${paymentRowNumber}:I${paymentRowNumber}`,
-        valueInputOption: 'RAW',
-        requestBody: { values: [[
-          'COMPLETED', payerEmail, paymentRow[6] || new Date().toISOString(), paymentRow[7] || '', squarePaymentId,
-        ]] },
+      const bookingId = paymentRecord.bookingId;
+      const amountPaid = paymentRecord.amount;
+      const payerEmail = paymentRecord.email.trim();
+      await bqUpdateSquarePaymentByOrderId(bigquery, orderId, {
+        status: 'COMPLETED',
+        email: payerEmail,
+        createdAt: paymentRecord.createdAt || new Date().toISOString(),
+        purpose: paymentRecord.purpose || '',
+        squarePaymentId,
       });
 
-      const bigquery = getBigQueryClient();
       const bookingResult = await bqFetchBookingRows(bigquery);
       const bookingRows = bookingResult.data.values || [];
       const bookingRowIndex = bookingRows.findIndex((row, index) => index > 0 && String(row[0] || '') === bookingId);
@@ -5326,13 +5695,8 @@ export default async function handler(req, res) {
       if (refundEligible && paidAmount > 0) {
         let squarePaymentIds = [];
         try {
-          const paymentsResult = await sheets.spreadsheets.values.get({
-            spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-            range: 'SquarePayments!A:I',
-          });
-          squarePaymentIds = (paymentsResult.data.values || []).slice(1)
-            .filter((paymentRow) => String(paymentRow[2] || '') === bookingId && String(paymentRow[4] || '') === 'COMPLETED' && paymentRow[8])
-            .map((paymentRow) => ({ paymentId: paymentRow[8], amount: Number(paymentRow[3]) || 0 }));
+          const completedPayments = await bqFindCompletedSquarePaymentsByBookingId(bigquery, bookingId);
+          squarePaymentIds = completedPayments.map((paymentRow) => ({ paymentId: paymentRow.squarePaymentId, amount: paymentRow.amount }));
         } catch (error) {
           console.error('Cancel booking Square lookup error:', error.message || error);
         }
@@ -5559,21 +5923,37 @@ export default async function handler(req, res) {
     const endDateTime = addMinutes(startDateTime, durationMinutes);
     const startInstant = `${startDateTime}-04:00`;
     const endInstant = `${endDateTime}-04:00`;
+
+    const unavailabilityBlocks = await getUnavailabilityBlocks(sheets);
+    const overlappingBlocks = unavailabilityBlocks.filter((block) => blockOverlapsWindow(block, payload.date, startInstant, endInstant));
+    const businessBlock = overlappingBlocks.find((block) =>
+      block.scope === 'business' && (!block.branchName || block.branchName === payload.branchName),
+    );
+    if (businessBlock) {
+      return res.status(409).json({
+        message: `This time is not available for booking${businessBlock.reason ? ` (${businessBlock.reason})` : ''}. Please choose another time.`,
+      });
+    }
+    const blockedTherapistNames = new Set(
+      overlappingBlocks.filter((block) => block.scope === 'therapist').map((block) => block.therapistName),
+    );
+
     const dayEvents = await calendarApi.events.list({
       calendarId,
       timeMin: `${payload.date}T00:00:00Z`,
       timeMax: `${payload.date}T23:59:59Z`,
       singleEvents: true,
     });
-    const busyTherapists = new Set(
-      (dayEvents.data.items || [])
+    const busyTherapists = new Set([
+      ...blockedTherapistNames,
+      ...(dayEvents.data.items || [])
         .filter((event) => {
           const eventStart = event.start?.dateTime || event.start?.date || '';
           const eventEnd = event.end?.dateTime || event.end?.date || '';
           return eventStart && eventEnd && hasTimeOverlap(startInstant, endInstant, eventStart, eventEnd);
         })
         .flatMap((event) => getTherapistFromDescription(event.description).split(',').map((name) => name.trim()).filter(Boolean)),
-    );
+    ]);
     const candidates = Array.isArray(payload.therapistCandidates) ? payload.therapistCandidates : [];
     const availableCandidates = candidates.filter((name) => !busyTherapists.has(name));
     const assignedNames = [];

@@ -48,6 +48,7 @@ Configure these Vercel environment variables before using it:
   `my-thai-thai-booking-system`)
 - `BIGQUERY_DATASET` (optional; defaults to `booking_system`)
 - `BIGQUERY_BOOKINGS_TABLE` (optional; defaults to `bookings`)
+- `BIGQUERY_SQUARE_PAYMENTS_TABLE` (optional; defaults to `square_payments`)
 - `BIGQUERY_LOCATION` (optional; defaults to `US`)
 
 Share the Google Sheet with the service account email as an Editor. Enable the
@@ -58,38 +59,41 @@ the primary calendar with `GOOGLE_PRIMARY_CALENDAR_ID`.
 ## Booking records in BigQuery
 
 Booking records (customer name, service, therapist, date/time, payment,
-receipt, cancellation status, etc.) are stored in a typed **BigQuery** table
-rather than a Google Sheets tab. Every other data set used by this app
-(branches, services, therapists, loyalty program, patient history, Square
-payments, marketing contacts) remains in Google Sheets and is unaffected by
-this section.
+receipt, cancellation status, etc.) and Square payment link/checkout records
+are stored in typed **BigQuery** tables rather than Google Sheets tabs. Every
+other data set used by this app (branches, services, therapists, loyalty
+program, patient history, marketing contacts, availability blocks) remains in
+Google Sheets and is unaffected by this section.
 
 Enable the **BigQuery API** in the same Google Cloud project used for Sheets
 and Calendar, and grant the existing service account
 (`GOOGLE_SERVICE_ACCOUNT_EMAIL`) these IAM roles on that project:
 
-- `BigQuery Data Editor` (create/read/write the dataset and table)
+- `BigQuery Data Editor` (create/read/write the dataset and tables)
 - `BigQuery Job User` (run queries)
 
 Set `BIGQUERY_PROJECT_ID` (or reuse `GOOGLE_CLOUD_PROJECT` if already set) to
 the Google Cloud project ID, e.g. `my-thai-thai-booking-system`. The dataset
-(`BIGQUERY_DATASET`, default `booking_system`) and table
-(`BIGQUERY_BOOKINGS_TABLE`, default `bookings`) are **created automatically**
-on first use — no manual DDL is required. If your project is on **BigQuery
-Sandbox** (no billing account linked), link a billing account first: Sandbox
-datasets/tables auto-expire after 60 days of inactivity and have tighter
-query/DML quotas.
+(`BIGQUERY_DATASET`, default `booking_system`) and tables
+(`BIGQUERY_BOOKINGS_TABLE`, default `bookings`; `BIGQUERY_SQUARE_PAYMENTS_TABLE`,
+default `square_payments`) are **created automatically** on first use — no
+manual DDL is required. If your project is on **BigQuery Sandbox** (no
+billing account linked), link a billing account first: Sandbox datasets/tables
+auto-expire after 60 days of inactivity and have tighter query/DML quotas.
 
-Note: `date`, `time`, `created_at`, and `receipt_issued_at` are stored as plain
-`STRING` columns (not BigQuery `DATE`/`TIMESTAMP` types) on purpose, so the
-existing date/time parsing and formatting code in `api/booking.js` keeps
-working unchanged without adapting to the BigQuery client library's temporal
-wrapper objects.
+Note: all timestamp columns (`date`, `time`, `created_at`,
+`receipt_issued_at`, etc.) are stored as plain `STRING` columns (not BigQuery
+`DATE`/`TIMESTAMP` types) on purpose, so the existing date/time parsing and
+formatting code in `api/booking.js` keeps working unchanged without adapting
+to the BigQuery client library's temporal wrapper objects. Square payment
+records are looked up and updated by `order_id` (the identifier Square's
+webhook payload provides) and are separately queried by `booking_id` for the
+refund lookup used during self-service cancellation.
 
-This migration only affects **new** bookings going forward — no historical
-data was migrated. Older bookings remain archived in the original `Sheet1` tab
-of the Google Sheet for reference, but the app no longer reads from or writes
-to that tab.
+This migration only affects **new** bookings/payments going forward — no
+historical data was migrated. Older records remain archived in the original
+`Sheet1` and `SquarePayments` tabs of the Google Sheet for reference, but the
+app no longer reads from or writes to those tabs.
 
 Booking confirmation emails are sent through Gmail API using OAuth authorization
 granted by the sender mailbox owner. This works with a regular Gmail mailbox;
@@ -196,6 +200,38 @@ Setup steps:
 
 If Square is not configured, the payment button is hidden and the app behaves
 exactly as before (pay-at-clinic / manually marked-paid bookings).
+
+## Therapist and business availability blocks
+
+The owner dashboard has an **Availability** tab (under **Manage**) for
+blocking off time so it can't be booked:
+
+- **Business-wide closures** — block a time window for every therapist,
+  optionally scoped to one branch (e.g. a holiday closure or an all-staff
+  training session).
+- **Single-therapist blocks** — block a time window for one named therapist
+  only (e.g. a lunch break or a day off), leaving other therapists bookable.
+
+Therapists can also self-manage their own blocks from a **My availability**
+panel in the therapist portal, without needing owner access.
+
+Blocks are enforced automatically:
+
+- New booking submissions that overlap a **business-wide** block are rejected
+  with a 409 error (the block's reason, if set, is shown to the customer).
+- New booking submissions that overlap a **therapist-specific** block skip
+  that therapist during automatic assignment (falling back to another
+  available therapist, or rejecting the booking if none are free), the same
+  way an existing calendar conflict is handled.
+- The owner **Booking Calendar** tab shows blocks inline in the hourly grid
+  and in a summary banner for the selected day.
+- The therapist dashboard's calendar/agenda reflects the therapist's own
+  blocks automatically.
+
+Blocks are stored in a new `Unavailability` tab in the Google Sheet (created
+automatically on first use, following the same pattern as `Branches` and
+`Services`) — this is low-volume configuration data, so it intentionally stays
+in Sheets rather than moving to BigQuery.
 
 ## Google Reviews
 
@@ -380,7 +416,7 @@ booking reference (`MTT-XXXXXX`) and the email used at booking:
 
 - **Cancel ≥ 24 hours before the appointment**: any payment made is
   automatically refunded through Square when the booking was paid via Square
-  Checkout (looked up from the `SquarePayments` sheet); cash/e-transfer/in-clinic
+  Checkout (looked up from the `square_payments` BigQuery table); cash/e-transfer/in-clinic
   payments are flagged in `StatusNotes` as "refund owed — manual" for staff to
   process.
 - **Cancel < 24 hours before the appointment**: no refund is issued.
