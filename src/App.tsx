@@ -3056,7 +3056,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
               >
                 {isSubmitting ? (
                   <>
-                    <RefreshCw className="w-4 h-4 mr-2 animate-spin" /> Saving & Syncing to Google Sheets...
+                    <RefreshCw className="w-4 h-4 mr-2 animate-spin" /> Saving & Syncing to the database...
                   </>
                 ) : (
                   <>
@@ -3084,30 +3084,30 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
             {sheetsSyncStatus === 'success' && (
               <div className="inline-flex items-center space-x-2 bg-emerald-50 border border-emerald-300 text-emerald-800 px-4 py-1.5 rounded-full text-xs font-semibold">
                 <Database className="w-4 h-4 text-emerald-600" />
-                <span>Saved to Google Sheets, Google Calendar, and confirmation email sent</span>
+                <span>Saved to the database, Google Calendar, and confirmation email sent</span>
               </div>
             )}
             {sheetsSyncStatus === 'not_configured' && (
               <div className="inline-flex items-center space-x-2 bg-amber-50 border border-amber-300 text-amber-800 px-4 py-1.5 rounded-full text-xs">
                 <AlertCircle className="w-4 h-4 text-amber-600" />
-                <span>Saved locally. Google Sheets and Calendar sync is not configured.</span>
+                <span>Saved locally. Database and Calendar sync is not configured.</span>
               </div>
             )}
             {sheetsSyncStatus === 'failed' && (
               <div className="inline-flex flex-col items-center space-y-1 bg-red-50 border border-red-300 text-red-800 px-4 py-2 rounded-xl text-xs">
-                <span className="font-semibold">Saved locally, but Google Sheets and Calendar sync failed.</span>
+                <span className="font-semibold">Saved locally, but database and Calendar sync failed.</span>
                 {sheetsSyncReason && <span>{sheetsSyncReason}</span>}
               </div>
             )}
             {sheetsSyncStatus === 'email_failed' && (
               <div className="inline-flex flex-col items-center space-y-1 bg-amber-50 border border-amber-300 text-amber-900 px-4 py-2 rounded-xl text-xs">
-                <span className="font-semibold">Saved to Google Sheets and Calendar, but confirmation email failed.</span>
+                <span className="font-semibold">Saved to the database and Calendar, but confirmation email failed.</span>
                 {sheetsSyncReason && <span>{sheetsSyncReason}</span>}
               </div>
             )}
             {sheetsSyncStatus === 'patient_history_failed' && (
               <div className="inline-flex flex-col items-center space-y-1 bg-amber-50 border border-amber-300 text-amber-900 px-4 py-2 rounded-xl text-xs">
-                <span className="font-semibold">Saved to the booking sheet and Calendar, but patient history could not be saved.</span>
+                <span className="font-semibold">Saved to the database and Calendar, but patient history could not be saved.</span>
                 {sheetsSyncReason && <span>{sheetsSyncReason}</span>}
               </div>
             )}
@@ -4244,7 +4244,7 @@ function AdminPortal({
       if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
       setBookings(data.bookings || []);
     } catch (error) {
-      setBookingLoadError(error.message || 'Unable to load bookings from Google Sheets');
+      setBookingLoadError(error.message || 'Unable to load bookings from the database');
     } finally {
       setIsLoadingBookings(false);
     }
@@ -5095,9 +5095,11 @@ function AdminPortal({
               <button
                 onClick={loadBookingsFromBackend}
                 disabled={isLoadingBookings}
-                className="px-3 py-2 border border-stone-300 text-stone-700 rounded-xl text-xs font-bold hover:bg-stone-50 disabled:opacity-50"
+                className="px-3 py-2 border border-stone-300 text-stone-700 rounded-xl text-xs font-bold hover:bg-stone-50 disabled:opacity-50 inline-flex items-center gap-1.5"
               >
-                {isLoadingBookings ? 'Loading...' : 'Refresh from Google Sheets'}
+                {isLoadingBookings
+                  ? <><RefreshCw className="w-3.5 h-3.5 animate-spin" /> Loading...</>
+                  : <><Database className="w-3.5 h-3.5" /> Refresh from database</>}
               </button>
               <button
               onClick={onNavigateToBookingPortal}
@@ -5127,7 +5129,7 @@ function AdminPortal({
                   <th className="p-3">Service</th>
                   <th className="p-3">Therapist</th>
                   <th className="p-3">Time</th>
-                  <th className="p-3">Google Sheet</th>
+                  <th className="p-3"><span className="inline-flex items-center gap-1.5"><Database className="w-3.5 h-3.5" /> Database</span></th>
                   <th className="p-3">Total</th>
                   <th className="p-3">Actions</th>
                 </tr>
@@ -6692,7 +6694,7 @@ function AdminPortal({
                   ))}
                 </div>
                 <div className="flex flex-col-reverse gap-3 border-t border-slate-100 pt-5 sm:flex-row sm:items-center sm:justify-between">
-                  <p className="text-xs leading-5 text-slate-500">Profile details are stored in your connected Google Sheet and available when you sign in on another device.</p>
+                  <p className="inline-flex items-start gap-1.5 text-xs leading-5 text-slate-500"><Database className="mt-0.5 h-3.5 w-3.5 shrink-0" />Profile details are stored in your connected database and available when you sign in on another device.</p>
                   <button type="submit" disabled={isSavingBusinessProfile || !hasLoadedBusinessProfile} className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-950 px-5 py-3 text-sm font-bold text-white shadow-md shadow-emerald-950/10 transition hover:bg-emerald-800 disabled:cursor-wait disabled:opacity-60">
                     {isSavingBusinessProfile ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
                     {isSavingBusinessProfile ? 'Saving…' : 'Save profile'}
