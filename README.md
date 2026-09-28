@@ -148,10 +148,23 @@ Platinum booking benefits are activated. Staff can onboard the employee from
 the searchable customer directory and, when payment is confirmed, select
 **Payment confirmed** to add the initial top-up hours in the same action.
 
+Platinum prepaid hours are **pooled per company**: every employee enrolled
+under the same company name shares one prepaid-hour balance, and only the
+company's designated **primary owner/contact** can pay for a top-up — this
+prevents any individual employee from independently topping up their own
+account. The primary contact is set with the **Primary owner/contact**
+checkbox when onboarding a Platinum member (only one can be active per company
+at a time; checking it for a new person automatically un-marks the previous
+one), or afterward with the **Make primary contact** button in the
+**Members & balances** table. Attempting to record a top-up for a non-primary
+employee — from either the owner dashboard or the standalone top-up
+endpoint — is rejected with a message naming the current primary contact, if
+one exists.
+
 After a member's appointment treatment time has passed, staff can confirm an
 eligible visit from the dashboard. Standard/Gold point awards are based on the
 amount actually paid, and Platinum visits covered by prepaid hours deduct the
-session duration from the member's balance. A completed, fully paid single
+session duration from the company's shared balance. A completed, fully paid single
 session receives the first-session multiplier when it is the customer's first
 qualifying visit. Gold free Hot Stone add-ons and visit records are limited by
 the configured monthly allowance. Booking IDs are recorded so point awards,
@@ -164,8 +177,9 @@ number, discount, points redeemed, and updated points balance. Loyalty receipt
 discounts cannot be attached after a receipt has already been issued. Branded
 loyalty emails share the same responsive format and include membership details,
 points or prepaid-hour balances, and redemption or top-up confirmations.
-Platinum top-ups are recorded only after the owner confirms payment, add the
-configured hours to that employee's balance, and email the updated balance.
+Platinum top-ups are recorded only after the owner confirms payment and the
+target employee is the company's primary contact; the added hours go into the
+company's shared balance and the updated balance is emailed to that employee.
 
 From the **Members & balances** table, the owner can remove a single member
 (any plan) with the **Remove member** button, which deletes their row from
@@ -178,20 +192,29 @@ member's active benefits and points/hours balance going forward.
 
 Each Platinum company also gets a self-service **Company portal**: a private,
 token-based link (no login required) that the registered company contact can
-use to see how many employees are enrolled, each employee's remaining prepaid
-hours, recent top-up and usage activity across the whole company, and a form
-to sign up a new employee (who starts at 0 hours until the clinic records a
-top-up). The link is created and emailed automatically the first time a
-Platinum employee is enrolled or claims Platinum with a company contact email
-on file; the owner can also copy/re-share it any time from the **Members &
-balances** table with the **Copy portal link** button. Portal access, the
-token, and each company's registration details are stored in a `LoyaltyCompanies`
-tab (auto-created alongside the other loyalty tabs). Whenever an employee's
-completed visit deducts prepaid hours, the registered company contact is
-automatically emailed who used their benefit, the service, hours used, and the
-employee's remaining balance, in addition to the employee's own balance email.
-Removing a member or an entire company (see above) also removes the matching
-`LoyaltyCompanies` row so a deleted company's portal link stops working.
+use to see how many employees are enrolled, each employee's role (primary
+contact or regular employee) and personal hours used, the one shared
+prepaid-hour balance remaining, recent top-up and usage activity across the
+whole company, a form to sign up a single new employee (who starts at 0 usage
+and draws from the shared balance once the primary contact tops it up), and an
+**Upload employee list (Excel/CSV)** button for bulk onboarding. The bulk
+upload accepts `.xlsx`, `.xls`, or `.csv` files with Name (or First Name/Last
+Name) and Email columns (Phone is optional and column headers are matched
+case-insensitively), parses them client-side, and onboards every valid,
+not-already-enrolled row in a single request — skipping and reporting any rows
+that are missing details or already enrolled. The link is created and emailed
+automatically the first time a Platinum employee is enrolled or claims
+Platinum with a company contact email on file; the owner can also copy/
+re-share it any time from the **Members & balances** table with the **Copy
+portal link** button. Portal access, the token, and each company's
+registration details are stored in a `LoyaltyCompanies` tab (auto-created
+alongside the other loyalty tabs). Whenever an employee's completed visit
+deducts prepaid hours from the shared balance, the registered company contact
+is automatically emailed who used their benefit, the service, hours used, and
+the company's remaining shared balance, in addition to the employee's own
+balance email. Removing a member or an entire company (see above) also removes
+the matching `LoyaltyCompanies` row so a deleted company's portal link stops
+working.
 
 The owner dashboard includes a **Business profile** section for editing the
 business name, optional legal name, description, email, phone, website, location,

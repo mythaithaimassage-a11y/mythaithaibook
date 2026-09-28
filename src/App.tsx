@@ -8,8 +8,9 @@ import {
   TrendingUp, ChevronRight, AlertCircle, Sparkles, ShieldCheck, Check, X,
   DollarSign, Users, Award, Briefcase, RefreshCw, Layers, CheckSquare, Stethoscope, Database,
   Menu, Home, CalendarDays, UserRound, BarChart3, ChevronRight as ChevronRightIcon,
-  Megaphone, ReceiptText, Download, Eye, MousePointerClick
+  Megaphone, ReceiptText, Download, Eye, MousePointerClick, Upload, Crown
 } from 'lucide-react';
+import * as XLSX from 'xlsx';
 
 const MOCK_BRANCHES = [
   { id: 1, name: "Mississauga Central", address: "4310 Sherwoodtowne Blvd", city: "Mississauga, ON", phone: "+1 437 898 7424" },
@@ -495,6 +496,10 @@ function CompanyPortal({ token }) {
   const [signupSubmitting, setSignupSubmitting] = useState(false);
   const [signupMessage, setSignupMessage] = useState('');
   const [signupError, setSignupError] = useState('');
+  const [bulkUploading, setBulkUploading] = useState(false);
+  const [bulkMessage, setBulkMessage] = useState('');
+  const [bulkError, setBulkError] = useState('');
+  const bulkFileInputRef = React.useRef(null);
 
   const loadPortal = async () => {
     setLoading(true);
@@ -539,6 +544,69 @@ function CompanyPortal({ token }) {
     }
   };
 
+  // Reads an uploaded .xlsx/.xls/.csv file and maps its rows onto employee
+  // { name, email, phone } records regardless of the exact column header wording, so the
+  // company owner never has to fill out the onboarding form one employee at a time.
+  const pickColumn = (headerRow, aliases) => {
+    const normalized = headerRow.map((cell) => String(cell || '').trim().toLowerCase());
+    for (const alias of aliases) {
+      const index = normalized.indexOf(alias);
+      if (index >= 0) return index;
+    }
+    return -1;
+  };
+
+  const handleBulkFile = async (event) => {
+    const file = event.target.files?.[0];
+    if (bulkFileInputRef.current) bulkFileInputRef.current.value = '';
+    if (!file) return;
+    setBulkUploading(true);
+    setBulkMessage('');
+    setBulkError('');
+    try {
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: 'array' });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: '' });
+      if (!rows.length) throw new Error('This file does not have any rows.');
+      const [headerRow, ...bodyRows] = rows;
+      const firstNameIndex = pickColumn(headerRow, ['first name', 'firstname', 'first']);
+      const lastNameIndex = pickColumn(headerRow, ['last name', 'lastname', 'last']);
+      const fullNameIndex = pickColumn(headerRow, ['name', 'full name', 'employee name']);
+      const emailIndex = pickColumn(headerRow, ['email', 'email address', 'employee email']);
+      const phoneIndex = pickColumn(headerRow, ['phone', 'phone number', 'mobile']);
+      if (emailIndex < 0 || (fullNameIndex < 0 && firstNameIndex < 0)) {
+        throw new Error('The file needs an Email column and a Name (or First Name/Last Name) column.');
+      }
+      const employees = bodyRows
+        .map((row) => {
+          const name = fullNameIndex >= 0
+            ? String(row[fullNameIndex] || '').trim()
+            : [row[firstNameIndex], row[lastNameIndex]].filter(Boolean).map((part) => String(part).trim()).join(' ');
+          return {
+            name,
+            email: String(row[emailIndex] || '').trim(),
+            phone: phoneIndex >= 0 ? String(row[phoneIndex] || '').trim() : '',
+          };
+        })
+        .filter((employee) => employee.name || employee.email);
+      if (!employees.length) throw new Error('No employee rows were found in this file.');
+      const response = await fetch('/api/booking?view=company-portal-bulk-signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, employees }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || 'Unable to bulk-upload this employee list.');
+      setBulkMessage(`Onboarded ${result.createdCount} employee${result.createdCount === 1 ? '' : 's'}${result.skippedCount ? `, skipped ${result.skippedCount} (already enrolled or missing details)` : ''}.`);
+      loadPortal();
+    } catch (requestError) {
+      setBulkError(requestError.message || 'Unable to bulk-upload this employee list.');
+    } finally {
+      setBulkUploading(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-stone-100 font-sans text-stone-800">
       <header className="border-b border-slate-200 bg-white px-4 py-4 shadow-sm sm:px-8">
@@ -568,7 +636,7 @@ function CompanyPortal({ token }) {
                 <p className="mt-1 text-2xl font-bold text-slate-950">{data.totals.employeeCount}</p>
               </div>
               <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Hours remaining</p>
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Shared hours remaining</p>
                 <p className="mt-1 text-2xl font-bold text-emerald-800">{data.totals.hoursBalance.toFixed(2)}</p>
               </div>
               <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -583,6 +651,7 @@ function CompanyPortal({ token }) {
 
             <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
               <h2 className="text-sm font-bold uppercase tracking-wide text-slate-700">Employees using Platinum</h2>
+              <p className="mt-1 text-xs text-slate-500">All employees share one prepaid-hour balance. Only the primary contact (marked below) can add funds — contact the clinic to change who that is.</p>
               {data.employees.length ? (
                 <div className="mt-3 overflow-x-auto">
                   <table className="w-full min-w-[480px] text-left text-sm">
@@ -591,7 +660,8 @@ function CompanyPortal({ token }) {
                         <th className="py-2 pr-3">Name</th>
                         <th className="py-2 pr-3">Email</th>
                         <th className="py-2 pr-3">Enrolled</th>
-                        <th className="py-2 pr-3">Hours remaining</th>
+                        <th className="py-2 pr-3">Role</th>
+                        <th className="py-2 pr-3">Hours used</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -600,7 +670,14 @@ function CompanyPortal({ token }) {
                           <td className="py-2 pr-3 font-medium text-slate-900">{employee.name || '—'}</td>
                           <td className="py-2 pr-3 text-slate-600">{employee.email}</td>
                           <td className="py-2 pr-3 text-slate-600">{employee.enrolledAt ? new Date(employee.enrolledAt).toLocaleDateString() : '—'}</td>
-                          <td className="py-2 pr-3 font-semibold text-emerald-800">{employee.hoursBalance.toFixed(2)}</td>
+                          <td className="py-2 pr-3">
+                            {employee.isPrimaryContact ? (
+                              <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800"><Crown className="h-3 w-3" /> Primary contact</span>
+                            ) : (
+                              <span className="text-[11px] text-slate-400">Employee</span>
+                            )}
+                          </td>
+                          <td className="py-2 pr-3 font-semibold text-slate-900">{(employee.hoursUsedByEmployee || 0).toFixed(2)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -610,6 +687,7 @@ function CompanyPortal({ token }) {
                 <p className="mt-2 text-sm text-slate-500">No employees are signed up yet — use the form below to add your first one.</p>
               )}
             </section>
+
 
             <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
               <h2 className="text-sm font-bold uppercase tracking-wide text-slate-700">Recent activity</h2>
@@ -670,8 +748,28 @@ function CompanyPortal({ token }) {
             </section>
 
             <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-              <h2 className="text-sm font-bold uppercase tracking-wide text-slate-700">Sign up a new employee</h2>
-              <p className="mt-1 text-sm text-slate-500">New employees start at 0 hours until the clinic records a top-up payment.</p>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <h2 className="text-sm font-bold uppercase tracking-wide text-slate-700">Sign up a new employee</h2>
+                <div>
+                  <input
+                    ref={bulkFileInputRef}
+                    type="file"
+                    accept=".xlsx,.xls,.csv"
+                    className="hidden"
+                    id="company-portal-bulk-upload"
+                    onChange={handleBulkFile}
+                  />
+                  <label
+                    htmlFor="company-portal-bulk-upload"
+                    className={`inline-flex cursor-pointer items-center gap-2 rounded-lg border border-emerald-800 px-3 py-2 text-xs font-semibold text-emerald-900 hover:bg-emerald-50 ${bulkUploading ? 'pointer-events-none opacity-60' : ''}`}
+                  >
+                    <Upload className="h-4 w-4" /> {bulkUploading ? 'Uploading…' : 'Upload employee list (Excel/CSV)'}
+                  </label>
+                </div>
+              </div>
+              <p className="mt-1 text-sm text-slate-500">New employees start at 0 personal usage — they draw from the shared company balance once the primary contact tops it up. Bulk file needs Name (or First/Last Name) and Email columns.</p>
+              {bulkMessage && <p className="mt-2 text-sm font-medium text-emerald-800">{bulkMessage}</p>}
+              {bulkError && <p className="mt-2 text-sm font-medium text-rose-700">{bulkError}</p>}
               <form onSubmit={submitSignup} className="mt-3 grid gap-3 sm:grid-cols-3">
                 <input
                   type="text"
@@ -2773,7 +2871,7 @@ function AdminPortal({
   const [loyaltyMemberTypeFilter, setLoyaltyMemberTypeFilter] = useState('all');
   const [loyaltyOnboardingSearch, setLoyaltyOnboardingSearch] = useState('');
   const [newLoyaltyMember, setNewLoyaltyMember] = useState({
-    name: '', email: '', phone: '', membershipType: 'gold', organization: '', companyId: '', companyContactEmail: '', paidThrough: '', initialTopUpPaid: false,
+    name: '', email: '', phone: '', membershipType: 'gold', organization: '', companyId: '', companyContactEmail: '', paidThrough: '', initialTopUpPaid: false, isPrimaryOwner: false,
   });
   const [isOnboardingLoyaltyMember, setIsOnboardingLoyaltyMember] = useState(false);
   const [selectedTopUpMember, setSelectedTopUpMember] = useState(null);
@@ -2989,7 +3087,7 @@ function AdminPortal({
       setLoyaltyNotice(`${data.emailSent
         ? `Membership saved and eligibility details emailed to ${data.member.email}.`
         : `Membership saved, but the email could not be sent: ${data.emailError || 'check Gmail configuration and retry.'}`}${platinumNextStep}`);
-      setNewLoyaltyMember({ name: '', email: '', phone: '', membershipType: 'gold', organization: '', companyId: '', companyContactEmail: '', paidThrough: '', initialTopUpPaid: false });
+      setNewLoyaltyMember({ name: '', email: '', phone: '', membershipType: 'gold', organization: '', companyId: '', companyContactEmail: '', paidThrough: '', initialTopUpPaid: false, isPrimaryOwner: false });
       setLoyaltyOnboardingSearch('');
       await loadLoyaltyDashboard();
     } catch (error) {
@@ -3017,6 +3115,27 @@ function AdminPortal({
       await loadLoyaltyDashboard();
     } catch (error) {
       setLoyaltyError(error.message || 'Unable to record Platinum top-up.');
+    } finally {
+      setLoyaltyActionId('');
+    }
+  };
+
+  const makePrimaryContact = async (member) => {
+    setLoyaltyActionId(member.email);
+    setLoyaltyError('');
+    setLoyaltyNotice('');
+    try {
+      const response = await fetch('/api/booking?view=loyalty-set-primary-contact', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: member.email, isPrimaryOwner: true }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Unable to update the primary contact.');
+      setLoyaltyNotice(`${member.name || member.email} is now the primary owner/contact for ${member.organization || 'this company'} — only they can top up the shared balance.`);
+      await loadLoyaltyDashboard();
+    } catch (error) {
+      setLoyaltyError(error.message || 'Unable to update the primary contact.');
     } finally {
       setLoyaltyActionId('');
     }
@@ -4325,9 +4444,13 @@ function AdminPortal({
                     <label className="text-xs font-semibold text-slate-600">Company name<input required maxLength={120} value={newLoyaltyMember.organization} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, organization: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" /></label>
                     <label className="text-xs font-semibold text-slate-600">Company ID (optional if using work email)<input maxLength={120} value={newLoyaltyMember.companyId} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, companyId: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" /></label>
                     <label className="text-xs font-semibold text-slate-600">Company registration/contact email<input type="email" maxLength={254} value={newLoyaltyMember.companyContactEmail} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, companyContactEmail: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" placeholder="Company contact email" /></label>
-                    <label className="sm:col-span-2 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-950">
-                      <input type="checkbox" checked={newLoyaltyMember.initialTopUpPaid} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, initialTopUpPaid: event.target.checked }))} className="mt-0.5 h-4 w-4 rounded border-amber-300 text-amber-700" />
-                      <span><strong>Payment confirmed:</strong> record the configured ${Number(loyaltySettings.membershipPlans.platinum.topUpPrice).toFixed(2)} top-up and add {loyaltySettings.membershipPlans.platinum.includedHours} hours now. Leave unchecked for a pending company claim.</span>
+                    <label className="sm:col-span-2 flex items-start gap-2 rounded-lg border border-indigo-200 bg-indigo-50 p-3 text-xs leading-5 text-indigo-950">
+                      <input type="checkbox" checked={newLoyaltyMember.isPrimaryOwner} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, isPrimaryOwner: event.target.checked, initialTopUpPaid: event.target.checked ? current.initialTopUpPaid : false }))} className="mt-0.5 h-4 w-4 rounded border-indigo-300 text-indigo-700" />
+                      <span><strong>Primary owner/contact:</strong> this person's own top-ups fund the one shared prepaid-hour balance for {newLoyaltyMember.organization || 'this company'}. Every employee draws from that same pool — leave unchecked for a regular employee (they cannot be topped up directly).</span>
+                    </label>
+                    <label className={`sm:col-span-2 flex items-start gap-2 rounded-lg border p-3 text-xs leading-5 ${newLoyaltyMember.isPrimaryOwner ? 'border-amber-200 bg-amber-50 text-amber-950' : 'border-slate-200 bg-slate-50 text-slate-400'}`}>
+                      <input type="checkbox" disabled={!newLoyaltyMember.isPrimaryOwner} checked={newLoyaltyMember.initialTopUpPaid} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, initialTopUpPaid: event.target.checked }))} className="mt-0.5 h-4 w-4 rounded border-amber-300 text-amber-700" />
+                      <span><strong>Payment confirmed:</strong> record the configured ${Number(loyaltySettings.membershipPlans.platinum.topUpPrice).toFixed(2)} top-up and add {loyaltySettings.membershipPlans.platinum.includedHours} hours now.{!newLoyaltyMember.isPrimaryOwner ? ' Only the primary owner/contact can be topped up.' : ' Leave unchecked for a pending company claim.'}</span>
                     </label>
                   </>}
                   {newLoyaltyMember.membershipType === 'gold' && <label className="text-xs font-semibold text-slate-600">Paid through<input type="date" value={newLoyaltyMember.paidThrough} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, paidThrough: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" /></label>}
@@ -4383,13 +4506,14 @@ function AdminPortal({
                           {filteredMembers.map((member) => (
                             <tr key={member.email} className="hover:bg-slate-50">
                               <td className="px-5 py-3 font-medium text-slate-900">{member.name || 'Member'}<span className="mt-0.5 block text-[10px] font-normal text-slate-500">{member.email}{member.phone ? ` · ${member.phone}` : ''}</span></td>
-                              <td className="px-4 py-3"><span className="rounded-full bg-indigo-50 px-2.5 py-1 text-[10px] font-semibold text-indigo-800">{member.membershipType === 'gold' ? 'Gold' : member.membershipType === 'platinum' ? 'Platinum · Company' : member.membershipType === 'silver' ? 'Legacy Silver · Corporate' : `Standard · ${member.tier}`}</span>{member.organization && <span className="mt-1 block text-[10px] text-slate-500">{member.organization}{member.companyId ? ` · ID ${member.companyId}` : ''}{member.companyContactEmail ? ` · Contact: ${member.companyContactEmail}` : ''}</span>}</td>
-                              <td className="px-4 py-3 text-xs">{member.membershipType === 'regular' ? <span className="text-slate-500">Points program</span> : member.membershipType === 'platinum' ? <><span className={member.membershipActive ? 'font-semibold text-emerald-700' : 'font-semibold text-amber-700'}>{member.membershipActive ? `${member.membershipDiscountPercent}% off active` : 'Top-up required'}</span><span className="mt-1 block text-[10px] text-slate-500">{member.prepaidHoursBalance.toFixed(2)} prepaid hours remain · ${loyaltySettings.membershipPlans.platinum.hotStoneDiscount} off Hot Stone add-on</span></> : <><span className={member.membershipActive ? 'font-semibold text-emerald-700' : 'font-semibold text-amber-700'}>{member.membershipActive ? `${member.membershipDiscountPercent}% off active` : 'Payment required'}</span><span className="mt-1 block text-[10px] text-slate-500">Paid through: {member.paidThrough || 'not recorded'}{member.membershipType === 'gold' ? ` · Hot Stone add-on ${member.freeHotStoneAvailable ? 'available' : 'used'} this month` : ''}</span></>}</td>
-                              <td className="px-4 py-3 text-right font-semibold tabular-nums text-slate-800">{member.pointsBalance.toLocaleString()} pts{member.membershipType === 'platinum' && <span className="mt-1 block text-[10px] font-normal text-slate-500">{member.prepaidHoursBalance.toFixed(2)} hrs</span>}</td>
+                              <td className="px-4 py-3"><span className="rounded-full bg-indigo-50 px-2.5 py-1 text-[10px] font-semibold text-indigo-800">{member.membershipType === 'gold' ? 'Gold' : member.membershipType === 'platinum' ? 'Platinum · Company' : member.membershipType === 'silver' ? 'Legacy Silver · Corporate' : `Standard · ${member.tier}`}</span>{member.membershipType === 'platinum' && member.isPrimaryContact && <span className="ml-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">Primary contact</span>}{member.organization && <span className="mt-1 block text-[10px] text-slate-500">{member.organization}{member.companyId ? ` · ID ${member.companyId}` : ''}{member.companyContactEmail ? ` · Contact: ${member.companyContactEmail}` : ''}</span>}</td>
+                              <td className="px-4 py-3 text-xs">{member.membershipType === 'regular' ? <span className="text-slate-500">Points program</span> : member.membershipType === 'platinum' ? <><span className={member.membershipActive ? 'font-semibold text-emerald-700' : 'font-semibold text-amber-700'}>{member.membershipActive ? `${member.membershipDiscountPercent}% off active` : 'Top-up required'}</span><span className="mt-1 block text-[10px] text-slate-500">{member.prepaidHoursBalance.toFixed(2)} shared prepaid hours remain · ${loyaltySettings.membershipPlans.platinum.hotStoneDiscount} off Hot Stone add-on</span></> : <><span className={member.membershipActive ? 'font-semibold text-emerald-700' : 'font-semibold text-amber-700'}>{member.membershipActive ? `${member.membershipDiscountPercent}% off active` : 'Payment required'}</span><span className="mt-1 block text-[10px] text-slate-500">Paid through: {member.paidThrough || 'not recorded'}{member.membershipType === 'gold' ? ` · Hot Stone add-on ${member.freeHotStoneAvailable ? 'available' : 'used'} this month` : ''}</span></>}</td>
+                              <td className="px-4 py-3 text-right font-semibold tabular-nums text-slate-800">{member.pointsBalance.toLocaleString()} pts{member.membershipType === 'platinum' && <span className="mt-1 block text-[10px] font-normal text-slate-500">{member.prepaidHoursBalance.toFixed(2)} hrs shared</span>}</td>
                               <td className="px-4 py-3 text-right tabular-nums text-slate-600">{member.lifetimePoints.toLocaleString()} pts</td>
                               <td className="space-y-1 px-5 py-3 text-right">
                                 <button type="button" disabled={!loyaltySettings.enabled || member.pointsBalance < loyaltySettings.redemptionPoints || !member.receiptCandidates?.length} onClick={() => { setSelectedLoyaltyMember(member); setLoyaltyRedeemPoints(String(loyaltySettings.redemptionPoints)); setLoyaltyRedeemBookingId(member.receiptCandidates?.[0]?.bookingId || ''); }} className="rounded-lg border border-indigo-200 px-3 py-2 text-[11px] font-semibold text-indigo-800 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-40">Redeem points</button>
-                                {member.membershipType === 'platinum' && <button type="button" disabled={!loyaltySettings.enabled} onClick={() => setSelectedTopUpMember(member)} className="block ml-auto rounded-lg border border-amber-200 px-3 py-2 text-[11px] font-semibold text-amber-900 hover:bg-amber-50 disabled:opacity-40">Record top-up</button>}
+                                {member.membershipType === 'platinum' && member.isPrimaryContact && <button type="button" disabled={!loyaltySettings.enabled} onClick={() => setSelectedTopUpMember(member)} className="block ml-auto rounded-lg border border-amber-200 px-3 py-2 text-[11px] font-semibold text-amber-900 hover:bg-amber-50 disabled:opacity-40">Record top-up</button>}
+                                {member.membershipType === 'platinum' && !member.isPrimaryContact && <button type="button" disabled={loyaltyActionId === member.email} onClick={() => makePrimaryContact(member)} className="block ml-auto rounded-lg border border-indigo-200 px-3 py-2 text-[11px] font-semibold text-indigo-800 hover:bg-indigo-50 disabled:opacity-40">Make primary contact</button>}
                                 {['gold', 'silver'].includes(member.membershipType) && <button type="button" onClick={() => { setSelectedMembershipPayment(member); setMembershipPaidThrough(member.paidThrough || ''); }} className="block ml-auto rounded-lg border border-emerald-200 px-3 py-2 text-[11px] font-semibold text-emerald-800 hover:bg-emerald-50">Record payment</button>}
                                 {member.membershipType === 'platinum' && member.organization && member.companyContactEmail && <button type="button" disabled={copyingPortalFor === member.organization} onClick={() => copyCompanyPortalLink(member)} className="block ml-auto rounded-lg border border-sky-200 px-3 py-2 text-[11px] font-semibold text-sky-800 hover:bg-sky-50 disabled:opacity-40">{copyingPortalFor === member.organization ? 'Copying…' : 'Copy portal link'}</button>}
                                 <button type="button" onClick={() => setMemberPendingRemoval(member)} className="block ml-auto rounded-lg border border-rose-200 px-3 py-2 text-[11px] font-semibold text-rose-700 hover:bg-rose-50">Remove member</button>

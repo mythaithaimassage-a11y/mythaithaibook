@@ -55,7 +55,7 @@ const DEFAULT_LOYALTY_SETTINGS = {
 };
 const LOYALTY_SHEETS = {
   LoyaltySettings: ['Settings JSON', 'Updated At'],
-  LoyaltyMembers: ['Email', 'Name', 'Phone', 'Enrolled At', 'Updated At', 'Membership Type', 'Organization', 'Paid Through', 'Company ID', 'Company Contact Email'],
+  LoyaltyMembers: ['Email', 'Name', 'Phone', 'Enrolled At', 'Updated At', 'Membership Type', 'Organization', 'Paid Through', 'Company ID', 'Company Contact Email', 'Is Primary Contact'],
   LoyaltyLedger: ['Transaction ID', 'Email', 'Booking ID', 'Type', 'Points', 'Reward Value', 'Description', 'Created At', 'Hours', 'Receipt No.'],
   LoyaltyCompanies: ['Organization', 'Company ID', 'Contact Email', 'Access Token', 'Created At', 'Updated At'],
 };
@@ -618,6 +618,31 @@ async function ensureCompanyPortalAccess(sheets, organization, companyId, contac
   return { token, isNew: true, contactEmail: contactEmail || '' };
 }
 
+// Ensures at most one primary owner/contact per company: clears the "Is Primary Contact"
+// flag on every other Platinum row in the same organization when promoting `keepEmail`.
+// `memberRows` must be header-stripped data rows (e.g. `rows.slice(1)`); sheet row numbers
+// are derived as `index + 2` (row 1 is the header, data starts at row 2).
+async function demoteOtherPrimaryContacts(sheets, memberRows, organization, keepEmail) {
+  const orgKey = normalizeOrganizationKey(organization);
+  const keep = normalizeLoyaltyEmail(keepEmail);
+  const toDemote = memberRows
+    .map((row, index) => ({ row, rowNumber: index + 2 }))
+    .filter(({ row }) =>
+      String(row[5] || '').toLowerCase() === 'platinum' &&
+      normalizeOrganizationKey(row[6]) === orgKey &&
+      normalizeLoyaltyEmail(row[0]) !== keep &&
+      isPrimaryContactFlag(row[10]),
+    );
+  for (const { rowNumber } of toDemote) {
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+      range: `LoyaltyMembers!K${rowNumber}`,
+      valueInputOption: 'RAW',
+      requestBody: { values: [['']] },
+    });
+  }
+}
+
 async function findCompanyPortalByToken(sheets, token) {
   const rows = await getCompanyPortalRows(sheets);
   const rowIndex = rows.findIndex((row, index) => index > 0 && row[3] === token);
@@ -829,6 +854,7 @@ async function enrollLoyaltyMember(sheets, payload) {
         platinumEnrollment ? companyContactEmail || row[9] || '' : row[9] || '',
       ]] },
     });
+    const resultOrganization = platinumEnrollment ? organization : row[6] || '';
     const ledgerRows = platinumEnrollment
       ? (await sheets.spreadsheets.values.get({
         spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
@@ -839,7 +865,7 @@ async function enrollLoyaltyMember(sheets, payload) {
       created: false,
       membershipType: platinumEnrollment ? 'platinum' : existingType,
       companyContactEmail: platinumEnrollment ? companyContactEmail || row[9] || '' : '',
-      hoursBalance: platinumEnrollment ? loyaltyHoursBalance(ledgerRows, email) : 0,
+      hoursBalance: platinumEnrollment ? loyaltyPlatinumHoursBalance(rows.slice(1), ledgerRows, resultOrganization, email) : 0,
     };
   }
   await sheets.spreadsheets.values.append({
@@ -870,6 +896,31 @@ function isMembershipActive(member, today = new Date().toISOString().slice(0, 10
 function loyaltyHoursBalance(transactions, email) {
   return transactions
     .filter((transaction) => normalizeLoyaltyEmail(transaction[1]) === email)
+    .reduce((sum, transaction) => sum + (Number(transaction[8]) || 0), 0);
+}
+
+function isPrimaryContactFlag(value) {
+  return String(value || '').trim().toUpperCase() === 'Y';
+}
+
+function loyaltyOrgMemberEmails(members, organization) {
+  const orgKey = normalizeOrganizationKey(organization);
+  if (!orgKey) return new Set();
+  return new Set(
+    members
+      .filter((row) => String(row[5] || '').toLowerCase() === 'platinum' && normalizeOrganizationKey(row[6]) === orgKey)
+      .map((row) => normalizeLoyaltyEmail(row[0])),
+  );
+}
+
+// Platinum prepaid hours are pooled per company: only the company's designated primary
+// owner/contact can pay for a top-up, and every employee enrolled under that same
+// organization draws from that one shared balance instead of needing their own top-up.
+function loyaltyPlatinumHoursBalance(members, transactions, organization, email) {
+  const orgEmails = loyaltyOrgMemberEmails(members, organization);
+  if (!orgEmails.size) return loyaltyHoursBalance(transactions, email);
+  return transactions
+    .filter((transaction) => orgEmails.has(normalizeLoyaltyEmail(transaction[1])))
     .reduce((sum, transaction) => sum + (Number(transaction[8]) || 0), 0);
 }
 
@@ -919,7 +970,9 @@ async function getMemberBenefit(sheets, email, settings) {
   if (!member) return null;
   const type = String(member[5] || 'regular').toLowerCase();
   const transactions = (ledgerResult.data.values || []).slice(1);
-  const hoursBalance = loyaltyHoursBalance(transactions, normalizedEmail);
+  const hoursBalance = type === 'platinum'
+    ? loyaltyPlatinumHoursBalance((membersResult.data.values || []).slice(1), transactions, member[6], normalizedEmail)
+    : loyaltyHoursBalance(transactions, normalizedEmail);
   const active = type === 'platinum' ? hoursBalance > 0 : isMembershipActive(member);
   if (!active) return null;
   const plan = settings.membershipPlans[type];
@@ -1818,12 +1871,12 @@ export default async function handler(req, res) {
     }
     const ownerOnlyRequest =
       (req.method === 'GET' && ['', 'calendar', 'patient-history', 'business-profile', 'google-ads-report', 'loyalty-dashboard'].includes(view)) ||
-      ['business-profile', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'company-portal-link'].includes(view);
+      ['business-profile', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-link'].includes(view);
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
     if (ownerOnlyRequest && !getOwnerSession(req)) {
       return res.status(401).json({ message: 'Owner sign-in required' });
     }
-    if (['business-profile', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'company-portal-signup', 'company-portal-link'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
+    if (['business-profile', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-signup', 'company-portal-bulk-signup', 'company-portal-link'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
       return res.status(403).json({ message: 'Profile update origin is not allowed' });
     }
 
@@ -1890,7 +1943,7 @@ export default async function handler(req, res) {
       const [membersResult, ledgerResult, bookingsResult] = await Promise.all([
         sheets.spreadsheets.values.get({
           spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-          range: 'LoyaltyMembers!A:J',
+          range: 'LoyaltyMembers!A:K',
         }),
         sheets.spreadsheets.values.get({
           spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
@@ -1936,8 +1989,12 @@ export default async function handler(req, res) {
           .filter((transaction) => transaction.type === 'EARN')
           .reduce((sum, transaction) => sum + Math.max(0, transaction.points), 0);
         const pointsBalance = memberTransactions.reduce((sum, transaction) => sum + transaction.points, 0);
-        const hoursBalance = memberTransactions.reduce((sum, transaction) => sum + transaction.hours, 0);
         const membershipType = String(row[5] || 'regular').toLowerCase();
+        // Platinum's prepaid-hour balance is shared across the whole company, funded only by the
+        // primary owner/contact's top-ups, so it is computed org-wide rather than per employee.
+        const hoursBalance = membershipType === 'platinum'
+          ? loyaltyPlatinumHoursBalance(memberRows, ledgerRows, row[6], email)
+          : memberTransactions.reduce((sum, transaction) => sum + transaction.hours, 0);
         const membershipActive = membershipType === 'platinum'
           ? hoursBalance > 0
           : isMembershipActive(row);
@@ -1955,6 +2012,7 @@ export default async function handler(req, res) {
           paidThrough: row[7] || '',
           companyId: row[8] || '',
           companyContactEmail: row[9] || '',
+          isPrimaryContact: isPrimaryContactFlag(row[10]),
           prepaidHoursBalance: hoursBalance,
           membershipActive,
           membershipDiscountPercent: membershipActive
@@ -2094,6 +2152,7 @@ export default async function handler(req, res) {
       const companyId = String(req.body?.companyId || '').trim().slice(0, 120);
       let companyContactEmail = normalizeLoyaltyEmail(req.body?.companyContactEmail);
       const initialTopUpPaid = req.body?.initialTopUpPaid === true;
+      const isPrimaryOwner = membershipType === 'platinum' && req.body?.isPrimaryOwner === true;
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !name || !['regular', 'gold', 'platinum', 'silver'].includes(membershipType)) {
         return res.status(400).json({ message: 'Enter a valid email, member name, and membership type.' });
       }
@@ -2114,7 +2173,7 @@ export default async function handler(req, res) {
       await ensureLoyaltySheets(sheets);
       const membersResult = await sheets.spreadsheets.values.get({
         spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'LoyaltyMembers!A:J',
+        range: 'LoyaltyMembers!A:K',
       });
       const rows = membersResult.data.values || [];
       const existingIndex = rows.findIndex((row, index) => index > 0 && normalizeLoyaltyEmail(row[0]) === email);
@@ -2124,6 +2183,15 @@ export default async function handler(req, res) {
           String(row[6] || '').trim().toLowerCase() === organization.toLowerCase() &&
           row[9],
         )?.[9]);
+      }
+      if (membershipType === 'platinum' && initialTopUpPaid && !isPrimaryOwner) {
+        const existingPrimary = rows.slice(1).find((row) =>
+          String(row[5] || '').toLowerCase() === 'platinum' &&
+          normalizeOrganizationKey(row[6]) === normalizeOrganizationKey(organization) &&
+          isPrimaryContactFlag(row[10]),
+        );
+        const primaryHint = existingPrimary ? ` This company's primary contact on file is ${existingPrimary[1] || existingPrimary[0]}.` : '';
+        return res.status(400).json({ message: `Only the company's primary owner/contact can receive a Platinum top-up.${primaryHint} Check "Primary owner/contact" to designate this person, or record the top-up on the existing primary contact instead.` });
       }
       if (membershipType === 'silver') {
         const employeeCount = rows.slice(1).filter((row, index) =>
@@ -2147,22 +2215,26 @@ export default async function handler(req, res) {
         paidThrough: membershipType === 'regular' ? '' : paidThrough,
         companyId: membershipType === 'platinum' ? companyId : '',
         companyContactEmail: membershipType === 'platinum' ? companyContactEmail : '',
+        isPrimaryContact: isPrimaryOwner,
       };
-      const values = [email, name, phone, member.enrolledAt, now, member.membershipType, member.organization, member.paidThrough, member.companyId, member.companyContactEmail];
+      const values = [email, name, phone, member.enrolledAt, now, member.membershipType, member.organization, member.paidThrough, member.companyId, member.companyContactEmail, isPrimaryOwner ? 'Y' : ''];
       if (existingIndex >= 1) {
         await sheets.spreadsheets.values.update({
           spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-          range: `LoyaltyMembers!A${existingIndex + 1}:J${existingIndex + 1}`,
+          range: `LoyaltyMembers!A${existingIndex + 1}:K${existingIndex + 1}`,
           valueInputOption: 'RAW',
           requestBody: { values: [values] },
         });
       } else {
         await sheets.spreadsheets.values.append({
           spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-          range: 'LoyaltyMembers!A:J',
+          range: 'LoyaltyMembers!A:K',
           valueInputOption: 'RAW',
           requestBody: { values: [values] },
         });
+      }
+      if (membershipType === 'platinum' && isPrimaryOwner) {
+        await demoteOtherPrimaryContacts(sheets, rows.slice(1), organization, email);
       }
       if (membershipType === 'platinum' && companyContactEmail) {
         for (const [index, row] of rows.slice(1).entries()) {
@@ -2195,11 +2267,13 @@ export default async function handler(req, res) {
         });
       }
       if (membershipType === 'platinum') {
-        hoursBalance = loyaltyHoursBalance(
+        hoursBalance = loyaltyPlatinumHoursBalance(
+          rows.slice(1),
           (await sheets.spreadsheets.values.get({
             spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
             range: 'LoyaltyLedger!A:J',
           })).data.values?.slice(1) || [],
+          organization,
           email,
         );
       }
@@ -2356,11 +2430,23 @@ export default async function handler(req, res) {
       if (!settings.enabled) return res.status(409).json({ message: 'The loyalty program is currently paused.' });
       const membersResult = await sheets.spreadsheets.values.get({
         spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'LoyaltyMembers!A:J',
+        range: 'LoyaltyMembers!A:K',
       });
-      const member = (membersResult.data.values || []).slice(1)
+      const memberRows = membersResult.data.values || [];
+      const member = memberRows.slice(1)
         .find((row) => normalizeLoyaltyEmail(row[0]) === email && String(row[5] || '').toLowerCase() === 'platinum');
       if (!member) return res.status(404).json({ message: 'No Platinum member was found for that email.' });
+      if (!isPrimaryContactFlag(member[10])) {
+        const organization = member[6] || '';
+        const existingPrimary = memberRows.slice(1).find((row) =>
+          String(row[5] || '').toLowerCase() === 'platinum' &&
+          normalizeOrganizationKey(row[6]) === normalizeOrganizationKey(organization) &&
+          normalizeLoyaltyEmail(row[0]) !== email &&
+          isPrimaryContactFlag(row[10]),
+        );
+        const primaryHint = existingPrimary ? ` This company's primary contact on file is ${existingPrimary[1] || existingPrimary[0]}.` : '';
+        return res.status(400).json({ message: `Only the company's primary owner/contact can receive a Platinum top-up.${primaryHint} Mark this person as the primary owner/contact to top them up.` });
+      }
       await sheets.spreadsheets.values.append({
         spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
         range: 'LoyaltyLedger!A:J',
@@ -2375,7 +2461,7 @@ export default async function handler(req, res) {
         spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
         range: 'LoyaltyLedger!A:J',
       });
-      const hoursBalance = loyaltyHoursBalance(ledgerResult.data.values?.slice(1) || [], email);
+      const hoursBalance = loyaltyPlatinumHoursBalance(memberRows.slice(1), ledgerResult.data.values?.slice(1) || [], member[6], email);
       let emailSent = false;
       let emailError = '';
       try {
@@ -2399,6 +2485,33 @@ export default async function handler(req, res) {
         emailSent,
         emailError,
       });
+    }
+
+    if (req.method === 'POST' && view === 'loyalty-set-primary-contact') {
+      const email = normalizeLoyaltyEmail(req.body?.email);
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return res.status(400).json({ message: 'A valid Platinum member email is required.' });
+      }
+      const makePrimary = req.body?.isPrimaryOwner === true;
+      await ensureLoyaltySheets(sheets);
+      const membersResult = await sheets.spreadsheets.values.get({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: 'LoyaltyMembers!A:K',
+      });
+      const rows = membersResult.data.values || [];
+      const rowIndex = rows.findIndex((row, index) => index > 0 && normalizeLoyaltyEmail(row[0]) === email && String(row[5] || '').toLowerCase() === 'platinum');
+      if (rowIndex < 1) return res.status(404).json({ message: 'No Platinum member was found for that email.' });
+      const organization = rows[rowIndex][6] || '';
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: `LoyaltyMembers!K${rowIndex + 1}`,
+        valueInputOption: 'RAW',
+        requestBody: { values: [[makePrimary ? 'Y' : '']] },
+      });
+      if (makePrimary) {
+        await demoteOtherPrimaryContacts(sheets, rows.slice(1), organization, email);
+      }
+      return res.status(200).json({ email, organization, isPrimaryContact: makePrimary });
     }
 
     if (req.method === 'POST' && view === 'loyalty-payment') {
@@ -2465,7 +2578,7 @@ export default async function handler(req, res) {
       const settings = await getLoyaltySettings(sheets);
       if (!settings.enabled) return res.status(409).json({ message: 'The loyalty program is currently paused.' });
       const [membersResult, ledgerResult, bookingsResult] = await Promise.all([
-        sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'LoyaltyMembers!A:J' }),
+        sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'LoyaltyMembers!A:K' }),
         sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'LoyaltyLedger!A:J' }),
         sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'Sheet1!A:U' }),
       ]);
@@ -2475,8 +2588,8 @@ export default async function handler(req, res) {
       if (rowIndex < 0) return res.status(404).json({ message: 'Booking was not found.' });
       const booking = bookingRows[rowIndex];
       const email = normalizeLoyaltyEmail(booking[3]);
-      const member = (membersResult.data.values || []).slice(1)
-        .find((row) => normalizeLoyaltyEmail(row[0]) === email);
+      const memberRows = (membersResult.data.values || []).slice(1);
+      const member = memberRows.find((row) => normalizeLoyaltyEmail(row[0]) === email);
       if (!member) return res.status(409).json({ message: 'This customer is not enrolled in the loyalty program.' });
       const ledgerRows = (ledgerResult.data.values || []).slice(1);
       if (ledgerRows.some((row) => ['EARN', 'USE', 'HOTSTONE'].includes(row[3]) && normalizeLoyaltyEmail(row[1]) === email && String(row[2] || '') === bookingId)) {
@@ -2486,7 +2599,7 @@ export default async function handler(req, res) {
       const paidAmount = Number(booking[10]) || 0;
       const durationMinutes = Number(booking[12]) || 60;
       const isPlatinum = String(member[5] || '').toLowerCase() === 'platinum';
-      const availableHours = loyaltyHoursBalance(ledgerRows, email);
+      const availableHours = isPlatinum ? loyaltyPlatinumHoursBalance(memberRows, ledgerRows, member[6], email) : 0;
       const isHotStoneAddon = String(booking[5] || '').toLowerCase().includes('hot stone add-on');
       const hoursUsed = isPlatinum && !isHotStoneAddon && availableHours + 0.0001 >= durationMinutes / 60
         ? durationMinutes / 60
@@ -2549,7 +2662,7 @@ export default async function handler(req, res) {
       let balanceEmailSent = true;
       let balanceEmailError = '';
       const businessProfile = await getBusinessProfile(sheets);
-      const hoursBalance = loyaltyHoursBalance([...ledgerRows, ...ledgerEntries], email);
+      const hoursBalance = isPlatinum ? loyaltyPlatinumHoursBalance(memberRows, [...ledgerRows, ...ledgerEntries], member[6], email) : 0;
       try {
         const pointsBalance = ledgerRows
           .filter((row) => normalizeLoyaltyEmail(row[1]) === email)
@@ -2926,24 +3039,34 @@ export default async function handler(req, res) {
       const company = await findCompanyPortalByToken(sheets, token);
       if (!company) return res.status(404).json({ message: 'This company portal link is invalid or no longer active.' });
       const [membersResult, ledgerResult] = await Promise.all([
-        sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'LoyaltyMembers!A:J' }),
+        sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'LoyaltyMembers!A:K' }),
         sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'LoyaltyLedger!A:J' }),
       ]);
       const orgKey = normalizeOrganizationKey(company.organization);
-      const employeeRows = (membersResult.data.values || []).slice(1)
+      const memberRows = (membersResult.data.values || []).slice(1);
+      const employeeRows = memberRows
         .filter((row) => String(row[5] || '').toLowerCase() === 'platinum' && normalizeOrganizationKey(row[6]) === orgKey);
       const ledgerRows = (ledgerResult.data.values || []).slice(1);
       const employeeEmails = new Set(employeeRows.map((row) => normalizeLoyaltyEmail(row[0])));
+      // Hours are pooled per company: every employee shares one balance, funded only by the
+      // primary owner/contact's top-ups, so each employee's own usage is shown separately from
+      // the one shared remaining-hours figure (in `totals`).
+      const sharedHoursBalance = loyaltyPlatinumHoursBalance(memberRows, ledgerRows, company.organization, '');
       const employees = employeeRows.map((row) => {
         const email = normalizeLoyaltyEmail(row[0]);
+        const hoursUsedByEmployee = Math.abs(
+          ledgerRows.filter((ledgerRow) => ledgerRow[3] === 'USE' && normalizeLoyaltyEmail(ledgerRow[1]) === email)
+            .reduce((sum, ledgerRow) => sum + (Number(ledgerRow[8]) || 0), 0),
+        );
         return {
           email,
           name: row[1] || '',
           phone: row[2] || '',
           enrolledAt: row[3] || '',
-          hoursBalance: loyaltyHoursBalance(ledgerRows, email),
+          isPrimaryContact: isPrimaryContactFlag(row[10]),
+          hoursUsedByEmployee,
         };
-      }).sort((a, b) => a.name.localeCompare(b.name) || a.email.localeCompare(b.email));
+      }).sort((a, b) => (b.isPrimaryContact - a.isPrimaryContact) || a.name.localeCompare(b.name) || a.email.localeCompare(b.email));
       const employeeNameByEmail = new Map(employees.map((employee) => [employee.email, employee.name]));
       const companyLedgerRows = ledgerRows.filter((row) => employeeEmails.has(normalizeLoyaltyEmail(row[1])));
       const topUps = companyLedgerRows
@@ -2971,7 +3094,7 @@ export default async function handler(req, res) {
         .slice(0, 50);
       const totals = {
         employeeCount: employees.length,
-        hoursBalance: employees.reduce((sum, employee) => sum + employee.hoursBalance, 0),
+        hoursBalance: sharedHoursBalance,
         hoursToppedUpAllTime: companyLedgerRows.filter((row) => row[3] === 'TOPUP').reduce((sum, row) => sum + (Number(row[8]) || 0), 0),
         hoursUsedAllTime: Math.abs(companyLedgerRows.filter((row) => row[3] === 'USE').reduce((sum, row) => sum + (Number(row[8]) || 0), 0)),
       };
@@ -3004,7 +3127,7 @@ export default async function handler(req, res) {
       }
       const membersResult = await sheets.spreadsheets.values.get({
         spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'LoyaltyMembers!A:J',
+        range: 'LoyaltyMembers!A:K',
       });
       const rows = membersResult.data.values || [];
       const existingIndex = rows.findIndex((row, index) => index > 0 && normalizeLoyaltyEmail(row[0]) === email);
@@ -3018,15 +3141,22 @@ export default async function handler(req, res) {
       }
       const now = new Date().toISOString();
       // Organization, company ID, and contact email are forced from the token record (not client-supplied) so a
-      // company portal link cannot be used to enroll an employee under a different company.
+      // company portal link cannot be used to enroll an employee under a different company. The new employee is
+      // never marked as the primary contact (column K left blank) — only staff can designate a primary owner/contact,
+      // and only that person's top-ups fund the company's shared prepaid-hour pool.
       await sheets.spreadsheets.values.append({
         spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'LoyaltyMembers!A:J',
+        range: 'LoyaltyMembers!A:K',
         valueInputOption: 'RAW',
-        requestBody: { values: [[email, name, phone, now, now, 'platinum', company.organization, '', company.companyId, company.contactEmail]] },
+        requestBody: { values: [[email, name, phone, now, now, 'platinum', company.organization, '', company.companyId, company.contactEmail, '']] },
       });
+      const ledgerRows = (await sheets.spreadsheets.values.get({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: 'LoyaltyLedger!A:J',
+      })).data.values?.slice(1) || [];
+      const hoursBalance = loyaltyPlatinumHoursBalance(rows.slice(1), ledgerRows, company.organization, email);
       const member = {
-        email, name, phone, membershipType: 'platinum', organization: company.organization, companyId: company.companyId, hoursBalance: 0,
+        email, name, phone, membershipType: 'platinum', organization: company.organization, companyId: company.companyId, hoursBalance,
       };
       let emailSent = false;
       let emailError = '';
@@ -3038,6 +3168,72 @@ export default async function handler(req, res) {
         console.error('Company portal signup email error:', emailError);
       }
       return res.status(200).json({ member, emailSent, emailError });
+    }
+
+    if (view === 'company-portal-bulk-signup' && req.method === 'POST') {
+      const token = String(req.body?.token || '');
+      if (!/^[a-f0-9]{48}$/.test(token)) {
+        return res.status(400).json({ message: 'This company portal link is invalid or incomplete.' });
+      }
+      await ensureLoyaltySheets(sheets);
+      const company = await findCompanyPortalByToken(sheets, token);
+      if (!company) return res.status(404).json({ message: 'This company portal link is invalid or no longer active.' });
+      const settings = await getLoyaltySettings(sheets);
+      if (!settings.enabled) return res.status(409).json({ message: 'The loyalty program is currently paused.' });
+      const incoming = Array.isArray(req.body?.employees) ? req.body.employees.slice(0, 200) : [];
+      if (!incoming.length) return res.status(400).json({ message: 'Upload a file with at least one employee row.' });
+      const membersResult = await sheets.spreadsheets.values.get({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: 'LoyaltyMembers!A:K',
+      });
+      const rows = membersResult.data.values || [];
+      const existingEmails = new Set(rows.slice(1).map((row) => normalizeLoyaltyEmail(row[0])));
+      const now = new Date().toISOString();
+      const seen = new Set();
+      const toCreate = [];
+      const results = [];
+      for (const entry of incoming) {
+        const email = normalizeLoyaltyEmail(entry?.email);
+        const name = String(entry?.name || '').trim().slice(0, 120);
+        const phone = String(entry?.phone || '').trim().slice(0, 50);
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !name) {
+          results.push({ email: entry?.email || '', name, status: 'skipped', reason: 'Missing a valid name and email.' });
+          continue;
+        }
+        if (existingEmails.has(email) || seen.has(email)) {
+          results.push({ email, name, status: 'skipped', reason: 'Already enrolled.' });
+          continue;
+        }
+        seen.add(email);
+        toCreate.push([email, name, phone, now, now, 'platinum', company.organization, '', company.companyId, company.contactEmail, '']);
+        results.push({ email, name, status: 'created' });
+      }
+      if (toCreate.length) {
+        await sheets.spreadsheets.values.append({
+          spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+          range: 'LoyaltyMembers!A:K',
+          valueInputOption: 'RAW',
+          requestBody: { values: toCreate },
+        });
+      }
+      const businessProfile = await getBusinessProfile(sheets);
+      const ledgerRows = (await sheets.spreadsheets.values.get({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: 'LoyaltyLedger!A:J',
+      })).data.values?.slice(1) || [];
+      const hoursBalance = loyaltyPlatinumHoursBalance(rows.slice(1), ledgerRows, company.organization, '');
+      const emailResults = await Promise.allSettled(toCreate.map(([email, name, phone]) => sendMembershipEmail(createGmailApi(), {
+        email, name, phone, membershipType: 'platinum', organization: company.organization, companyId: company.companyId, hoursBalance,
+      }, settings, businessProfile, 'welcome', company.contactEmail)));
+      emailResults.forEach((result, index) => {
+        const row = results.find((entry) => entry.status === 'created' && entry.email === toCreate[index][0]);
+        if (row) row.emailSent = result.status === 'fulfilled';
+      });
+      return res.status(200).json({
+        createdCount: toCreate.length,
+        skippedCount: results.length - toCreate.length,
+        results,
+      });
     }
 
     if (view === 'unsubscribe' && req.method === 'GET') {
