@@ -51,6 +51,13 @@ const DEFAULT_BUSINESS_PROFILE = {
   taxRegistrationNumber: '',
   photoUrl: '',
 };
+const BRANCH_FIELDS = ['ID', 'Name', 'Address', 'City', 'Phone', 'Active', 'Updated At'];
+const DEFAULT_BRANCHES = [
+  { id: 1, name: 'Mississauga Central', address: '4310 Sherwoodtowne Blvd', city: 'Mississauga, ON', phone: '+1 437 898 7424', active: true },
+  { id: 2, name: 'Oakville Downtown', address: '123 Lakeshore Rd E', city: 'Oakville, ON', phone: '+1 437 898 7424', active: true },
+  { id: 3, name: 'Toronto West', address: '456 Bloor St W', city: 'Toronto, ON', phone: '+1 437 898 7424', active: true },
+  { id: 4, name: 'Yorkville Flagship', address: '88 Yorkville Ave', city: 'Toronto, ON', phone: '+1 437 898 7424', active: true },
+];
 const DEFAULT_LOYALTY_SETTINGS = {
   enabled: true,
   pointsPerDollar: 10,
@@ -491,6 +498,111 @@ async function getBusinessProfile(sheets) {
     field,
     row[index] === undefined ? DEFAULT_BUSINESS_PROFILE[field] : row[index],
   ]));
+}
+
+async function ensureBranchesSheet(sheets) {
+  const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
+  if (!spreadsheetId) throw new Error('GOOGLE_SPREADSHEET_ID is not configured');
+  const spreadsheet = await sheets.spreadsheets.get({
+    spreadsheetId,
+    fields: 'sheets.properties',
+  });
+  const exists = (spreadsheet.data.sheets || [])
+    .some((sheet) => sheet.properties?.title === 'Branches');
+  if (!exists) {
+    try {
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: { requests: [{ addSheet: { properties: { title: 'Branches' } } }] },
+      });
+    } catch (error) {
+      const refreshed = await sheets.spreadsheets.get({
+        spreadsheetId,
+        fields: 'sheets.properties',
+      });
+      const createdByConcurrentRequest = (refreshed.data.sheets || [])
+        .some((sheet) => sheet.properties?.title === 'Branches');
+      if (!createdByConcurrentRequest) throw error;
+    }
+    const seedRows = DEFAULT_BRANCHES.map((branch) => [
+      branch.id, branch.name, branch.address, branch.city, branch.phone, branch.active ? 'TRUE' : 'FALSE', new Date().toISOString(),
+    ]);
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: 'Branches!A1:G1',
+      valueInputOption: 'RAW',
+      requestBody: { values: [BRANCH_FIELDS] },
+    });
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `Branches!A2:G${seedRows.length + 1}`,
+      valueInputOption: 'RAW',
+      requestBody: { values: seedRows },
+    });
+  }
+}
+
+function validateBranches(input) {
+  if (!Array.isArray(input) || input.length === 0) {
+    throw new Error('At least one branch is required');
+  }
+  const seenIds = new Set();
+  return input.map((branch) => {
+    const name = String(branch?.name || '').trim();
+    if (!name) throw new Error('Every branch requires a name');
+    let id = Number(branch?.id);
+    if (!Number.isFinite(id) || id <= 0) id = Date.now() + Math.floor(Math.random() * 1000);
+    if (seenIds.has(id)) id = Date.now() + Math.floor(Math.random() * 1000) + seenIds.size;
+    seenIds.add(id);
+    return {
+      id,
+      name,
+      address: String(branch?.address || '').trim(),
+      city: String(branch?.city || '').trim(),
+      phone: String(branch?.phone || '').trim(),
+      active: branch?.active !== false,
+    };
+  });
+}
+
+async function getBranches(sheets) {
+  await ensureBranchesSheet(sheets);
+  const result = await sheets.spreadsheets.values.get({
+    spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+    range: 'Branches!A2:G',
+  });
+  const rows = result.data.values || [];
+  if (rows.length === 0) return DEFAULT_BRANCHES;
+  return rows
+    .filter((row) => row[0] !== undefined && row[0] !== '')
+    .map((row) => ({
+      id: Number(row[0]) || row[0],
+      name: row[1] || '',
+      address: row[2] || '',
+      city: row[3] || '',
+      phone: row[4] || '',
+      active: String(row[5] || 'TRUE').toUpperCase() !== 'FALSE',
+    }));
+}
+
+async function saveBranches(sheets, branches) {
+  const validated = validateBranches(branches);
+  await ensureBranchesSheet(sheets);
+  const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
+  const rows = validated.map((branch) => [
+    branch.id, branch.name, branch.address, branch.city, branch.phone, branch.active ? 'TRUE' : 'FALSE', new Date().toISOString(),
+  ]);
+  await sheets.spreadsheets.values.clear({
+    spreadsheetId,
+    range: 'Branches!A2:G',
+  });
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `Branches!A2:G${rows.length + 1}`,
+    valueInputOption: 'RAW',
+    requestBody: { values: rows },
+  });
+  return validated;
 }
 
 async function ensureLoyaltySheets(sheets) {
@@ -1946,18 +2058,19 @@ export default async function handler(req, res) {
     }
 
     const view = String(req.query?.view || '');
-    const validGetViews = ['', 'calendar', 'patient-history', 'business-profile', 'business-name', 'square-config', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal'];
+    const validGetViews = ['', 'calendar', 'patient-history', 'business-profile', 'business-name', 'square-config', 'branches', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal'];
     if (req.method === 'GET' && !validGetViews.includes(view)) {
       return res.status(404).json({ message: 'Unknown booking view' });
     }
     const ownerOnlyRequest =
       (req.method === 'GET' && ['', 'calendar', 'patient-history', 'business-profile', 'google-ads-report', 'loyalty-dashboard'].includes(view)) ||
-      ['business-profile', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-link'].includes(view);
+      ['business-profile', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-link'].includes(view) ||
+      (req.method === 'POST' && view === 'branches');
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
     if (ownerOnlyRequest && !getOwnerSession(req)) {
       return res.status(401).json({ message: 'Owner sign-in required' });
     }
-    if (['business-profile', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-signup', 'company-portal-bulk-signup', 'company-portal-link', 'square-create-checkout'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
+    if (['business-profile', 'branches', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-signup', 'company-portal-bulk-signup', 'company-portal-link', 'square-create-checkout'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
       return res.status(403).json({ message: 'Profile update origin is not allowed' });
     }
 
@@ -1987,6 +2100,21 @@ export default async function handler(req, res) {
     if (req.method === 'GET' && view === 'square-config') {
       res.setHeader('Cache-Control', 'no-store');
       return res.status(200).json({ enabled: isSquareConfigured() });
+    }
+
+    if (req.method === 'GET' && view === 'branches') {
+      res.setHeader('Cache-Control', 'no-store');
+      const branches = await getBranches(sheets);
+      return res.status(200).json({ branches });
+    }
+
+    if (req.method === 'POST' && view === 'branches') {
+      try {
+        const branches = await saveBranches(sheets, req.body?.branches);
+        return res.status(200).json({ branches });
+      } catch (validationError) {
+        return res.status(400).json({ message: validationError.message || 'Unable to save branches' });
+      }
     }
 
     if (req.method === 'GET' && view === 'loyalty-program') {
@@ -4460,7 +4588,12 @@ export default async function handler(req, res) {
         });
       }
     }
-    const requestedTherapist = payload.therapistName || 'Any Available';
+    const isCoupleService = /couple/i.test(payload.serviceName || '');
+    const requestedTherapist1 = payload.therapistName || 'Any Available';
+    const requestedTherapist2 = isCoupleService ? (payload.therapistName2 || 'Any Available') : '';
+    if (isCoupleService && requestedTherapist1 !== 'Any Available' && requestedTherapist1 === requestedTherapist2) {
+      return res.status(400).json({ message: 'Please select two different therapists for a couple session, or choose Any Available.' });
+    }
     const calendarId = PRIMARY_CALENDAR_ID;
     const startDateTime = parseBookingDateTime(payload.date, payload.time);
     const durationMinutes = Number(payload.durationMinutes) || 60;
@@ -4480,16 +4613,36 @@ export default async function handler(req, res) {
           const eventEnd = event.end?.dateTime || event.end?.date || '';
           return eventStart && eventEnd && hasTimeOverlap(startInstant, endInstant, eventStart, eventEnd);
         })
-        .map((event) => getTherapistFromDescription(event.description)),
+        .flatMap((event) => getTherapistFromDescription(event.description).split(',').map((name) => name.trim()).filter(Boolean)),
     );
     const candidates = Array.isArray(payload.therapistCandidates) ? payload.therapistCandidates : [];
     const availableCandidates = candidates.filter((name) => !busyTherapists.has(name));
-    const therapistName = requestedTherapist !== 'Any Available' && !busyTherapists.has(requestedTherapist)
-      ? requestedTherapist
-      : availableCandidates[0] || (requestedTherapist === 'Any Available' ? 'Any Available' : '');
-    if (!therapistName) {
-      return res.status(409).json({ message: 'The selected therapist is busy and no other therapist is available for this time.' });
+    const assignedNames = [];
+    const remainingCandidates = [...availableCandidates];
+    const assignTherapist = (requested) => {
+      if (requested !== 'Any Available' && !busyTherapists.has(requested) && !assignedNames.includes(requested)) {
+        assignedNames.push(requested);
+        const idx = remainingCandidates.indexOf(requested);
+        if (idx !== -1) remainingCandidates.splice(idx, 1);
+        return requested;
+      }
+      const idx = remainingCandidates.findIndex((name) => !assignedNames.includes(name));
+      if (idx === -1) return requested === 'Any Available' ? 'Any Available' : '';
+      const picked = remainingCandidates[idx];
+      assignedNames.push(picked);
+      remainingCandidates.splice(idx, 1);
+      return picked;
+    };
+    const therapistName1 = assignTherapist(requestedTherapist1);
+    const therapistName2 = isCoupleService ? assignTherapist(requestedTherapist2) : '';
+    if (!therapistName1 || (isCoupleService && !therapistName2)) {
+      return res.status(409).json({
+        message: isCoupleService
+          ? 'Not enough therapists are available for this couple session at the selected time.'
+          : 'The selected therapist is busy and no other therapist is available for this time.',
+      });
     }
+    const therapistName = therapistName2 ? `${therapistName1}, ${therapistName2}` : therapistName1;
 
     const calendarEvent = await calendarApi.events.insert({
       calendarId,

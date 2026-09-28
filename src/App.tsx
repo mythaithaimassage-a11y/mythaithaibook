@@ -402,7 +402,32 @@ export default function App() {
   const [adminLang, setAdminLang] = useState('en'); // 'en' or 'th'
   const [servicesList, setServicesList] = useState(INITIAL_SERVICES);
   const [therapistsList, setTherapistsList] = useState(MOCK_THERAPISTS);
+  const [branchesList, setBranchesList] = useState(MOCK_BRANCHES);
+  const [branchesError, setBranchesError] = useState('');
   const [selectedBranchId, setSelectedBranchId] = useState(1);
+
+  const loadBranches = async () => {
+    try {
+      const response = await fetch('/api/booking?view=branches', { cache: 'no-store' });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+      if (Array.isArray(data.branches) && data.branches.length > 0) {
+        setBranchesList(data.branches);
+        setBranchesError('');
+      }
+    } catch (error) {
+      setBranchesError(error.message || 'Unable to load branches; showing defaults.');
+    }
+  };
+
+  useEffect(() => {
+    loadBranches();
+  }, []);
+
+  const activeBranches = useMemo(
+    () => branchesList.filter((branch) => branch.active !== false),
+    [branchesList]
+  );
   
   // Google Sheets API Webhook URL state
   const [sheetsWebhookUrl] = useState(() => {
@@ -475,7 +500,7 @@ export default function App() {
       <main className={`flex-1 w-full ${viewMode === 'admin' || viewMode === 'therapist' ? 'p-0' : 'p-3 sm:p-6 max-w-7xl mx-auto'}`}>
         {viewMode === 'customer' ? (
           <CustomerPortal 
-            branches={MOCK_BRANCHES} 
+            branches={activeBranches} 
             services={servicesList} 
             therapists={therapistsList}
             sheetsWebhookUrl={sheetsWebhookUrl}
@@ -484,7 +509,9 @@ export default function App() {
         ) : viewMode === 'admin' ? (
           <AdminGate>
             <AdminPortal
-              branches={MOCK_BRANCHES}
+              branches={branchesList}
+              onBranchesChange={setBranchesList}
+              branchesError={branchesError}
               services={servicesList}
               setServices={setServicesList}
               therapists={therapistsList}
@@ -1748,6 +1775,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
     branch: branches[0],
     service: null,
     therapist: null,
+    therapist2: null,
     date: new Date().toISOString().split('T')[0],
     time: null,
     marketingOptIn: false,
@@ -1786,6 +1814,16 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
     paymentOption: 'deposit', // 'clinic', 'deposit', 'full'
     confirmationCode: ''
   });
+
+  // Keep the selected branch in sync if the owner updates or removes branches while this page is open.
+  useEffect(() => {
+    if (branches.length === 0) return;
+    setBookingData((prev) => {
+      const stillExists = branches.some((branch) => branch.id === prev.branch?.id);
+      return stillExists ? prev : { ...prev, branch: branches[0] };
+    });
+  }, [branches]);
+
 
   const categories = ['All', 'Thai Traditional', 'Thai Combo Swedish', 'Hot Stone Combo', 'Add-On & Packages', 'RMT Healthcare'];
 
@@ -1835,6 +1873,14 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
     if (selectedCategory === 'All') return services;
     return services.filter(s => s.category === selectedCategory);
   }, [services, selectedCategory]);
+
+  const isCoupleService = /couple/i.test(bookingData.service?.name || '');
+
+  useEffect(() => {
+    if (bookingData.therapist?.id && bookingData.therapist2?.id && bookingData.therapist.id === bookingData.therapist2.id) {
+      setBookingData((prev) => ({ ...prev, therapist2: null }));
+    }
+  }, [bookingData.therapist, bookingData.therapist2]);
 
   const updateBooking = (field, val) => {
     setBookingData(prev => ({ ...prev, [field]: val }));
@@ -1951,6 +1997,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
       branchName: bookingData.branch.name,
       serviceName: bookingData.service.name,
       therapistName: bookingData.therapist?.name || 'Any Available',
+      therapistName2: isCoupleService ? (bookingData.therapist2?.name || 'Any Available') : undefined,
       therapistCandidates: therapists
         .filter((therapist) => therapist.branches.includes(bookingData.branch.id))
         .map((therapist) => therapist.name),
@@ -2176,9 +2223,14 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
         {step === 2 && (
           <div className="space-y-6">
             <div>
-              <h2 className="text-xl font-bold text-stone-900 mb-1">Select Therapist</h2>
-              <p className="text-xs text-stone-500 mb-3">Choose a specific practitioner or request any available therapist</p>
-              
+              <h2 className="text-xl font-bold text-stone-900 mb-1">Select Therapist{isCoupleService ? 's' : ''}</h2>
+              <p className="text-xs text-stone-500 mb-3">
+                {isCoupleService
+                  ? 'This is a couple session for 2 people. Pick a specific practitioner for each guest, or request any available therapist — we will always assign 2 different therapists.'
+                  : 'Choose a specific practitioner or request any available therapist'}
+              </p>
+
+              {isCoupleService && <p className="text-xs font-bold text-emerald-800 mb-2">Guest 1 therapist</p>}
               <div className="grid gap-3 sm:grid-cols-3">
                 <button
                   type="button"
@@ -2193,25 +2245,74 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                   <p className="text-xs text-stone-500 mt-1">First available specialist</p>
                 </button>
 
-                {therapists.map(t => (
-                  <button
-                    key={t.id}
-                    type="button"
-                    onClick={() => updateBooking('therapist', t)}
-                    className={`p-3.5 rounded-xl border text-left transition ${
-                      bookingData.therapist?.id === t.id 
-                        ? 'border-emerald-600 bg-emerald-50 ring-2 ring-emerald-600/20' 
-                        : 'border-stone-200 bg-white hover:border-emerald-300'
-                    }`}
-                  >
-                    <div className="font-bold text-stone-900 text-sm flex items-center justify-between">
-                      {t.name}
-                      <span className="text-amber-500 text-xs font-bold">★ {t.rating}</span>
-                    </div>
-                    <p className="text-xs text-stone-500 mt-1 line-clamp-1">{t.bio}</p>
-                  </button>
-                ))}
+                {therapists.map(t => {
+                  const disabled = isCoupleService && bookingData.therapist2?.id === t.id;
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      disabled={disabled}
+                      onClick={() => updateBooking('therapist', t)}
+                      className={`p-3.5 rounded-xl border text-left transition ${disabled ? 'opacity-40 cursor-not-allowed' : ''} ${
+                        bookingData.therapist?.id === t.id 
+                          ? 'border-emerald-600 bg-emerald-50 ring-2 ring-emerald-600/20' 
+                          : 'border-stone-200 bg-white hover:border-emerald-300'
+                      }`}
+                    >
+                      <div className="font-bold text-stone-900 text-sm flex items-center justify-between">
+                        {t.name}
+                        <span className="text-amber-500 text-xs font-bold">★ {t.rating}</span>
+                      </div>
+                      <p className="text-xs text-stone-500 mt-1 line-clamp-1">{t.bio}</p>
+                      {disabled && <p className="text-[10px] text-red-500 mt-1 font-semibold">Already assigned to Guest 2</p>}
+                    </button>
+                  );
+                })}
               </div>
+
+              {isCoupleService && (
+                <>
+                  <p className="text-xs font-bold text-emerald-800 mt-5 mb-2">Guest 2 therapist</p>
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <button
+                      type="button"
+                      onClick={() => updateBooking('therapist2', null)}
+                      className={`p-3.5 rounded-xl border text-center transition ${
+                        bookingData.therapist2 === null 
+                          ? 'border-emerald-600 bg-emerald-50 ring-2 ring-emerald-600/20' 
+                          : 'border-stone-200 bg-white hover:border-emerald-300'
+                      }`}
+                    >
+                      <div className="font-bold text-stone-900 text-sm">Any Available Practitioner</div>
+                      <p className="text-xs text-stone-500 mt-1">First available specialist</p>
+                    </button>
+
+                    {therapists.map(t => {
+                      const disabled = bookingData.therapist?.id === t.id;
+                      return (
+                        <button
+                          key={t.id}
+                          type="button"
+                          disabled={disabled}
+                          onClick={() => updateBooking('therapist2', t)}
+                          className={`p-3.5 rounded-xl border text-left transition ${disabled ? 'opacity-40 cursor-not-allowed' : ''} ${
+                            bookingData.therapist2?.id === t.id 
+                              ? 'border-emerald-600 bg-emerald-50 ring-2 ring-emerald-600/20' 
+                              : 'border-stone-200 bg-white hover:border-emerald-300'
+                          }`}
+                        >
+                          <div className="font-bold text-stone-900 text-sm flex items-center justify-between">
+                            {t.name}
+                            <span className="text-amber-500 text-xs font-bold">★ {t.rating}</span>
+                          </div>
+                          <p className="text-xs text-stone-500 mt-1 line-clamp-1">{t.bio}</p>
+                          {disabled && <p className="text-[10px] text-red-500 mt-1 font-semibold">Already assigned to Guest 1</p>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
             </div>
 
             <div className="pt-4 border-t border-stone-200">
@@ -2638,9 +2739,15 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
 
                 <div className="space-y-1.5 text-xs text-stone-600">
                   <div className="flex justify-between">
-                    <span>Therapist:</span>
+                    <span>{isCoupleService ? 'Guest 1 therapist:' : 'Therapist:'}</span>
                     <span className="font-semibold text-stone-800">{bookingData.therapist?.name || 'Any Available'}</span>
                   </div>
+                  {isCoupleService && (
+                    <div className="flex justify-between">
+                      <span>Guest 2 therapist:</span>
+                      <span className="font-semibold text-stone-800">{bookingData.therapist2?.name || 'Any Available'}</span>
+                    </div>
+                  )}
                   <div className="flex justify-between">
                     <span>Ontario HST (13%):</span>
                     <span>${financials.tax.toFixed(2)}</span>
@@ -2838,6 +2945,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                     branch: branches[0],
                     service: null,
                     therapist: null,
+                    therapist2: null,
                     date: new Date().toISOString().split('T')[0],
                     time: null,
                     marketingOptIn: false,
@@ -2875,6 +2983,8 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
 
 function AdminPortal({ 
   branches, 
+  onBranchesChange,
+  branchesError,
   services, 
   setServices, 
   therapists, 
@@ -2888,6 +2998,52 @@ function AdminPortal({
 }) {
   const [activeTab, setActiveTab] = useState('schedule');
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [branchForm, setBranchForm] = useState(() => branches.map((branch) => ({ ...branch })));
+  const [isSavingBranches, setIsSavingBranches] = useState(false);
+  const [branchSaveError, setBranchSaveError] = useState('');
+  const [branchSaveMessage, setBranchSaveMessage] = useState('');
+
+  useEffect(() => {
+    setBranchForm(branches.map((branch) => ({ ...branch })));
+  }, [branches]);
+
+  const updateBranchField = (id, field, value) => {
+    setBranchForm((prev) => prev.map((branch) => (branch.id === id ? { ...branch, [field]: value } : branch)));
+  };
+
+  const addBranchRow = () => {
+    setBranchForm((prev) => [...prev, { id: -Date.now(), name: '', address: '', city: '', phone: '', active: true }]);
+  };
+
+  const removeBranchRow = (id) => {
+    setBranchForm((prev) => prev.filter((branch) => branch.id !== id));
+  };
+
+  const saveBranchForm = async () => {
+    setIsSavingBranches(true);
+    setBranchSaveError('');
+    setBranchSaveMessage('');
+    try {
+      const payload = branchForm.map((branch) => ({
+        ...branch,
+        id: branch.id > 0 ? branch.id : undefined,
+      }));
+      const response = await fetch('/api/booking?view=branches', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ branches: payload }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+      onBranchesChange(data.branches);
+      setBranchSaveMessage('Branches saved. The booking portal will reflect these changes immediately.');
+    } catch (error) {
+      setBranchSaveError(error.message || 'Unable to save branches');
+    } finally {
+      setIsSavingBranches(false);
+    }
+  };
+
   const [businessProfile, setBusinessProfile] = useState(DEFAULT_BUSINESS_PROFILE);
   const [hasLoadedBusinessProfile, setHasLoadedBusinessProfile] = useState(false);
   const [isLoadingBusinessProfile, setIsLoadingBusinessProfile] = useState(false);
@@ -3748,6 +3904,7 @@ function AdminPortal({
     { id: 'reports', label: 'Sales & reports', icon: BarChart3, section: 'Workspace' },
     { id: 'services', label: 'Service catalogue', icon: Layers, section: 'Manage' },
     { id: 'staff', label: 'Staff', icon: Users, section: 'Manage' },
+    { id: 'branches', label: 'Branches', icon: MapPin, section: 'Manage' },
     { id: 'patient-history', label: 'Patients', icon: UserRound, section: 'Manage' },
     { id: 'business-profile', label: 'Business profile', icon: Building, section: 'Manage' },
     { id: 'loyalty', label: 'Loyalty program', icon: Award, section: 'Grow' },
@@ -3764,6 +3921,7 @@ function AdminPortal({
     'google-ads': 'Google Ads',
     services: t.services,
     staff: t.staff,
+    branches: 'Branches',
     'patient-history': 'Patient Summary',
     'business-profile': 'Business profile',
   }[activeTab] || 'Owner dashboard';
@@ -4189,6 +4347,95 @@ function AdminPortal({
                 ))}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* TAB CONTENT: BRANCHES MANAGER */}
+      {activeTab === 'branches' && (
+        <div className="bg-white rounded-2xl p-6 border border-stone-200 shadow-sm space-y-4">
+          <div className="flex justify-between items-center">
+            <div>
+              <h2 className="text-lg font-bold text-stone-900">Branches</h2>
+              <p className="text-xs text-stone-500">Add, edit, or deactivate locations. Changes appear on the booking portal immediately after saving.</p>
+            </div>
+            <button
+              onClick={addBranchRow}
+              className="px-4 py-2 bg-amber-700 text-white rounded-xl text-xs font-bold hover:bg-amber-800 transition flex items-center"
+            >
+              <Plus className="w-4 h-4 mr-1" /> Add branch
+            </button>
+          </div>
+
+          {branchesError && (
+            <p role="alert" className="text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">{branchesError}</p>
+          )}
+          {branchSaveError && (
+            <p role="alert" className="text-xs font-semibold text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{branchSaveError}</p>
+          )}
+          {branchSaveMessage && (
+            <p role="status" className="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">{branchSaveMessage}</p>
+          )}
+
+          <div className="space-y-3">
+            {branchForm.map((branch) => (
+              <div key={branch.id} className="grid gap-2.5 sm:grid-cols-12 items-center border border-stone-200 rounded-xl p-3">
+                <input
+                  type="text"
+                  placeholder="Branch name"
+                  value={branch.name}
+                  onChange={(e) => updateBranchField(branch.id, 'name', e.target.value)}
+                  className="sm:col-span-3 p-2 text-xs rounded-lg border border-stone-300 focus:ring-2 focus:ring-emerald-600 focus:outline-none"
+                />
+                <input
+                  type="text"
+                  placeholder="Street address"
+                  value={branch.address}
+                  onChange={(e) => updateBranchField(branch.id, 'address', e.target.value)}
+                  className="sm:col-span-3 p-2 text-xs rounded-lg border border-stone-300 focus:ring-2 focus:ring-emerald-600 focus:outline-none"
+                />
+                <input
+                  type="text"
+                  placeholder="City, Province"
+                  value={branch.city}
+                  onChange={(e) => updateBranchField(branch.id, 'city', e.target.value)}
+                  className="sm:col-span-2 p-2 text-xs rounded-lg border border-stone-300 focus:ring-2 focus:ring-emerald-600 focus:outline-none"
+                />
+                <input
+                  type="text"
+                  placeholder="Phone"
+                  value={branch.phone}
+                  onChange={(e) => updateBranchField(branch.id, 'phone', e.target.value)}
+                  className="sm:col-span-2 p-2 text-xs rounded-lg border border-stone-300 focus:ring-2 focus:ring-emerald-600 focus:outline-none"
+                />
+                <label className="sm:col-span-1 flex items-center gap-1.5 text-[11px] font-semibold text-stone-600">
+                  <input
+                    type="checkbox"
+                    checked={branch.active !== false}
+                    onChange={(e) => updateBranchField(branch.id, 'active', e.target.checked)}
+                  />
+                  Active
+                </label>
+                <button
+                  type="button"
+                  onClick={() => removeBranchRow(branch.id)}
+                  className="sm:col-span-1 inline-flex items-center justify-center text-red-600 hover:text-red-800"
+                  aria-label={`Remove ${branch.name || 'branch'}`}
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex justify-end pt-2">
+            <button
+              onClick={saveBranchForm}
+              disabled={isSavingBranches}
+              className="px-5 py-2.5 bg-emerald-800 text-white font-semibold rounded-xl hover:bg-emerald-900 disabled:opacity-50 transition text-sm"
+            >
+              {isSavingBranches ? 'Saving…' : 'Save branches'}
+            </button>
           </div>
         </div>
       )}
