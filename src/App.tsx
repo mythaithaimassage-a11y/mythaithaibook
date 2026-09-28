@@ -86,7 +86,16 @@ function isTherapistScheduledAtBranch(therapist, branchId, dateStr) {
 }
 
 
-const AVAILABLE_TIMES = ["09:30 AM", "11:00 AM", "01:00 PM", "02:30 PM", "04:00 PM", "05:30 PM", "07:00 PM"];
+// Bookable start times at 15-minute intervals, from 09:30 AM through 07:00 PM.
+const AVAILABLE_TIMES = (() => {
+  const slots = [];
+  for (let minutes = 9 * 60 + 30; minutes <= 19 * 60; minutes += 15) {
+    const hour24 = Math.floor(minutes / 60);
+    const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
+    slots.push(`${String(hour12).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')} ${hour24 < 12 ? 'AM' : 'PM'}`);
+  }
+  return slots;
+})();
 // Flat online amount charged to confirm a booking; the balance is paid at the clinic.
 const BOOKING_DEPOSIT_AMOUNT = 10;
 const THERAPIST_CALENDAR_COLORS = [
