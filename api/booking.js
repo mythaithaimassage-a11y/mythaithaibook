@@ -279,6 +279,22 @@ function addMinutes(dateTime, minutes) {
   return `${value.getUTCFullYear()}-${String(value.getUTCMonth() + 1).padStart(2, '0')}-${String(value.getUTCDate()).padStart(2, '0')}T${String(value.getUTCHours()).padStart(2, '0')}:${String(value.getUTCMinutes()).padStart(2, '0')}:${String(value.getUTCSeconds()).padStart(2, '0')}`;
 }
 
+// Reused by find-booking/cancel-booking to decide whether a cancellation
+// still qualifies for a refund under the 24-hour cancellation policy.
+const BOOKING_CANCELLATION_WINDOW_HOURS = 24;
+function computeBookingRefundEligibility(date, time) {
+  try {
+    const startDateTime = parseBookingDateTime(date, time);
+    const startInstant = new Date(`${startDateTime}-04:00`).getTime();
+    if (Number.isNaN(startInstant)) return { hoursUntil: null, eligible: false };
+    const hoursUntil = (startInstant - Date.now()) / (1000 * 60 * 60);
+    return { hoursUntil, eligible: hoursUntil >= BOOKING_CANCELLATION_WINDOW_HOURS };
+  } catch {
+    return { hoursUntil: null, eligible: false };
+  }
+}
+
+
 function getTherapistFromDescription(description = '') {
   return description.match(/^Therapist:\s*(.+)$/m)?.[1]?.trim() || '';
 }
@@ -2376,6 +2392,16 @@ async function squareRequest(method, path, body) {
   return data;
 }
 
+async function squareRefundPayment(paymentId, amountCents, reason) {
+  const data = await squareRequest('POST', '/v2/refunds', {
+    idempotency_key: crypto.randomUUID(),
+    payment_id: paymentId,
+    amount_money: { amount: Math.round(amountCents), currency: 'CAD' },
+    reason: String(reason || '').slice(0, 190),
+  });
+  return data?.refund;
+}
+
 function getSquareWebhookNotificationUrl(req) {
   if (SQUARE_WEBHOOK_NOTIFICATION_URL) return SQUARE_WEBHOOK_NOTIFICATION_URL;
   const host = req.headers['x-forwarded-host'] || req.headers.host;
@@ -2462,7 +2488,7 @@ export default async function handler(req, res) {
     }
 
     const view = String(req.query?.view || '');
-    const validGetViews = ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'business-name', 'square-config', 'google-reviews', 'branches', 'services', 'therapists', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal'];
+    const validGetViews = ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'business-name', 'square-config', 'google-reviews', 'branches', 'services', 'therapists', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal', 'find-booking'];
     if (req.method === 'GET' && !validGetViews.includes(view)) {
       return res.status(404).json({ message: 'Unknown booking view' });
     }
@@ -2474,7 +2500,7 @@ export default async function handler(req, res) {
     if (ownerOnlyRequest && !getOwnerSession(req)) {
       return res.status(401).json({ message: 'Owner sign-in required' });
     }
-    if (['business-profile', 'branches', 'services', 'therapists', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-signup', 'company-portal-bulk-signup', 'company-portal-link', 'square-create-checkout'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
+    if (['business-profile', 'branches', 'services', 'therapists', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-signup', 'company-portal-bulk-signup', 'company-portal-link', 'square-create-checkout', 'cancel-booking', 'reschedule-booking'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
       return res.status(403).json({ message: 'Profile update origin is not allowed' });
     }
 
@@ -4347,13 +4373,65 @@ export default async function handler(req, res) {
         return res.status(200).json({ notes });
       }
 
+      if (req.query?.view === 'find-booking') {
+        const bookingId = String(req.query?.bookingId || '').trim();
+        const email = String(req.query?.email || '').trim().toLowerCase();
+        if (!bookingId || bookingId.length > 100 || !email) {
+          return res.status(400).json({ message: 'A booking reference and the email used at booking are required.' });
+        }
+        if (!process.env.GOOGLE_SPREADSHEET_ID) {
+          throw new Error('GOOGLE_SPREADSHEET_ID is not configured');
+        }
+        const result = await sheets.spreadsheets.values.get({
+          spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+          range: 'Sheet1!A:Z',
+        });
+        const rows = result.data.values || [];
+        const hasHeader = rows[0]?.[0] === 'Booking ID';
+        const startIndex = hasHeader ? 1 : 0;
+        const rowIndex = rows.findIndex((row, index) =>
+          index >= startIndex &&
+          String(row[0] || '') === bookingId &&
+          String(row[3] || '').trim().toLowerCase() === email,
+        );
+        if (rowIndex < 0) {
+          return res.status(404).json({ message: 'We could not find a booking with that reference and email. Double-check both and try again.' });
+        }
+        const row = rows[rowIndex];
+        const status = row[24] || '';
+        const { hoursUntil, eligible } = computeBookingRefundEligibility(row[7], row[8]);
+        return res.status(200).json({
+          booking: {
+            id: row[0] || '',
+            customerName: row[1] || '',
+            phone: row[2] || '',
+            email: row[3] || '',
+            branchName: row[4] || '',
+            serviceName: row[5] || '',
+            therapistName: row[6] || '',
+            date: row[7] || '',
+            time: row[8] || '',
+            paymentOption: row[9] || '',
+            paidAmount: Number(row[10]) || 0,
+            total: Number(row[11]) || 0,
+            durationMinutes: Number(row[12]) || 0,
+            status,
+            statusNotes: row[25] || '',
+            isCouple: /couple/i.test(row[5] || ''),
+          },
+          cancelled: status === 'Cancelled',
+          hoursUntilAppointment: hoursUntil,
+          refundEligible: eligible,
+        });
+      }
+
       if (req.query?.view === 'calendar') {
         const date = req.query.date || new Date().toISOString().slice(0, 10);
         const branch = String(req.query.branch || '').toLowerCase();
         const therapist = String(req.query.therapist || '').toLowerCase();
         const sheetResult = await sheets.spreadsheets.values.get({
           spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-          range: 'Sheet1!A:U',
+          range: 'Sheet1!A:Z',
         });
         const sheetRows = sheetResult.data.values || [];
         const hasHeader = sheetRows[0]?.[0] === 'Booking ID';
@@ -4409,6 +4487,8 @@ export default async function handler(req, res) {
                   durationMinutes: Number(bookingRow[12]) || 0,
                   receiptNumber: bookingRow[18] || '',
                   receiptEmailStatus: bookingRow[20] || '',
+                  status: bookingRow[24] || '',
+                  statusNotes: bookingRow[25] || '',
                 } : null;
 
                 if (!booking) {
@@ -4461,6 +4541,8 @@ export default async function handler(req, res) {
                     durationMinutes: autoDurationMinutes,
                     receiptNumber: '',
                     receiptEmailStatus: '',
+                    status: '',
+                    statusNotes: '',
                     autoLinked: true,
                   };
                 }
@@ -4476,6 +4558,7 @@ export default async function handler(req, res) {
                   end,
                   therapistName: eventTherapist,
                   localTime: localStart.time,
+                  isCouple: /couple/i.test(booking.serviceName || event.summary || ''),
                   booking,
                 });
               }
@@ -4506,7 +4589,7 @@ export default async function handler(req, res) {
 
       const result = await sheets.spreadsheets.values.get({
         spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'Sheet1!A:U',
+        range: 'Sheet1!A:Z',
       });
       const rows = result.data.values || [];
       const dataRows = rows[0]?.[0] === 'Booking ID' ? rows.slice(1) : rows;
@@ -4533,6 +4616,9 @@ export default async function handler(req, res) {
           receiptNumber: row[18] || '',
           receiptIssuedAt: row[19] || '',
           receiptEmailStatus: row[20] || '',
+          status: row[24] || '',
+          statusNotes: row[25] || '',
+          isCouple: /couple/i.test(row[5] || ''),
           syncedToSheets: true,
         })),
       });
@@ -5111,6 +5197,232 @@ export default async function handler(req, res) {
 
       await deleteSheetRows(sheets, 'PatientHistory', [rowIndex + 1], PATIENT_HISTORY_SPREADSHEET_ID);
       return res.status(200).json({ deleted: true, bookingId });
+    }
+
+    if (req.method === 'POST' && req.query?.view === 'cancel-booking') {
+      const bookingId = String(req.body?.bookingId || '').trim();
+      const email = String(req.body?.email || '').trim().toLowerCase();
+      if (!bookingId || bookingId.length > 100 || !email) {
+        return res.status(400).json({ message: 'A booking reference and the email used at booking are required.' });
+      }
+      if (!process.env.GOOGLE_SPREADSHEET_ID) {
+        throw new Error('GOOGLE_SPREADSHEET_ID is not configured');
+      }
+      const result = await sheets.spreadsheets.values.get({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: 'Sheet1!A:Z',
+      });
+      const rows = result.data.values || [];
+      const hasHeader = rows[0]?.[0] === 'Booking ID';
+      const startIndex = hasHeader ? 1 : 0;
+      const rowIndex = rows.findIndex((row, index) =>
+        index >= startIndex &&
+        String(row[0] || '') === bookingId &&
+        String(row[3] || '').trim().toLowerCase() === email,
+      );
+      if (rowIndex < 0) {
+        return res.status(404).json({ message: 'We could not find a booking with that reference and email.' });
+      }
+      const row = rows[rowIndex];
+      if (row[24] === 'Cancelled') {
+        return res.status(409).json({ message: 'This booking has already been cancelled.' });
+      }
+      const paidAmount = Number(row[10]) || 0;
+      const { hoursUntil, eligible: refundEligible } = computeBookingRefundEligibility(row[7], row[8]);
+
+      let refundIssued = false;
+      let refundAmount = 0;
+      let statusNotes = '';
+      if (refundEligible && paidAmount > 0) {
+        let squarePaymentIds = [];
+        try {
+          const paymentsResult = await sheets.spreadsheets.values.get({
+            spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+            range: 'SquarePayments!A:I',
+          });
+          squarePaymentIds = (paymentsResult.data.values || []).slice(1)
+            .filter((paymentRow) => String(paymentRow[2] || '') === bookingId && String(paymentRow[4] || '') === 'COMPLETED' && paymentRow[8])
+            .map((paymentRow) => ({ paymentId: paymentRow[8], amount: Number(paymentRow[3]) || 0 }));
+        } catch (error) {
+          console.error('Cancel booking Square lookup error:', error.message || error);
+        }
+        if (squarePaymentIds.length) {
+          try {
+            for (const { paymentId, amount } of squarePaymentIds) {
+              await squareRefundPayment(paymentId, Math.round(amount * 100), `Booking ${bookingId} cancelled more than 24 hours before appointment`);
+              refundAmount += amount;
+            }
+            refundIssued = true;
+            statusNotes = `Cancelled ${new Date().toISOString()} — $${refundAmount.toFixed(2)} refunded automatically to the original Square payment method.`;
+          } catch (error) {
+            statusNotes = `Cancelled ${new Date().toISOString()} — a refund of $${paidAmount.toFixed(2)} is owed but the automatic Square refund failed (${error.message || 'unknown error'}). Please refund manually.`;
+          }
+        } else {
+          statusNotes = `Cancelled ${new Date().toISOString()} — a refund of $${paidAmount.toFixed(2)} is owed (paid via ${row[9] || 'unspecified method'}). Please process this refund manually.`;
+        }
+      } else if (paidAmount > 0) {
+        statusNotes = `Cancelled ${new Date().toISOString()} — no refund issued (cancelled within 24 hours of the appointment).`;
+      } else {
+        statusNotes = `Cancelled ${new Date().toISOString()} — no payment was on file.`;
+      }
+
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: `Sheet1!Y${rowIndex + 1}:Z${rowIndex + 1}`,
+        valueInputOption: 'RAW',
+        requestBody: { values: [['Cancelled', statusNotes]] },
+      });
+
+      const calendarId = row[15] || PRIMARY_CALENDAR_ID;
+      const calendarEventId = row[16] || '';
+      if (calendarEventId) {
+        try {
+          await calendarApi.events.delete({ calendarId, eventId: calendarEventId });
+        } catch (error) {
+          console.error('Cancel booking calendar cleanup error:', error.message || error);
+        }
+      }
+
+      let emailSent = false;
+      try {
+        const businessProfile = await getBusinessProfile(sheets);
+        await sendFormattedLoyaltyEmail(createGmailApi(), {
+          email: row[3],
+          name: row[1] || '',
+          subject: `Your ${businessProfile.businessName} appointment was cancelled`,
+          businessName: businessProfile.businessName,
+          heading: 'Appointment cancelled',
+          intro: `Your appointment has been cancelled as requested.`,
+          details: [
+            { label: 'Booking reference', value: bookingId },
+            { label: 'Service', value: row[5] || '' },
+            { label: 'Original date & time', value: `${row[7]} at ${row[8]}` },
+          ],
+          note: statusNotes,
+        });
+        emailSent = true;
+      } catch (error) {
+        console.error('Cancel booking confirmation email error:', error.message || error);
+      }
+
+      return res.status(200).json({
+        cancelled: true,
+        bookingId,
+        hoursUntilAppointment: hoursUntil,
+        refundEligible,
+        refundIssued,
+        refundAmount,
+        statusNotes,
+        emailSent,
+      });
+    }
+
+    if (req.method === 'POST' && req.query?.view === 'reschedule-booking') {
+      const bookingId = String(req.body?.bookingId || '').trim();
+      const email = String(req.body?.email || '').trim().toLowerCase();
+      const newDate = String(req.body?.date || '').trim();
+      const newTime = String(req.body?.time || '').trim();
+      if (!bookingId || bookingId.length > 100 || !email) {
+        return res.status(400).json({ message: 'A booking reference and the email used at booking are required.' });
+      }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(newDate) || !/^\d{1,2}:\d{2}\s*(AM|PM)$/i.test(newTime)) {
+        return res.status(400).json({ message: 'Choose a valid new date and time.' });
+      }
+      if (!process.env.GOOGLE_SPREADSHEET_ID) {
+        throw new Error('GOOGLE_SPREADSHEET_ID is not configured');
+      }
+      const result = await sheets.spreadsheets.values.get({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: 'Sheet1!A:Z',
+      });
+      const rows = result.data.values || [];
+      const hasHeader = rows[0]?.[0] === 'Booking ID';
+      const startIndex = hasHeader ? 1 : 0;
+      const rowIndex = rows.findIndex((row, index) =>
+        index >= startIndex &&
+        String(row[0] || '') === bookingId &&
+        String(row[3] || '').trim().toLowerCase() === email,
+      );
+      if (rowIndex < 0) {
+        return res.status(404).json({ message: 'We could not find a booking with that reference and email.' });
+      }
+      const row = rows[rowIndex];
+      if (row[24] === 'Cancelled') {
+        return res.status(409).json({ message: 'This booking has already been cancelled and cannot be rescheduled.' });
+      }
+      const { eligible: wasWithinPolicyWindow } = computeBookingRefundEligibility(row[7], row[8]);
+      let newStartDateTime;
+      try {
+        newStartDateTime = parseBookingDateTime(newDate, newTime);
+      } catch (error) {
+        return res.status(400).json({ message: error.message });
+      }
+      const durationMinutes = Number(row[12]) || 60;
+      const newEndDateTime = addMinutes(newStartDateTime, durationMinutes);
+      const calendarId = row[15] || PRIMARY_CALENDAR_ID;
+      const calendarEventId = row[16] || '';
+      const originalDate = row[7] || '';
+      const originalTime = row[8] || '';
+      if (calendarEventId) {
+        try {
+          await calendarApi.events.patch({
+            calendarId,
+            eventId: calendarEventId,
+            requestBody: {
+              start: { dateTime: newStartDateTime, timeZone: CALENDAR_TIME_ZONE },
+              end: { dateTime: newEndDateTime, timeZone: CALENDAR_TIME_ZONE },
+            },
+          });
+        } catch (error) {
+          console.error('Reschedule booking calendar update error:', error.message || error);
+          return res.status(502).json({ message: 'The new time could not be saved to Google Calendar. Please try again or contact the clinic.' });
+        }
+      }
+      const statusNotes = `Rescheduled ${new Date().toISOString()} from ${originalDate} ${originalTime} to ${newDate} ${newTime} — no refund, per cancellation/reschedule policy.`;
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: `Sheet1!H${rowIndex + 1}:I${rowIndex + 1}`,
+        valueInputOption: 'RAW',
+        requestBody: { values: [[newDate, newTime]] },
+      });
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: `Sheet1!Z${rowIndex + 1}`,
+        valueInputOption: 'RAW',
+        requestBody: { values: [[statusNotes]] },
+      });
+
+      let emailSent = false;
+      try {
+        const businessProfile = await getBusinessProfile(sheets);
+        await sendFormattedLoyaltyEmail(createGmailApi(), {
+          email: row[3],
+          name: row[1] || '',
+          subject: `Your ${businessProfile.businessName} appointment was rescheduled`,
+          businessName: businessProfile.businessName,
+          heading: 'Appointment rescheduled',
+          intro: 'Your appointment has been moved to a new date and time.',
+          details: [
+            { label: 'Booking reference', value: bookingId },
+            { label: 'Service', value: row[5] || '' },
+            { label: 'Previous date & time', value: `${originalDate} at ${originalTime}` },
+            { label: 'New date & time', value: `${newDate} at ${newTime}` },
+          ],
+          note: 'Rescheduling does not issue a refund of any prior payment; your existing payment carries over to the new date.',
+        });
+        emailSent = true;
+      } catch (error) {
+        console.error('Reschedule booking confirmation email error:', error.message || error);
+      }
+
+      return res.status(200).json({
+        rescheduled: true,
+        bookingId,
+        date: newDate,
+        time: newTime,
+        wasWithinPolicyWindow,
+        emailSent,
+      });
     }
 
     if (req.method === 'POST' && req.query?.view === 'business-profile') {

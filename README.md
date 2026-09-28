@@ -330,6 +330,30 @@ configured Gmail OAuth sender and the saved business profile. RMT/acupuncture
 services are treated as HST-exempt; other services use the Ontario 13%
 tax-inclusive rate for the receipt breakdown.
 
+### Customer self-service cancel/reschedule and the 24-hour policy
+
+Cancellation and reschedule status are recorded in columns Y (`Status`) and Z
+(`StatusNotes`) of `Sheet1`. Customers can manage an existing booking from the
+"Manage an existing booking" link on the booking portal by entering their
+booking reference (`MTT-XXXXXX`) and the email used at booking:
+
+- **Cancel ≥ 24 hours before the appointment**: any payment made is
+  automatically refunded through Square when the booking was paid via Square
+  Checkout (looked up from the `SquarePayments` sheet); cash/e-transfer/in-clinic
+  payments are flagged in `StatusNotes` as "refund owed — manual" for staff to
+  process.
+- **Cancel < 24 hours before the appointment**: no refund is issued.
+- **Reschedule**: always allowed (as long as the booking isn't already
+  cancelled) and never issues a refund, regardless of the 24-hour window. Only
+  the date/time and the linked Google Calendar event are updated; branch,
+  service, and therapist stay the same.
+
+Cancelling deletes the linked Google Calendar event (if any) and sends a
+confirmation email; rescheduling updates the Google Calendar event's start/end
+time and sends a confirmation email noting no refund was issued. The owner
+**Booking Calendar** shows a "Cancelled" badge on cancelled appointments and a
+couple-massage icon on any booking whose service name contains "Couple".
+
 Calendar events created outside the booking flow (for example, an appointment
 typed directly into Google Calendar for a walk-in) are automatically linked to
 `Sheet1` when the owner calendar view is loaded. The app creates a booking row

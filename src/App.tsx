@@ -1846,6 +1846,7 @@ function AdminGate({ children }) {
 
 function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNewBooking }) {
   const [step, setStep] = useState(1);
+  const [portalMode, setPortalMode] = useState('book'); // 'book' or 'manage'
   const { businessName, photoUrl, error: brandingError } = useBusinessBranding();
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -2200,9 +2201,22 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
               Mythaithaimassage.com
             </a>
           </div>
+          <div className="mt-3">
+            <button
+              type="button"
+              onClick={() => setPortalMode(portalMode === 'manage' ? 'book' : 'manage')}
+              className="text-xs font-semibold text-amber-200 underline underline-offset-2 hover:text-amber-100 transition"
+            >
+              {portalMode === 'manage' ? '← Back to booking' : 'Manage an existing booking (reschedule or cancel)'}
+            </button>
+          </div>
         </div>
       </div>
 
+      {portalMode === 'manage' ? (
+        <ManageBookingPanel onBack={() => setPortalMode('book')} />
+      ) : (
+      <>
       {/* 5-Step Progress Stepper */}
       <div className="bg-white border-b border-stone-200 px-4 py-4 sm:px-8">
         <div className="flex items-center justify-between text-xs sm:text-sm font-medium">
@@ -2940,6 +2954,13 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
               </div>
             </div>
 
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5 text-xs text-amber-900 flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <span>
+                <span className="font-semibold">Cancellation policy:</span> Cancel at least 24 hours before your appointment for a full refund of any payment made. Cancelling within 24 hours does not qualify for a refund. Rescheduling never issues a refund, regardless of timing. Manage or cancel your booking anytime from the "Manage an existing booking" link above.
+              </span>
+            </div>
+
             <div className="flex justify-between pt-2">
               <button
                 type="button"
@@ -3109,6 +3130,200 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
           </div>
         )}
       </div>
+      </>
+      )}
+    </div>
+  );
+}
+
+function ManageBookingPanel({ onBack }) {
+  const [bookingId, setBookingId] = useState('');
+  const [email, setEmail] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [booking, setBooking] = useState(null);
+  const [hoursUntilAppointment, setHoursUntilAppointment] = useState(null);
+  const [refundEligible, setRefundEligible] = useState(false);
+  const [actionResult, setActionResult] = useState(null);
+  const [actionLoading, setActionLoading] = useState(false);
+  const [showRescheduleForm, setShowRescheduleForm] = useState(false);
+  const [newDate, setNewDate] = useState('');
+  const [newTime, setNewTime] = useState('');
+
+  const findBooking = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setError('');
+    setBooking(null);
+    setActionResult(null);
+    try {
+      const response = await fetch(`/api/booking?view=find-booking&bookingId=${encodeURIComponent(bookingId.trim())}&email=${encodeURIComponent(email.trim())}`, { cache: 'no-store' });
+      const data = await response.json();
+      if (!response.ok) {
+        setError(data?.message || 'We could not find that booking.');
+        return;
+      }
+      setBooking(data.booking);
+      setHoursUntilAppointment(data.hoursUntilAppointment);
+      setRefundEligible(data.refundEligible);
+    } catch {
+      setError('Something went wrong looking up your booking. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const cancelBooking = async () => {
+    if (!window.confirm(refundEligible
+      ? 'Cancel this appointment? Since it is more than 24 hours away, any payment made will be refunded.'
+      : 'Cancel this appointment? It is less than 24 hours away, so no refund will be issued.')) {
+      return;
+    }
+    setActionLoading(true);
+    setActionResult(null);
+    try {
+      const response = await fetch('/api/booking?view=cancel-booking', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bookingId: booking.id, email }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        setActionResult({ type: 'error', message: data?.message || 'Cancellation failed.' });
+        return;
+      }
+      setActionResult({ type: 'success', message: data.refundIssued ? `Cancelled. $${Number(data.refundAmount || 0).toFixed(2)} was refunded to your original payment method.` : (data.refundEligible ? 'Cancelled. A refund is owed and the clinic will process it manually.' : 'Cancelled. No refund is issued for cancellations within 24 hours of the appointment.') });
+      setBooking((prev) => prev && { ...prev, status: 'Cancelled' });
+    } catch {
+      setActionResult({ type: 'error', message: 'Something went wrong cancelling your booking. Please try again or call the clinic.' });
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  const rescheduleBooking = async (e) => {
+    e.preventDefault();
+    if (!newDate || !newTime) return;
+    setActionLoading(true);
+    setActionResult(null);
+    try {
+      const response = await fetch('/api/booking?view=reschedule-booking', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bookingId: booking.id, email, date: newDate, time: newTime }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        setActionResult({ type: 'error', message: data?.message || 'Reschedule failed.' });
+        return;
+      }
+      setActionResult({ type: 'success', message: `Rescheduled to ${data.date} at ${data.time}. No refund is issued for reschedules; your existing payment carries over.` });
+      setBooking((prev) => prev && { ...prev, date: data.date, time: data.time });
+      setShowRescheduleForm(false);
+    } catch {
+      setActionResult({ type: 'error', message: 'Something went wrong rescheduling your booking. Please try again or call the clinic.' });
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  return (
+    <div className="p-4 sm:p-8 max-w-xl mx-auto space-y-5">
+      <h2 className="text-xl font-bold text-stone-900">Manage your booking</h2>
+      <p className="text-xs text-stone-500">Enter your booking reference (e.g. MTT-123456) and the email you used when booking.</p>
+
+      <form onSubmit={findBooking} className="grid gap-3 sm:grid-cols-2">
+        <input
+          value={bookingId}
+          onChange={(e) => setBookingId(e.target.value)}
+          placeholder="Booking reference (MTT-XXXXXX)"
+          required
+          className="rounded-xl border border-stone-300 px-3 py-2.5 text-sm"
+        />
+        <input
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="Email used at booking"
+          type="email"
+          required
+          className="rounded-xl border border-stone-300 px-3 py-2.5 text-sm"
+        />
+        <button
+          type="submit"
+          disabled={loading}
+          className="sm:col-span-2 px-5 py-2.5 bg-emerald-800 text-white font-semibold rounded-xl hover:bg-emerald-900 transition disabled:opacity-50"
+        >
+          {loading ? 'Looking up booking…' : 'Find my booking'}
+        </button>
+      </form>
+
+      {error && <p role="alert" className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-xl p-3">{error}</p>}
+
+      {booking && (
+        <div className="bg-stone-50 border border-stone-200 rounded-2xl p-4 space-y-3 text-sm">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="font-bold text-stone-900 flex items-center gap-1.5">
+                {booking.serviceName}
+                {booking.isCouple && <Users className="w-4 h-4 text-rose-500" aria-label="Couple massage" />}
+              </div>
+              <div className="text-xs text-stone-500">{booking.branchName} • {booking.date} at {booking.time}</div>
+            </div>
+            {booking.status === 'Cancelled' && (
+              <span className="text-[10px] font-bold uppercase tracking-wide text-red-700 bg-red-100 px-2 py-1 rounded-full">Cancelled</span>
+            )}
+          </div>
+
+          {booking.status !== 'Cancelled' && (
+            <p className="text-xs text-stone-600">
+              {refundEligible
+                ? 'This appointment is more than 24 hours away — cancelling now qualifies for a refund of any payment made.'
+                : 'This appointment is less than 24 hours away — cancelling now will not include a refund. Rescheduling never issues a refund.'}
+            </p>
+          )}
+
+          {actionResult && (
+            <p className={`text-xs rounded-xl p-3 border ${actionResult.type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-red-50 border-red-200 text-red-700'}`}>
+              {actionResult.message}
+            </p>
+          )}
+
+          {booking.status !== 'Cancelled' && (
+            <div className="flex flex-wrap gap-2 pt-1">
+              <button
+                type="button"
+                disabled={actionLoading}
+                onClick={cancelBooking}
+                className="px-4 py-2 border border-red-300 text-red-700 font-semibold rounded-xl hover:bg-red-50 transition disabled:opacity-50 text-xs"
+              >
+                Cancel appointment
+              </button>
+              <button
+                type="button"
+                disabled={actionLoading}
+                onClick={() => setShowRescheduleForm((v) => !v)}
+                className="px-4 py-2 border border-stone-300 text-stone-700 font-semibold rounded-xl hover:bg-stone-100 transition disabled:opacity-50 text-xs"
+              >
+                Reschedule
+              </button>
+            </div>
+          )}
+
+          {showRescheduleForm && booking.status !== 'Cancelled' && (
+            <form onSubmit={rescheduleBooking} className="grid gap-2 sm:grid-cols-3 pt-2 border-t border-stone-200">
+              <input type="date" value={newDate} onChange={(e) => setNewDate(e.target.value)} required className="rounded-xl border border-stone-300 px-3 py-2 text-xs" />
+              <input type="text" value={newTime} onChange={(e) => setNewTime(e.target.value)} placeholder="e.g. 2:30 PM" required className="rounded-xl border border-stone-300 px-3 py-2 text-xs" />
+              <button type="submit" disabled={actionLoading} className="px-3 py-2 bg-emerald-800 text-white font-semibold rounded-xl hover:bg-emerald-900 transition disabled:opacity-50 text-xs">
+                {actionLoading ? 'Saving…' : 'Confirm new time'}
+              </button>
+            </form>
+          )}
+        </div>
+      )}
+
+      <button type="button" onClick={onBack} className="text-xs font-semibold text-stone-500 underline underline-offset-2 hover:text-stone-800">
+        ← Back to booking
+      </button>
     </div>
   );
 }
@@ -4553,7 +4768,11 @@ function AdminPortal({
                     <div className="p-1.5 space-y-1">
                       {hourEvents.map((event) => (
                         <button key={event.id} type="button" onClick={() => { setSelectedCalendarEvent(event); setIssuedReceipt(null); setReceiptError(''); setReceiptNotice(''); }} className={`block w-full rounded-lg border-l-4 px-3 py-2 text-left text-xs transition hover:brightness-95 ${getTherapistCalendarColor(event.therapistName, therapists).event}`}>
-                          <div className={`font-bold ${getTherapistCalendarColor(event.therapistName, therapists).text}`}>{event.summary}</div>
+                          <div className={`font-bold flex items-center gap-1.5 ${getTherapistCalendarColor(event.therapistName, therapists).text}`}>
+                            {event.isCouple && <Users className="w-3 h-3 shrink-0" aria-label="Couple massage" />}
+                            <span className="truncate">{event.summary}</span>
+                            {event.booking?.status === 'Cancelled' && <span className="shrink-0 text-[9px] font-bold uppercase tracking-wide text-red-700 bg-red-100 px-1.5 py-0.5 rounded-full">Cancelled</span>}
+                          </div>
                           <div className={getTherapistCalendarColor(event.therapistName, therapists).text}>{event.localTime} · {event.therapistName || event.calendarName.replace(' - MY THAI THAI', '')}</div>
                         </button>
                       ))}
@@ -4592,7 +4811,11 @@ function AdminPortal({
                 <div key={event.id} className={`p-4 rounded-xl border border-stone-200 ${getTherapistCalendarColor(event.therapistName, therapists).event}`}>
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <button type="button" onClick={() => { setSelectedCalendarEvent(event); setIssuedReceipt(null); setReceiptError(''); setReceiptNotice(''); }} className="min-w-0 text-left">
-                      <span className="font-bold text-stone-900">{event.summary}</span>
+                      <span className="font-bold text-stone-900 inline-flex items-center gap-1.5">
+                        {event.isCouple && <Users className="w-3.5 h-3.5 text-rose-500 shrink-0" aria-label="Couple massage" />}
+                        {event.summary}
+                        {event.booking?.status === 'Cancelled' && <span className="text-[10px] font-bold uppercase tracking-wide text-red-700 bg-red-100 px-1.5 py-0.5 rounded-full">Cancelled</span>}
+                      </span>
                       <span className="mt-1 block text-xs text-stone-500">{event.therapistName || event.calendarName} · {event.location}</span>
                     </button>
                     <div className="flex shrink-0 flex-col items-end gap-2">
