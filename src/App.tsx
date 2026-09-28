@@ -86,6 +86,26 @@ function isTherapistScheduledAtBranch(therapist, branchId, dateStr) {
 }
 
 
+// Medical history questions. Shared by the intake grid, the select-all controls, and
+// the blank default state so the three can never drift apart.
+const INTAKE_CONDITIONS = [
+  ['heart', 'Heart condition / heart disease / stroke'],
+  ['bloodPressure', 'High or low blood pressure'],
+  ['diabetes', 'Diabetes'],
+  ['cancer', 'History of cancer / precancerous lesions'],
+  ['headaches', 'Headaches / migraines / dizziness'],
+  ['boneJoint', 'Bone or joint disorder / spinal injury / herniated disc'],
+  ['brokenBones', 'Broken bones / metal implants / plates / pins'],
+  ['osteoporosis', 'Osteoporosis / arthritis / rheumatoid arthritis'],
+  ['allergies', 'Allergies to oil'],
+  ['surgeries', 'Past surgeries or recent surgeries'],
+  ['numbness', 'Numbness or loss of sensation'],
+  ['skinSensitivity', 'Skin sensitivity / easy bruising'],
+  ['pregnant', 'Pregnant or recently gave birth'],
+  ['medications', 'Taking medication, blood thinners, painkillers, or supplements'],
+];
+const BLANK_INTAKE_CONDITIONS = Object.fromEntries(INTAKE_CONDITIONS.map(([field]) => [field, '']));
+
 // Bookable start times at 15-minute intervals, from 09:30 AM through 07:00 PM.
 const AVAILABLE_TIMES = (() => {
   const slots = [];
@@ -438,6 +458,9 @@ export default function App() {
     }
   }, [squarePaymentComplete]);
   const [viewMode, setViewMode] = useState('customer'); // 'customer' or 'admin'
+  // Set when staff open the booking flow from the dashboard for a walk-in or phone
+  // booking, which unlocks the option to take payment at the clinic instead.
+  const [staffBooking, setStaffBooking] = useState(false);
   const [adminLang, setAdminLang] = useState('en'); // 'en' or 'th'
   const [servicesList, setServicesList] = useState(INITIAL_SERVICES);
   const [servicesError, setServicesError] = useState('');
@@ -582,6 +605,7 @@ export default function App() {
             services={activeServices} 
             therapists={activeTherapists}
             sheetsWebhookUrl={sheetsWebhookUrl}
+            staffBooking={staffBooking}
             onNewBooking={(newBkg) => setExistingBookings(prev => [newBkg, ...prev])}
           />
         ) : viewMode === 'admin' ? (
@@ -602,7 +626,7 @@ export default function App() {
               setSelectedBranchId={setSelectedBranchId}
               lang={adminLang}
               setLang={setAdminLang}
-              onNavigateToBookingPortal={() => setViewMode('customer')}
+              onNavigateToBookingPortal={() => { setStaffBooking(true); setViewMode('customer'); }}
             />
           </AdminGate>
         ) : (
@@ -1944,9 +1968,16 @@ function AdminGate({ children }) {
   );
 }
 
-function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNewBooking }) {
+function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNewBooking, staffBooking = false }) {
   const [step, setStep] = useState(1);
-  const [portalMode, setPortalMode] = useState('book'); // 'book' or 'manage'
+  // Confirmation emails link to ?manage=1&ref=MTT-XXXXXX so customers land straight
+  // on the cancel/reschedule form with their reference already filled in.
+  const [manageDeepLink] = useState(() => {
+    if (typeof window === 'undefined') return { open: false, ref: '' };
+    const params = new URLSearchParams(window.location.search);
+    return { open: params.get('manage') === '1', ref: params.get('ref') || '' };
+  });
+  const [portalMode, setPortalMode] = useState(manageDeepLink.open ? 'manage' : 'book'); // 'book' or 'manage'
   const { businessName, photoUrl, error: brandingError } = useBusinessBranding();
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -1987,11 +2018,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
       city: '',
       postalCode: '',
       heardAbout: '',
-      conditions: {
-        heart: '', bloodPressure: '', diabetes: '', cancer: '', headaches: '',
-        boneJoint: '', brokenBones: '', osteoporosis: '', allergies: '',
-        surgeries: '', numbness: '', skinSensitivity: '', pregnant: '', medications: '',
-      },
+      conditions: { ...BLANK_INTAKE_CONDITIONS },
       details: '',
       painAreas: '',
       bodyAreas: [],
@@ -2004,6 +2031,8 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
       consentTimestamp: '',
     },
     paymentOption: 'deposit', // 'deposit' (flat $10 now, balance at clinic) or 'full'
+    hotStoneAddOn: false,
+    skipPayment: false,
     confirmationCode: ''
   });
 
@@ -2061,9 +2090,19 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
     }
   };
 
+  const HOT_STONE_ADDON_PATTERN = /hot stone add-?on/i;
+
+  // The Hot Stone add-on is offered as a checkbox alongside the main service rather
+  // than as a bookable service of its own.
+  const hotStoneAddOnService = useMemo(
+    () => services.find((s) => HOT_STONE_ADDON_PATTERN.test(s.name || '')) || null,
+    [services]
+  );
+
   const filteredServices = useMemo(() => {
-    if (selectedCategory === 'All') return services;
-    return services.filter(s => s.category === selectedCategory);
+    const bookable = services.filter((s) => !HOT_STONE_ADDON_PATTERN.test(s.name || ''));
+    if (selectedCategory === 'All') return bookable;
+    return bookable.filter(s => s.category === selectedCategory);
   }, [services, selectedCategory]);
 
   const isCoupleService = /couple/i.test(bookingData.service?.name || '');
@@ -2148,33 +2187,68 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
     }));
   };
 
+  const setAllConditions = (val) => {
+    setBookingData(prev => ({
+      ...prev,
+      intake: {
+        ...prev.intake,
+        conditions: Object.fromEntries(INTAKE_CONDITIONS.map(([field]) => [field, val])),
+      }
+    }));
+  };
+
+  const branchCollectsDeposit = bookingData.branch?.collectsDeposit !== false;
+  const paymentSkipped = bookingData.skipPayment || !branchCollectsDeposit;
+
   const calculateFinancials = () => {
-    if (!bookingData.service) return { base: 0, discountPercent: 0, discountAmount: 0, tax: 0, total: 0, deposit: 0, balanceDue: 0 };
+    const empty = {
+      base: 0, hotStoneBase: 0, hotStoneDiscountAmount: 0, platinumSurcharge: 0,
+      discountPercent: 0, discountAmount: 0, tax: 0, total: 0, deposit: 0, balanceDue: 0,
+    };
+    if (!bookingData.service) return empty;
+    // The eligibility endpoint reports the plan as `membershipType`.
+    const plan = membershipBenefit?.membershipType;
     const base = bookingData.service.price;
-    const isPlatinumHotStoneAddon = membershipBenefit?.type === 'platinum' &&
-      bookingData.service.name.toLowerCase().includes('hot stone add-on');
-    const isGoldFreeHotStoneAddon = membershipBenefit?.type === 'gold' &&
-      membershipBenefit.freeHotStoneAvailable &&
-      bookingData.service.name.toLowerCase().includes('hot stone add-on');
-    const isPlatinumPrepaidSession = membershipBenefit?.type === 'platinum' &&
-      !isPlatinumHotStoneAddon &&
+    const hotStoneBase = bookingData.hotStoneAddOn && hotStoneAddOnService ? hotStoneAddOnService.price : 0;
+
+    const isPlatinumPrepaidSession = plan === 'platinum' &&
       Number(membershipBenefit.hoursBalance) >= Number(bookingData.service.duration) / 60;
-    const discountAmount = isGoldFreeHotStoneAddon
+    const serviceDiscount = isPlatinumPrepaidSession
       ? base
-      : isPlatinumPrepaidSession
-        ? base
-        : isPlatinumHotStoneAddon
-          ? Math.min(base, Number(membershipBenefit.hotStoneDiscount) || 0)
-          : Math.round(base * (membershipBenefit?.discountPercent || 0)) / 100;
-    const discountPercent = base > 0 ? discountAmount * 100 / base : 0;
-    const discountedBase = base - discountAmount;
+      : Math.round(base * (membershipBenefit?.discountPercent || 0)) / 100;
+
+    let hotStoneDiscountAmount = 0;
+    if (hotStoneBase > 0) {
+      if (plan === 'gold' && membershipBenefit.freeHotStoneAvailable) {
+        hotStoneDiscountAmount = hotStoneBase;
+      } else if (plan === 'platinum') {
+        hotStoneDiscountAmount = Math.min(hotStoneBase, Number(membershipBenefit.hotStoneDiscount) || 0);
+      } else {
+        hotStoneDiscountAmount = Math.round(hotStoneBase * (membershipBenefit?.discountPercent || 0)) / 100;
+      }
+    }
+
+    // Platinum members pay a configurable premium when they add Hot Stone.
+    const platinumSurcharge = plan === 'platinum' && hotStoneBase > 0
+      ? Number(membershipBenefit.hotStoneSurcharge) || 0
+      : 0;
+
+    const grossBase = base + hotStoneBase;
+    const discountAmount = serviceDiscount + hotStoneDiscountAmount;
+    const discountPercent = grossBase > 0 ? discountAmount * 100 / grossBase : 0;
+    const discountedBase = grossBase - discountAmount + platinumSurcharge;
     const tax = discountedBase * (bookingData.service.taxRate || 0);
     const total = discountedBase + tax;
-    const deposit = bookingData.paymentOption === 'full'
-      ? total
-      : Math.min(BOOKING_DEPOSIT_AMOUNT, total);
+    const deposit = paymentSkipped
+      ? 0
+      : bookingData.paymentOption === 'full'
+        ? total
+        : Math.min(BOOKING_DEPOSIT_AMOUNT, total);
     const balanceDue = Math.max(0, total - deposit);
-    return { base, discountPercent, discountAmount, tax, total, deposit, balanceDue };
+    return {
+      base, hotStoneBase, hotStoneDiscountAmount, platinumSurcharge,
+      discountPercent, discountAmount, tax, total, deposit, balanceDue,
+    };
   };
 
   const financials = calculateFinancials();
@@ -2190,6 +2264,12 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
     const combinedCustomerName = isCoupleService && bookingData.guestTwoName.trim()
       ? `${customerFullName} & ${bookingData.guestTwoName.trim()}`
       : customerFullName;
+    const hotStoneSelected = bookingData.hotStoneAddOn && hotStoneAddOnService;
+    // The add-on needs its own chair time, so it extends the calendar block.
+    const bookingDurationMinutes = bookingData.service.duration + (hotStoneSelected ? hotStoneAddOnService.duration : 0);
+    const bookingServiceName = hotStoneSelected
+      ? `${bookingData.service.name} + ${hotStoneAddOnService.name}`
+      : bookingData.service.name;
 
     const payloadForSheets = {
       id: code,
@@ -2201,17 +2281,17 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
       platinumEnrollment: bookingData.platinumEnrollment,
       companyName: bookingData.companyName,
       companyId: bookingData.companyId,
-      subtotalAmount: financials.base.toFixed(2),
+      subtotalAmount: (financials.base + financials.hotStoneBase + financials.platinumSurcharge).toFixed(2),
       taxRate: bookingData.service.taxRate || 0,
       expectedDiscountPercent: financials.discountPercent,
       branchName: bookingData.branch.name,
-      serviceName: bookingData.service.name,
+      serviceName: bookingServiceName,
       therapistName: bookingData.therapist?.name || 'Any Available',
       therapistName2: isCoupleService ? (bookingData.therapist2?.name || 'Any Available') : undefined,
       therapistCandidates: branchTherapists.map((therapist) => therapist.name),
       date: bookingData.date,
       time: bookingData.time,
-      durationMinutes: bookingData.service.duration,
+      durationMinutes: bookingDurationMinutes,
       branchAddress: `${bookingData.branch.address}, ${bookingData.branch.city}`,
       intakeNotes: [
         `Pressure: ${bookingData.intake.pressure}`,
@@ -2228,7 +2308,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
         preCollectionConsent: bookingData.intake.preCollectionConsent,
         consentTimestamp: bookingData.intake.consentTimestamp,
       },
-      paymentOption: bookingData.paymentOption,
+      paymentOption: paymentSkipped ? 'clinic' : bookingData.paymentOption,
       paidAmount: financials.deposit.toFixed(2),
       totalAmount: financials.total.toFixed(2)
     };
@@ -2251,7 +2331,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
       phone: bookingData.customer.phone,
       email: bookingData.customer.email,
       serviceId: bookingData.service.id,
-      serviceName: bookingData.service.name,
+      serviceName: bookingServiceName,
       branchId: bookingData.branch.id,
       therapistId: therapists.find((therapist) => therapist.name === syncResult.data?.therapistName)?.id || bookingData.therapist?.id || 0,
       therapistName: syncResult.data?.therapistName || bookingData.therapist?.name || 'Any Available',
@@ -2309,7 +2389,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
       </div>
 
       {portalMode === 'manage' ? (
-        <ManageBookingPanel onBack={() => setPortalMode('book')} />
+        <ManageBookingPanel onBack={() => setPortalMode('book')} initialBookingId={manageDeepLink.ref} />
       ) : (
       <>
       {/* 5-Step Progress Stepper */}
@@ -2427,6 +2507,23 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                 ))}
               </div>
             </div>
+
+            {hotStoneAddOnService && bookingData.service && (
+              <label className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50/70 p-4 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={bookingData.hotStoneAddOn}
+                  onChange={(e) => setBookingData(prev => ({ ...prev, hotStoneAddOn: e.target.checked }))}
+                  className="mt-0.5 w-4 h-4 accent-amber-700"
+                />
+                <span className="text-sm">
+                  <span className="font-bold text-stone-900">Add {hotStoneAddOnService.name} — +${hotStoneAddOnService.price}</span>
+                  <span className="block text-xs text-stone-600 mt-0.5">
+                    {hotStoneAddOnService.description} Adds {hotStoneAddOnService.duration} minutes to your appointment.
+                  </span>
+                </span>
+              </label>
+            )}
 
             <div className="flex justify-end pt-4">
               <button
@@ -2683,8 +2780,20 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                     placeholder="jane.doe@example.com"
                     value={bookingData.customer.email}
                     onChange={(e) => updateCustomer('email', e.target.value)}
+                    onBlur={checkMembershipEligibility}
                     className="w-full p-2.5 rounded-xl border border-stone-300 focus:ring-2 focus:ring-emerald-600 focus:outline-none"
                   />
+                  {membershipBenefit ? (
+                    <div className="mt-2 rounded-xl border border-emerald-300 bg-emerald-50 p-3">
+                      <p className="text-sm font-bold text-emerald-900 flex items-center gap-1.5">
+                        <Sparkles className="w-4 h-4" />
+                        You have an eligible {membershipBenefit.membershipType === 'platinum' ? 'Platinum' : membershipBenefit.membershipType === 'gold' ? 'Gold' : 'Silver'} plan — {membershipBenefit.discountPercent}% discount
+                      </p>
+                      <p className="text-xs text-emerald-800 mt-1">{membershipCheckMessage} It is applied automatically to your total.</p>
+                    </div>
+                  ) : membershipCheckMessage ? (
+                    <p className="mt-2 text-xs text-stone-500">{membershipCheckMessage}</p>
+                  ) : null}
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-stone-700 mb-1">Phone Number *</label>
@@ -2826,23 +2935,30 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                   </div>
                 </div>
                 <div className="border border-stone-200 rounded-xl overflow-hidden">
-                  <div className="bg-stone-100 px-3 py-2 text-xs font-bold text-stone-700">Please indicate whether any of these apply</div>
-                  {[
-                    ['heart', 'Heart condition / heart disease / stroke'],
-                    ['bloodPressure', 'High or low blood pressure'],
-                    ['diabetes', 'Diabetes'],
-                    ['cancer', 'History of cancer / precancerous lesions'],
-                    ['headaches', 'Headaches / migraines / dizziness'],
-                    ['boneJoint', 'Bone or joint disorder / spinal injury / herniated disc'],
-                    ['brokenBones', 'Broken bones / metal implants / plates / pins'],
-                    ['osteoporosis', 'Osteoporosis / arthritis / rheumatoid arthritis'],
-                    ['allergies', 'Allergies to oil'],
-                    ['surgeries', 'Past surgeries or recent surgeries'],
-                    ['numbness', 'Numbness or loss of sensation'],
-                    ['skinSensitivity', 'Skin sensitivity / easy bruising'],
-                    ['pregnant', 'Pregnant or recently gave birth'],
-                    ['medications', 'Taking medication, blood thinners, painkillers, or supplements'],
-                  ].map(([field, label]) => (
+                  <div className="bg-stone-100 px-3 py-2 flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-xs font-bold text-stone-700">Please indicate whether any of these apply</span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] font-semibold uppercase tracking-wide text-stone-500">Select all</span>
+                      {['Yes', 'No'].map((answer) => (
+                        <button
+                          key={answer}
+                          type="button"
+                          onClick={() => setAllConditions(answer)}
+                          className="rounded-lg border border-stone-300 bg-white px-2.5 py-1 text-[11px] font-bold text-stone-700 transition hover:bg-stone-50"
+                        >
+                          {answer}
+                        </button>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={() => setAllConditions('')}
+                        className="rounded-lg px-2 py-1 text-[11px] font-semibold text-stone-500 underline transition hover:text-stone-700"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  </div>
+                  {INTAKE_CONDITIONS.map(([field, label]) => (
                     <div key={field} className="grid grid-cols-[1fr_auto] gap-2 items-center px-3 py-2 border-t border-stone-200 text-xs">
                       <span>{label}</span>
                       <div className="flex gap-3">
@@ -2988,6 +3104,24 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                       <span className="font-semibold text-stone-800">{bookingData.therapist2?.name || 'Any Available'}</span>
                     </div>
                   )}
+                  {financials.hotStoneBase > 0 && (
+                    <div className="flex justify-between">
+                      <span>{hotStoneAddOnService?.name}:</span>
+                      <span className="font-semibold text-stone-800">${financials.hotStoneBase.toFixed(2)}</span>
+                    </div>
+                  )}
+                  {financials.platinumSurcharge > 0 && (
+                    <div className="flex justify-between">
+                      <span>Platinum Hot Stone surcharge:</span>
+                      <span className="font-semibold text-stone-800">${financials.platinumSurcharge.toFixed(2)}</span>
+                    </div>
+                  )}
+                  {financials.discountAmount > 0 && (
+                    <div className="flex justify-between text-emerald-700">
+                      <span>Membership discount ({financials.discountPercent.toFixed(0)}%):</span>
+                      <span className="font-semibold">−${financials.discountAmount.toFixed(2)}</span>
+                    </div>
+                  )}
                   <div className="flex justify-between">
                     <span>Ontario HST (13%):</span>
                     <span>${financials.tax.toFixed(2)}</span>
@@ -3002,7 +3136,35 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
 
             <div>
               <h3 className="text-base font-bold text-stone-900 mb-3">Select Payment Option</h3>
-              
+
+              {staffBooking && (
+                <label className="mb-3 flex items-start gap-3 rounded-xl border border-sky-200 bg-sky-50 p-3.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={bookingData.skipPayment}
+                    onChange={(e) => updateBooking('skipPayment', e.target.checked)}
+                    className="mt-0.5 w-4 h-4 accent-sky-700"
+                  />
+                  <span className="text-xs text-sky-900">
+                    <span className="font-bold block">Staff: skip payment and confirm the booking</span>
+                    No deposit is collected online. The full ${financials.total.toFixed(2)} is settled at the clinic.
+                  </span>
+                </label>
+              )}
+
+              {!branchCollectsDeposit ? (
+                <div className="rounded-xl border border-stone-200 bg-stone-50 p-4 text-xs text-stone-700 flex items-start gap-2">
+                  <ShieldCheck className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
+                  <span>
+                    <span className="font-bold block text-stone-900">No deposit required at {bookingData.branch?.name}</span>
+                    This location does not collect payment online. Your booking is confirmed straight away and the full ${financials.total.toFixed(2)} is paid at the clinic.
+                  </span>
+                </div>
+              ) : paymentSkipped ? (
+                <div className="rounded-xl border border-sky-200 bg-sky-50 p-4 text-xs text-sky-900">
+                  Payment skipped — ${financials.total.toFixed(2)} is due at the clinic.
+                </div>
+              ) : (
               <div className="grid gap-3 sm:grid-cols-2">
                 <div 
                   onClick={() => updateBooking('paymentOption', 'deposit')}
@@ -3037,12 +3199,17 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                   </div>
                 </div>
               </div>
+              )}
             </div>
 
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-3.5 text-xs text-amber-900 flex items-start gap-2">
               <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
               <span>
-                <span className="font-semibold">Cancellation policy:</span> Cancel at least 24 hours before your appointment for a full refund of any payment made. Cancelling within 24 hours does not qualify for a refund. Rescheduling never issues a refund, regardless of timing. Manage or cancel your booking anytime from the "Manage an existing booking" link above.
+                <span className="font-semibold">Cancellation policy:</span>{' '}
+                {paymentSkipped
+                  ? 'Cancel at least 24 hours before your appointment. Cancelling within 24 hours may incur a fee. Rescheduling is always free.'
+                  : `You are paying $${financials.deposit.toFixed(2)} online today. Cancel at least 24 hours before your appointment for a full refund of that payment. Cancelling within 24 hours does not qualify for a refund. Rescheduling never issues a refund, regardless of timing.`}{' '}
+                A cancel/reschedule link is included in your confirmation email, or use the "Manage an existing booking" link above.
               </span>
             </div>
 
@@ -3136,7 +3303,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
               </div>
             )}
 
-            {squareEnabled && sheetsSyncStatus !== 'failed' && (
+            {squareEnabled && !paymentSkipped && sheetsSyncStatus !== 'failed' && (
               <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-5 max-w-md mx-auto text-left space-y-3">
                 <p className="text-sm font-semibold text-emerald-900">Pay online now with Square</p>
                 <p className="text-xs text-emerald-800">
@@ -3195,14 +3362,12 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                     intake: {
                       pressure: 'Medium', focusAreas: '', injuries: '', agreeTerms: false,
                       dateOfBirth: '', gender: '', address: '', city: '', postalCode: '',
-                      heardAbout: '', conditions: {
-                        heart: '', bloodPressure: '', diabetes: '', cancer: '', headaches: '',
-                        boneJoint: '', brokenBones: '', osteoporosis: '', allergies: '',
-                        surgeries: '', numbness: '', skinSensitivity: '', pregnant: '', medications: '',
-                      }, details: '', painAreas: '', bodyAreas: [], signature: '',
+                      heardAbout: '', conditions: { ...BLANK_INTAKE_CONDITIONS }, details: '', painAreas: '', bodyAreas: [], signature: '',
                       signatureDate: new Date().toISOString().split('T')[0], consent: false, reuseExisting: false,
                     },
                     paymentOption: 'deposit',
+                    hotStoneAddOn: false,
+                    skipPayment: false,
                     confirmationCode: ''
                   });
                   setLoyaltyCompanyEmailNotified(false);
@@ -3221,8 +3386,8 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
   );
 }
 
-function ManageBookingPanel({ onBack }) {
-  const [bookingId, setBookingId] = useState('');
+function ManageBookingPanel({ onBack, initialBookingId = '' }) {
+  const [bookingId, setBookingId] = useState(initialBookingId);
   const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -3592,7 +3757,7 @@ function AdminPortal({
     redemptionValue: 10,
     membershipPlans: {
       gold: { monthlyFee: 39, discountPercent: 10, pointsMultiplier: 1.5, freeHotStonePerMonth: 1 },
-      platinum: { topUpPrice: 1500, includedHours: 50, discountPercent: 30, hotStoneDiscount: 10 },
+      platinum: { topUpPrice: 1500, includedHours: 50, discountPercent: 30, hotStoneDiscount: 10, hotStoneSurcharge: 5 },
       silver: { monthlyFee: 250, discountPercent: 5, maxEmployees: 50 },
     },
     tiers: [
@@ -5580,6 +5745,14 @@ function AdminPortal({
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
+                <label className="sm:col-span-12 pt-1 border-t border-stone-100 mt-1 flex items-center gap-1.5 text-[11px] font-semibold text-stone-600" title="When off, this branch confirms bookings without collecting any online deposit or payment.">
+                  <input
+                    type="checkbox"
+                    checked={branch.collectsDeposit !== false}
+                    onChange={(e) => updateBranchField(branch.id, 'collectsDeposit', e.target.checked)}
+                  />
+                  Collect deposit / payment online for this branch
+                </label>
               </div>
             ))}
           </div>
@@ -5913,6 +6086,9 @@ function AdminPortal({
                     </label>
                     <label className="text-xs font-semibold text-slate-700">Hot Stone add-on discount ($)
                       <input type="number" min="0" max="10000" step="0.01" required value={loyaltySettings.membershipPlans.platinum.hotStoneDiscount} onChange={(event) => setLoyaltySettings((current) => ({ ...current, membershipPlans: { ...current.membershipPlans, platinum: { ...current.membershipPlans.platinum, hotStoneDiscount: event.target.value } } }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" />
+                    </label>
+                    <label className="text-xs font-semibold text-slate-700" title="Charged only when a Platinum member adds the Hot Stone add-on to a booking.">Platinum Hot Stone surcharge ($)
+                      <input type="number" min="0" max="10000" step="0.01" required value={loyaltySettings.membershipPlans.platinum.hotStoneSurcharge} onChange={(event) => setLoyaltySettings((current) => ({ ...current, membershipPlans: { ...current.membershipPlans, platinum: { ...current.membershipPlans.platinum, hotStoneSurcharge: event.target.value } } }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" />
                     </label>
                   </div>
                   <p className="text-[11px] leading-5 text-slate-600">Company employees are matched by their enrolled email and optional company ID. Record a confirmed top-up from the member row; completed visits consume their service duration from the hours balance.</p>

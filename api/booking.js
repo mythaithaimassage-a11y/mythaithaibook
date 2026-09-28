@@ -54,7 +54,7 @@ const DEFAULT_BUSINESS_PROFILE = {
   taxRegistrationNumber: '',
   photoUrl: '',
 };
-const BRANCH_FIELDS = ['ID', 'Name', 'Address', 'City', 'Phone', 'Active', 'Updated At'];
+const BRANCH_FIELDS = ['ID', 'Name', 'Address', 'City', 'Phone', 'Active', 'Updated At', 'Collects Deposit'];
 const DEFAULT_BRANCHES = [
   { id: 1, name: 'Mississauga Central', address: '4310 Sherwoodtowne Blvd', city: 'Mississauga, ON', phone: '+1 437 898 7424', active: true },
   { id: 2, name: 'Oakville Downtown', address: '123 Lakeshore Rd E', city: 'Oakville, ON', phone: '+1 437 898 7424', active: true },
@@ -125,7 +125,7 @@ const DEFAULT_LOYALTY_SETTINGS = {
   redemptionValue: 10,
   membershipPlans: {
     gold: { monthlyFee: 39, discountPercent: 10, pointsMultiplier: 1.5, freeHotStonePerMonth: 1 },
-    platinum: { topUpPrice: 1500, includedHours: 50, discountPercent: 30, hotStoneDiscount: 10 },
+    platinum: { topUpPrice: 1500, includedHours: 50, discountPercent: 30, hotStoneDiscount: 10, hotStoneSurcharge: 5 },
     silver: { monthlyFee: 250, discountPercent: 5, maxEmployees: 50 },
   },
   tiers: [
@@ -1471,17 +1471,17 @@ async function ensureBranchesSheet(sheets) {
       if (!createdByConcurrentRequest) throw error;
     }
     const seedRows = DEFAULT_BRANCHES.map((branch) => [
-      branch.id, branch.name, branch.address, branch.city, branch.phone, branch.active ? 'TRUE' : 'FALSE', new Date().toISOString(),
+      branch.id, branch.name, branch.address, branch.city, branch.phone, branch.active ? 'TRUE' : 'FALSE', new Date().toISOString(), branch.collectsDeposit === false ? 'FALSE' : 'TRUE',
     ]);
     await sheets.spreadsheets.values.update({
       spreadsheetId,
-      range: 'Branches!A1:G1',
+      range: 'Branches!A1:H1',
       valueInputOption: 'RAW',
       requestBody: { values: [BRANCH_FIELDS] },
     });
     await sheets.spreadsheets.values.update({
       spreadsheetId,
-      range: `Branches!A2:G${seedRows.length + 1}`,
+      range: `Branches!A2:H${seedRows.length + 1}`,
       valueInputOption: 'RAW',
       requestBody: { values: seedRows },
     });
@@ -1507,6 +1507,9 @@ function validateBranches(input) {
       city: String(branch?.city || '').trim(),
       phone: String(branch?.phone || '').trim(),
       active: branch?.active !== false,
+      // Branches collect a deposit unless explicitly opted out, so existing
+      // branches keep their current behaviour.
+      collectsDeposit: branch?.collectsDeposit !== false,
     };
   });
 }
@@ -1515,7 +1518,7 @@ async function getBranches(sheets) {
   await ensureBranchesSheet(sheets);
   const result = await sheets.spreadsheets.values.get({
     spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-    range: 'Branches!A2:G',
+    range: 'Branches!A2:H',
   });
   const rows = result.data.values || [];
   if (rows.length === 0) return DEFAULT_BRANCHES;
@@ -1528,6 +1531,7 @@ async function getBranches(sheets) {
       city: row[3] || '',
       phone: row[4] || '',
       active: String(row[5] || 'TRUE').toUpperCase() !== 'FALSE',
+      collectsDeposit: String(row[7] ?? 'TRUE').toUpperCase() !== 'FALSE',
     }));
 }
 
@@ -1536,15 +1540,15 @@ async function saveBranches(sheets, branches) {
   await ensureBranchesSheet(sheets);
   const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
   const rows = validated.map((branch) => [
-    branch.id, branch.name, branch.address, branch.city, branch.phone, branch.active ? 'TRUE' : 'FALSE', new Date().toISOString(),
+    branch.id, branch.name, branch.address, branch.city, branch.phone, branch.active ? 'TRUE' : 'FALSE', new Date().toISOString(), branch.collectsDeposit === false ? 'FALSE' : 'TRUE',
   ]);
   await sheets.spreadsheets.values.clear({
     spreadsheetId,
-    range: 'Branches!A2:G',
+    range: 'Branches!A2:H',
   });
   await sheets.spreadsheets.values.update({
     spreadsheetId,
-    range: `Branches!A2:G${rows.length + 1}`,
+    range: `Branches!A2:H${rows.length + 1}`,
     valueInputOption: 'RAW',
     requestBody: { values: rows },
   });
@@ -1897,6 +1901,13 @@ async function findCompanyPortalByToken(sheets, token) {
   return { organization: row[0] || '', companyId: row[1] || '', contactEmail: normalizeLoyaltyEmail(row[2]) };
 }
 
+function getManageBookingUrl(req, bookingId) {
+  const host = req.headers['x-forwarded-host'] || req.headers.host;
+  if (!host || /[\r\n/]/.test(host)) return '';
+  const protocol = req.headers['x-forwarded-proto'] === 'http' ? 'http' : 'https';
+  return `${protocol}://${host}/?manage=1&ref=${encodeURIComponent(bookingId)}`;
+}
+
 function getCompanyPortalUrl(req, token) {
   const host = req.headers['x-forwarded-host'] || req.headers.host;
   if (!host || /[\r\n/]/.test(host)) throw new Error('Unable to determine the public app address for the company portal link');
@@ -1930,6 +1941,9 @@ function validateLoyaltySettings(input) {
         includedHours: Number(platinumInput.includedHours),
         discountPercent: Number(platinumInput.discountPercent),
         hotStoneDiscount: Number(platinumInput.hotStoneDiscount),
+        // Surcharge added to a Platinum member's bill whenever the Hot Stone add-on is used.
+        // Defaulted so loyalty settings saved before this field existed stay valid.
+        hotStoneSurcharge: Number(platinumInput.hotStoneSurcharge ?? DEFAULT_LOYALTY_SETTINGS.membershipPlans.platinum.hotStoneSurcharge),
       },
       silver: {
         monthlyFee: Number(silverInput.monthlyFee),
@@ -1955,6 +1969,7 @@ function validateLoyaltySettings(input) {
     !Number.isFinite(settings.membershipPlans.platinum.includedHours) || settings.membershipPlans.platinum.includedHours <= 0 || settings.membershipPlans.platinum.includedHours > 10000 ||
     !Number.isFinite(settings.membershipPlans.platinum.discountPercent) || settings.membershipPlans.platinum.discountPercent < 0 || settings.membershipPlans.platinum.discountPercent > 100 ||
     !Number.isFinite(settings.membershipPlans.platinum.hotStoneDiscount) || settings.membershipPlans.platinum.hotStoneDiscount < 0 || settings.membershipPlans.platinum.hotStoneDiscount > 10000 ||
+    !Number.isFinite(settings.membershipPlans.platinum.hotStoneSurcharge) || settings.membershipPlans.platinum.hotStoneSurcharge < 0 || settings.membershipPlans.platinum.hotStoneSurcharge > 10000 ||
     !Number.isFinite(settings.membershipPlans.silver.monthlyFee) || settings.membershipPlans.silver.monthlyFee < 0 || settings.membershipPlans.silver.monthlyFee > 100000 ||
     !Number.isFinite(settings.membershipPlans.silver.discountPercent) || settings.membershipPlans.silver.discountPercent < 0 || settings.membershipPlans.silver.discountPercent > 100 ||
     !Number.isInteger(settings.membershipPlans.silver.maxEmployees) || settings.membershipPlans.silver.maxEmployees < 1 || settings.membershipPlans.silver.maxEmployees > 5000 ||
@@ -2195,6 +2210,7 @@ async function getMemberBenefit(sheets, email, settings) {
     freeHotStoneAvailable: type === 'gold' &&
       loyaltyHotStoneRedemptions(transactions, normalizedEmail) < plan.freeHotStonePerMonth,
     hotStoneDiscount: type === 'platinum' ? plan.hotStoneDiscount : 0,
+    hotStoneSurcharge: type === 'platinum' ? (Number(plan.hotStoneSurcharge) || 0) : 0,
     hoursBalance,
   };
 }
@@ -3367,6 +3383,16 @@ async function sendGmailConfirmation(gmail, payload) {
     .match(/.{1,76}/g)
     .join('\r\n');
   const subject = `Your MY THAI THAI appointment is confirmed - ${payload.id}`;
+  const manageUrl = String(payload.manageUrl || '');
+  // Customers who already paid online have money at stake, so the refund rule is
+  // stated explicitly for them rather than in general terms.
+  const paidOnline = Number(payload.paidAmount) > 0;
+  const policyLines = [
+    paidOnline
+      ? `This appointment includes a $${payload.paidAmount} online payment. Cancel at least 24 hours before your appointment time to receive a full refund of that payment. Cancelling less than 24 hours before your appointment does not qualify for a refund.`
+      : 'Cancel at least 24 hours before your appointment time for a full refund of any payment made. Cancelling less than 24 hours before your appointment does not qualify for a refund.',
+    'Rescheduling is always free and never issues a refund, regardless of timing.',
+  ];
   const text = [
     `Hello${payload.customerName ? ` ${payload.customerName}` : ''},`,
     '',
@@ -3389,6 +3415,12 @@ async function sendGmailConfirmation(gmail, payload) {
     'Your appointment has been added to the therapist calendar.',
     'Please keep your booking reference for your records.',
     '',
+    'CANCELLATION POLICY',
+    ...policyLines,
+    '',
+    ...(manageUrl
+      ? ['CANCEL OR RESCHEDULE', 'Manage this appointment at any time here:', manageUrl, `You will be asked for your booking reference (${payload.id}) and this email address.`, '']
+      : ['To cancel or reschedule, use the "Manage an existing booking" link on our booking page.', '']),
     'Thank you for choosing MY THAI THAI.',
   ].join('\n');
   const details = [
@@ -3432,6 +3464,18 @@ async function sendGmailConfirmation(gmail, payload) {
           </td></tr>
           <tr><td style="padding:0 36px 30px;">
             <p style="margin:0 0 8px;color:#625f56;line-height:1.6;">Your visit has been added to the therapist calendar. Please keep your booking reference <strong>${escapeHtml(payload.id)}</strong> for your records.</p>
+            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:18px 0 0;background:#fdf6e7;border:1px solid #f0dfb5;border-radius:10px;">
+              <tr><td style="padding:16px 18px;">
+                <p style="margin:0 0 8px;font-size:14px;font-weight:700;color:#7a5a12;">Cancellation policy</p>
+                ${policyLines.map((line) => `<p style="margin:0 0 6px;color:#6b5a33;font-size:13px;line-height:1.6;">${escapeHtml(line)}</p>`).join('')}
+              </td></tr>
+            </table>
+            ${manageUrl ? `<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:18px 0 0;">
+              <tr><td align="center" style="padding:4px 0 10px;">
+                <a href="${escapeHtml(manageUrl)}" style="display:inline-block;background:#31594b;color:#ffffff;text-decoration:none;font-weight:700;font-size:14px;padding:13px 26px;border-radius:9px;">Cancel or reschedule this appointment</a>
+              </td></tr>
+              <tr><td align="center" style="color:#888477;font-size:12px;line-height:1.6;">You will be asked for your booking reference and this email address.<br><a href="${escapeHtml(manageUrl)}" style="color:#31594b;">${escapeHtml(manageUrl)}</a></td></tr>
+            </table>` : '<p style="margin:14px 0 0;color:#625f56;font-size:13px;line-height:1.6;">To cancel or reschedule, use the &quot;Manage an existing booking&quot; link on our booking page.</p>'}
             <p style="margin:18px 0 0;color:#31594b;font-weight:600;">Thank you for choosing MY THAI THAI.</p>
           </td></tr>
           <tr><td style="padding:16px 36px;background:#f7f6f2;color:#888477;font-size:12px;text-align:center;">MY THAI THAI · We look forward to seeing you</td></tr>
@@ -4006,6 +4050,7 @@ export default async function handler(req, res) {
         freeHotStonePerMonth: benefit?.freeHotStonePerMonth || 0,
         freeHotStoneAvailable: Boolean(benefit?.freeHotStoneAvailable),
         hotStoneDiscount: benefit?.hotStoneDiscount || 0,
+        hotStoneSurcharge: benefit?.hotStoneSurcharge || 0,
         hoursBalance: benefit?.hoursBalance || 0,
       });
     }
@@ -7098,7 +7143,7 @@ export default async function handler(req, res) {
     let emailSent = false;
     let emailError = '';
     try {
-      await sendGmailConfirmation(createGmailApi(), payload);
+      await sendGmailConfirmation(createGmailApi(), { ...payload, manageUrl: getManageBookingUrl(req, payload.id) });
       emailSent = true;
     } catch (error) {
       emailError = error.message || 'Confirmation email failed';

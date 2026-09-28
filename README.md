@@ -560,6 +560,74 @@ issuing. If required details such as patient email or appointment total are
 missing, the appointment panel shows a short "Save details" form to complete
 only those missing fields.
 
+### Cancellation policy and manage link in the confirmation email
+
+Every booking confirmation email (text and HTML parts) carries a **Cancellation
+policy** block and a **Cancel or reschedule this appointment** button. The
+button points at `https://<host>/?manage=1&ref=MTT-XXXXXX`, which opens the
+booking portal directly on the manage-booking form with the reference already
+filled in; the customer still confirms with the email address used at booking.
+
+When the booking has an online payment attached, the policy paragraph names the
+exact amount ("This appointment includes a $10.00 online payment…") so the
+refund window is unambiguous. Bookings with no online payment get the generic
+wording instead. Step 4 of the booking flow shows the matching policy text
+before the customer submits.
+
+### Branch-specific deposit collection
+
+Each branch row in the owner **Branches** editor has a **Collect deposit /
+payment online for this branch** checkbox, stored in column H
+(`Collects Deposit`) of the `Branches` sheet. Branches default to collecting a
+deposit, so existing rows are unchanged.
+
+When the checkbox is cleared, the booking portal hides the payment options for
+that branch, skips the Square panel on the confirmation step, and confirms the
+appointment with the full amount due at the clinic.
+
+### Walk-in bookings without payment
+
+Opening the booking flow from **New Walk-in / Phone Booking** in the owner
+dashboard marks the session as a staff booking. Step 4 then shows a
+**Staff: skip payment and confirm the booking** checkbox, which sets the online
+deposit to `$0`, suppresses the Square checkout, and records the booking with
+payment option `clinic`.
+
+### Hot Stone add-on and Platinum surcharge
+
+The Hot Stone add-on is no longer listed as a bookable service. It appears as a
+checkbox under the service grid, adds its price and duration to the
+appointment, and is appended to the service name on the booking record and
+calendar event.
+
+Membership pricing is applied to the service and the add-on separately:
+
+- **Platinum** — the plan discount (or full prepaid-hours coverage) on the
+  service, `hotStoneDiscount` off the add-on, plus a **Platinum Hot Stone
+  surcharge** added only when the add-on is selected. The surcharge amount is
+  configured in **Loyalty settings → Platinum Hot Stone surcharge ($)** and
+  defaults to `$5`.
+- **Gold** — the plan discount on the service; the add-on is free when the
+  member's monthly free Hot Stone allowance is still available.
+- **Silver / regular** — the plan discount applies to both.
+
+### Automatic membership eligibility prompt
+
+When a customer finishes typing their email on step 3, the portal calls
+`GET /api/booking?view=loyalty-eligibility` and, if a paid membership is found,
+shows a banner ("You have an eligible Platinum plan — 30% discount") listing the
+benefits. The same response drives the pricing above, so the discount, add-on
+pricing, and surcharge on the step 4 summary always match the banner.
+
+Employees enrol themselves through the company Platinum portal link
+(`?companyToken=…`) that the primary contact copies from the loyalty members
+table; see the loyalty program section above.
+
+### Medical history select-all
+
+The medical conditions grid on step 3 has **Select all → Yes / No / Clear**
+buttons so customers with no history can answer the whole list in one click.
+
 ### Reassigning an appointment to a different therapist
 
 The appointment panel in the owner **Booking Calendar** includes a "Change
