@@ -3246,6 +3246,11 @@ function AdminPortal({
   const [linkEventForm, setLinkEventForm] = useState(null);
   const [receiptError, setReceiptError] = useState('');
   const [receiptNotice, setReceiptNotice] = useState('');
+  const [appointmentNotes, setAppointmentNotes] = useState([]);
+  const [isLoadingAppointmentNotes, setIsLoadingAppointmentNotes] = useState(false);
+  const [appointmentNotesError, setAppointmentNotesError] = useState('');
+  const [newAppointmentNote, setNewAppointmentNote] = useState('');
+  const [isSavingAppointmentNote, setIsSavingAppointmentNote] = useState(false);
   const [reportStartDate, setReportStartDate] = useState(() => {
     const date = new Date();
     date.setDate(date.getDate() - 29);
@@ -3894,6 +3899,54 @@ function AdminPortal({
       setLinkEventForm(null);
     }
   }, [selectedCalendarEvent?.id, selectedCalendarEvent?.booking?.autoLinked]);
+
+  const loadAppointmentNotes = async (bookingId) => {
+    if (!bookingId) {
+      setAppointmentNotes([]);
+      return;
+    }
+    setIsLoadingAppointmentNotes(true);
+    setAppointmentNotesError('');
+    try {
+      const response = await fetch(`/api/booking?view=appointment-notes&bookingId=${encodeURIComponent(bookingId)}`);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+      setAppointmentNotes(data.notes || []);
+    } catch (error) {
+      setAppointmentNotesError(error.message || 'Unable to load notes');
+    } finally {
+      setIsLoadingAppointmentNotes(false);
+    }
+  };
+
+  useEffect(() => {
+    setNewAppointmentNote('');
+    setAppointmentNotesError('');
+    loadAppointmentNotes(selectedCalendarEvent?.booking?.id);
+  }, [selectedCalendarEvent?.booking?.id]);
+
+  const addAppointmentNote = async () => {
+    const bookingId = selectedCalendarEvent?.booking?.id;
+    const note = newAppointmentNote.trim();
+    if (!bookingId || !note) return;
+    setIsSavingAppointmentNote(true);
+    setAppointmentNotesError('');
+    try {
+      const response = await fetch('/api/booking?view=appointment-note', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bookingId, note }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+      setAppointmentNotes((current) => [data.note, ...current]);
+      setNewAppointmentNote('');
+    } catch (error) {
+      setAppointmentNotesError(error.message || 'Unable to save note');
+    } finally {
+      setIsSavingAppointmentNote(false);
+    }
+  };
 
   const completeBookingDetails = async (event) => {
     event.preventDefault();
@@ -5819,6 +5872,44 @@ function AdminPortal({
                       <div className="flex flex-col-reverse gap-3 border-t border-slate-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
                         <p className="text-xs leading-5 text-slate-500">{!paidInFull ? 'Receipts are available only after full payment is recorded.' : !booking.email ? 'Add a valid patient email to the booking before issuing a receipt.' : !booking.id ? 'This appointment is not linked to a booking record.' : 'A receipt will be emailed to the patient and recorded with this booking.'}</p>
                         <button type="button" disabled={isIssuingReceipt || !paidInFull || !booking.email || !booking.id} onClick={() => issueReceipt(booking.id)} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-emerald-950 px-4 py-2.5 text-xs font-bold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"><ReceiptText className="h-4 w-4" />{isIssuingReceipt ? 'Issuing…' : 'Issue & email receipt'}</button>
+                      </div>
+                    )}
+                    {booking.id && (
+                      <div className="space-y-3 border-t border-slate-100 pt-4">
+                        <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500">Notes</h4>
+                        {appointmentNotesError && <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">{appointmentNotesError}</div>}
+                        <div className="flex items-start gap-2">
+                          <textarea
+                            value={newAppointmentNote}
+                            onChange={(event) => setNewAppointmentNote(event.target.value)}
+                            placeholder="Log a quick note about this appointment..."
+                            rows={2}
+                            maxLength={2000}
+                            className="flex-1 rounded-xl border border-slate-300 px-3 py-2 text-sm resize-none"
+                          />
+                          <button
+                            type="button"
+                            disabled={isSavingAppointmentNote || !newAppointmentNote.trim()}
+                            onClick={addAppointmentNote}
+                            className="shrink-0 rounded-xl bg-emerald-950 px-3.5 py-2.5 text-xs font-bold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {isSavingAppointmentNote ? 'Saving…' : 'Add note'}
+                          </button>
+                        </div>
+                        {isLoadingAppointmentNotes ? (
+                          <p className="text-xs text-slate-400">Loading notes…</p>
+                        ) : appointmentNotes.length === 0 ? (
+                          <p className="text-xs text-slate-400">No notes logged for this appointment yet.</p>
+                        ) : (
+                          <ul className="max-h-48 space-y-2 overflow-y-auto pr-1">
+                            {appointmentNotes.map((item) => (
+                              <li key={item.noteId} className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-xs">
+                                <p className="whitespace-pre-wrap text-slate-800">{item.note}</p>
+                                <p className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">{item.createdBy} · {item.createdAt ? new Date(item.createdAt).toLocaleString() : ''}</p>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
                       </div>
                     )}
                   </>

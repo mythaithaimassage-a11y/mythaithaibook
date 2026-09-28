@@ -469,6 +469,47 @@ async function ensureTherapistNotesSheet(sheets) {
   }
 }
 
+async function ensureAppointmentNotesSheet(sheets) {
+  const spreadsheet = await sheets.spreadsheets.get({
+    spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+    fields: 'sheets.properties',
+  });
+  const exists = (spreadsheet.data.sheets || [])
+    .some((sheet) => sheet.properties?.title === 'AppointmentNotes');
+  if (!exists) {
+    try {
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+        requestBody: { requests: [{ addSheet: { properties: { title: 'AppointmentNotes' } } }] },
+      });
+    } catch (error) {
+      const refreshed = await sheets.spreadsheets.get({
+        spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+        fields: 'sheets.properties',
+      });
+      const createdByConcurrentRequest = (refreshed.data.sheets || [])
+        .some((sheet) => sheet.properties?.title === 'AppointmentNotes');
+      if (!createdByConcurrentRequest) throw error;
+    }
+  }
+
+  const headers = ['Note ID', 'Booking ID', 'Note', 'Created By', 'Created At'];
+  const headerResult = await sheets.spreadsheets.values.get({
+    spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+    range: 'AppointmentNotes!A1:E1',
+  });
+  if (!headerResult.data.values?.[0]?.length) {
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+      range: 'AppointmentNotes!A1:E1',
+      valueInputOption: 'RAW',
+      requestBody: { values: [headers] },
+    });
+  } else if (headers.some((header, index) => headerResult.data.values[0][index] !== header)) {
+    throw new Error('AppointmentNotes sheet has an unexpected header format');
+  }
+}
+
 async function ensureBusinessProfileSheet(sheets) {
   const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
   if (!spreadsheetId) throw new Error('GOOGLE_SPREADSHEET_ID is not configured');
@@ -2367,19 +2408,19 @@ export default async function handler(req, res) {
     }
 
     const view = String(req.query?.view || '');
-    const validGetViews = ['', 'calendar', 'patient-history', 'business-profile', 'business-name', 'square-config', 'branches', 'services', 'therapists', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal'];
+    const validGetViews = ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'business-name', 'square-config', 'branches', 'services', 'therapists', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal'];
     if (req.method === 'GET' && !validGetViews.includes(view)) {
       return res.status(404).json({ message: 'Unknown booking view' });
     }
     const ownerOnlyRequest =
-      (req.method === 'GET' && ['', 'calendar', 'patient-history', 'business-profile', 'google-ads-report', 'loyalty-dashboard'].includes(view)) ||
-      ['business-profile', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-link'].includes(view) ||
+      (req.method === 'GET' && ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'google-ads-report', 'loyalty-dashboard'].includes(view)) ||
+      ['business-profile', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-link'].includes(view) ||
       (req.method === 'POST' && ['branches', 'services', 'therapists'].includes(view));
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
     if (ownerOnlyRequest && !getOwnerSession(req)) {
       return res.status(401).json({ message: 'Owner sign-in required' });
     }
-    if (['business-profile', 'branches', 'services', 'therapists', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-signup', 'company-portal-bulk-signup', 'company-portal-link', 'square-create-checkout'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
+    if (['business-profile', 'branches', 'services', 'therapists', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-signup', 'company-portal-bulk-signup', 'company-portal-link', 'square-create-checkout'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
       return res.status(403).json({ message: 'Profile update origin is not allowed' });
     }
 
@@ -4219,6 +4260,30 @@ export default async function handler(req, res) {
         });
       }
 
+      if (req.query?.view === 'appointment-notes') {
+        const bookingId = String(req.query?.bookingId || '').trim();
+        if (!bookingId || bookingId.length > 100) {
+          return res.status(400).json({ message: 'A valid booking ID is required' });
+        }
+        await ensureAppointmentNotesSheet(sheets);
+        const result = await sheets.spreadsheets.values.get({
+          spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+          range: 'AppointmentNotes!A:E',
+        });
+        const rows = (result.data.values || []).slice(1);
+        const notes = rows
+          .filter((row) => row[0] && row[1] === bookingId)
+          .map((row) => ({
+            noteId: row[0],
+            bookingId: row[1] || '',
+            note: row[2] || '',
+            createdBy: row[3] || '',
+            createdAt: row[4] || '',
+          }))
+          .sort((first, second) => second.createdAt.localeCompare(first.createdAt));
+        return res.status(200).json({ notes });
+      }
+
       if (req.query?.view === 'calendar') {
         const date = req.query.date || new Date().toISOString().slice(0, 10);
         const branch = String(req.query.branch || '').toLowerCase();
@@ -4889,6 +4954,35 @@ export default async function handler(req, res) {
         emailed: true,
         alreadyIssued: row[20] === 'sent',
       });
+    }
+
+    if (req.method === 'POST' && req.query?.view === 'appointment-note') {
+      const bookingId = String(req.body?.bookingId || '').trim();
+      const note = String(req.body?.note || '').trim();
+      if (!bookingId || bookingId.length > 100) {
+        return res.status(400).json({ message: 'A valid booking ID is required' });
+      }
+      if (!note || note.length > 2000) {
+        return res.status(400).json({ message: 'Enter a note of no more than 2,000 characters.' });
+      }
+      const ownerSession = getOwnerSession(req);
+      await ensureAppointmentNotesSheet(sheets);
+      const savedNote = {
+        noteId: crypto.randomUUID(),
+        bookingId,
+        note,
+        createdBy: ownerSession?.name || ownerSession?.email || 'Owner',
+        createdAt: new Date().toISOString(),
+      };
+      await sheets.spreadsheets.values.append({
+        spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+        range: 'AppointmentNotes!A:E',
+        valueInputOption: 'RAW',
+        requestBody: {
+          values: [[savedNote.noteId, savedNote.bookingId, savedNote.note, savedNote.createdBy, savedNote.createdAt]],
+        },
+      });
+      return res.status(201).json({ note: savedNote });
     }
 
     if (req.method === 'POST' && req.query?.view === 'delete-booking') {
