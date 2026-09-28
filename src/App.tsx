@@ -3564,6 +3564,8 @@ function AdminPortal({
     return date.toISOString().slice(0, 10);
   });
   const [reportEndDate, setReportEndDate] = useState(new Date().toISOString().slice(0, 10));
+  const [dailyReportDate, setDailyReportDate] = useState(new Date().toISOString().slice(0, 10));
+  const [dailyReportBranchId, setDailyReportBranchId] = useState('all');
   const [googleAdsReport, setGoogleAdsReport] = useState(null);
   const [isLoadingGoogleAds, setIsLoadingGoogleAds] = useState(false);
   const [googleAdsError, setGoogleAdsError] = useState('');
@@ -3640,6 +3642,9 @@ function AdminPortal({
   });
   const [campaignError, setCampaignError] = useState('');
   const [campaignNotice, setCampaignNotice] = useState('');
+  const [campaignHistory, setCampaignHistory] = useState([]);
+  const [isLoadingCampaignHistory, setIsLoadingCampaignHistory] = useState(false);
+  const [campaignHistoryError, setCampaignHistoryError] = useState('');
   const [isLoadingBookings, setIsLoadingBookings] = useState(false);
   const [bookingLoadError, setBookingLoadError] = useState('');
   const [calendarDate, setCalendarDate] = useState(new Date().toISOString().split('T')[0]);
@@ -4145,6 +4150,123 @@ function AdminPortal({
   const [deletingBookingId, setDeletingBookingId] = useState('');
   const [deleteBookingError, setDeleteBookingError] = useState('');
 
+  // Daily therapist hours / branch audit PDF reports — generated client-side from
+  // already-loaded booking data (no extra API round trip needed).
+  const getDailyReportBranchName = () => (dailyReportBranchId === 'all' ? '' : branches.find((branch) => String(branch.id) === String(dailyReportBranchId))?.name || '');
+
+  const getDailyReportRows = (includeCancelled = false) => {
+    const branchName = getDailyReportBranchName();
+    return bookings.filter((booking) =>
+      booking.date === dailyReportDate &&
+      (includeCancelled || booking.status !== 'Cancelled') &&
+      (!branchName || booking.branchName === branchName));
+  };
+
+  const downloadTherapistHoursPdf = async () => {
+    const [{ default: jsPDF }, { default: autoTable }] = await Promise.all([import('jspdf'), import('jspdf-autotable')]);
+    const rows = getDailyReportRows();
+    const byTherapist = new Map();
+    rows.forEach((booking) => {
+      const name = booking.therapistName || 'Unassigned';
+      if (!byTherapist.has(name)) byTherapist.set(name, { name, minutes: 0, count: 0, branches: new Set() });
+      const entry = byTherapist.get(name);
+      entry.minutes += Number(booking.durationMinutes) || 0;
+      entry.count += 1;
+      if (booking.branchName) entry.branches.add(booking.branchName);
+    });
+    const data = [...byTherapist.values()].sort((a, b) => b.minutes - a.minutes);
+    const doc = new jsPDF();
+    const title = businessProfile?.businessName || 'MY THAI THAI';
+    doc.setFontSize(16);
+    doc.text(`${title} - Daily Therapist Hours Report`, 14, 18);
+    doc.setFontSize(10);
+    doc.setTextColor(90);
+    doc.text(`Date: ${dailyReportDate}${getDailyReportBranchName() ? ` · ${getDailyReportBranchName()}` : ' · All branches'}`, 14, 25);
+    doc.text(`Generated: ${new Date().toLocaleString('en-CA')}`, 14, 30);
+    autoTable(doc, {
+      startY: 36,
+      head: [['Therapist', 'Branch(es)', 'Appointments', 'Hours served']],
+      body: data.map((entry) => [entry.name, [...entry.branches].join(', ') || '—', String(entry.count), (entry.minutes / 60).toFixed(2)]),
+      foot: [['Total', '', String(data.reduce((sum, entry) => sum + entry.count, 0)), (data.reduce((sum, entry) => sum + entry.minutes, 0) / 60).toFixed(2)]],
+      headStyles: { fillColor: [7, 61, 50] },
+      footStyles: { fillColor: [230, 240, 237], textColor: 20, fontStyle: 'bold' },
+      styles: { fontSize: 9 },
+    });
+    if (data.length === 0) {
+      doc.setFontSize(11);
+      doc.setTextColor(120);
+      doc.text('No appointments recorded for this date.', 14, 44);
+    }
+    doc.save(`therapist-hours-${dailyReportDate}.pdf`);
+  };
+
+  const downloadBranchAuditPdf = async () => {
+    const [{ default: jsPDF }, { default: autoTable }] = await Promise.all([import('jspdf'), import('jspdf-autotable')]);
+    const rows = getDailyReportRows(true);
+    const byBranch = new Map();
+    rows.forEach((booking) => {
+      const branch = booking.branchName || 'Unspecified branch';
+      if (!byBranch.has(branch)) byBranch.set(branch, []);
+      byBranch.get(branch).push(booking);
+    });
+    const doc = new jsPDF();
+    const title = businessProfile?.businessName || 'MY THAI THAI';
+    doc.setFontSize(16);
+    doc.text(`${title} - Branch Audit Report`, 14, 18);
+    doc.setFontSize(10);
+    doc.setTextColor(90);
+    doc.text(`Date: ${dailyReportDate}`, 14, 25);
+    doc.text(`Generated: ${new Date().toLocaleString('en-CA')}`, 14, 30);
+    let cursorY = 38;
+    if (byBranch.size === 0) {
+      doc.setFontSize(11);
+      doc.setTextColor(120);
+      doc.text('No appointments recorded for this date.', 14, cursorY);
+    }
+    [...byBranch.entries()].sort(([a], [b]) => a.localeCompare(b)).forEach(([branchName, list]) => {
+      if (cursorY > 250) { doc.addPage(); cursorY = 20; }
+      doc.setFontSize(12);
+      doc.setTextColor(20);
+      doc.text(branchName, 14, cursorY);
+      cursorY += 4;
+      const byTherapist = new Map();
+      list.forEach((booking) => {
+        if (booking.status === 'Cancelled') return;
+        const name = booking.therapistName || 'Unassigned';
+        if (!byTherapist.has(name)) byTherapist.set(name, { name, minutes: 0, count: 0 });
+        const entry = byTherapist.get(name);
+        entry.minutes += Number(booking.durationMinutes) || 0;
+        entry.count += 1;
+      });
+      autoTable(doc, {
+        startY: cursorY,
+        margin: { left: 14, right: 14 },
+        head: [['Therapist', 'Appointments', 'Hours served']],
+        body: [...byTherapist.values()].sort((a, b) => b.minutes - a.minutes).map((entry) => [entry.name, String(entry.count), (entry.minutes / 60).toFixed(2)]),
+        styles: { fontSize: 9 },
+        headStyles: { fillColor: [7, 61, 50] },
+      });
+      cursorY = doc.lastAutoTable.finalY + 6;
+      autoTable(doc, {
+        startY: cursorY,
+        margin: { left: 14, right: 14 },
+        head: [['Time', 'Therapist', 'Customer', 'Service', 'Duration', 'Status']],
+        body: list.slice().sort((a, b) => (a.time || '').localeCompare(b.time || '')).map((booking) => [
+          booking.time || '—',
+          booking.therapistName || 'Unassigned',
+          booking.customerName || '—',
+          booking.serviceName || '—',
+          `${Number(booking.durationMinutes) || 0} min`,
+          booking.status || 'Booked',
+        ]),
+        styles: { fontSize: 8 },
+        headStyles: { fillColor: [51, 65, 85] },
+      });
+      cursorY = doc.lastAutoTable.finalY + 10;
+    });
+    doc.save(`branch-audit-${dailyReportDate}.pdf`);
+  };
+
   const deleteBooking = async (bookingId) => {
     if (!confirm(`Permanently remove booking ${bookingId} and its calendar event? This cannot be undone.`)) return;
     setDeletingBookingId(bookingId);
@@ -4167,6 +4289,7 @@ function AdminPortal({
 
   useEffect(() => {
     if (['schedule', 'reports'].includes(activeTab)) loadBookingsFromBackend();
+    if (activeTab === 'marketing') loadCampaignHistory();
   }, [activeTab]);
 
   const issueReceipt = async (bookingId) => {
@@ -4441,6 +4564,7 @@ function AdminPortal({
           subject: campaignSubject,
           preview: campaignPreview,
           message: campaignMessage,
+          goal: campaignGoal,
         }),
       });
       const data = await response.json();
@@ -4452,10 +4576,26 @@ function AdminPortal({
         role: 'assistant',
         text: `Campaign delivery finished: ${data.sent} sent and ${data.failed} failed.`,
       }]);
+      loadCampaignHistory();
     } catch (error) {
       setCampaignError(error.message || 'Unable to send campaign');
     } finally {
       setIsSendingCampaign(false);
+    }
+  };
+
+  const loadCampaignHistory = async () => {
+    setIsLoadingCampaignHistory(true);
+    setCampaignHistoryError('');
+    try {
+      const response = await fetch('/api/booking?view=campaign-log');
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+      setCampaignHistory(data.campaigns || []);
+    } catch (error) {
+      setCampaignHistoryError(error.message || 'Unable to load campaign history');
+    } finally {
+      setIsLoadingCampaignHistory(false);
     }
   };
 
@@ -6118,6 +6258,31 @@ function AdminPortal({
             <div className="mb-4 flex items-center justify-between"><div><h3 className="font-bold text-slate-900">Saved drafts</h3><p className="mt-1 text-xs text-slate-500">Stored only on this device</p></div><span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600">{campaignDrafts.length}</span></div>
             {campaignDrafts.length ? <div className="space-y-2">{campaignDrafts.map((draft) => <div key={draft.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-100 p-3"><button type="button" onClick={() => { setCampaignSubject(draft.subject); setCampaignPreview(draft.preview); setCampaignMessage(draft.message); setCampaignNotice('Draft loaded for editing.'); setCampaignError(''); }} className="min-w-0 flex-1 text-left"><span className="block truncate text-sm font-semibold text-slate-800">{draft.subject}</span><span className="text-[10px] text-slate-400">Updated {new Date(draft.updatedAt).toLocaleString()}</span></button><button type="button" onClick={() => removeCampaignDraft(draft.id)} className="rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-500 hover:bg-rose-50 hover:text-rose-700">Delete</button></div>)}</div> : <p className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">No campaign drafts saved yet.</p>}
           </section>
+          <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="mb-4 flex items-center justify-between">
+              <div><h3 className="font-bold text-slate-900">Campaign history</h3><p className="mt-1 text-xs text-slate-500">Logged to BigQuery with a campaign ID for future reference/audit</p></div>
+              <button type="button" onClick={loadCampaignHistory} disabled={isLoadingCampaignHistory} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">{isLoadingCampaignHistory ? 'Refreshing…' : 'Refresh'}</button>
+            </div>
+            {campaignHistoryError && <div role="alert" className="mb-3 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{campaignHistoryError}</div>}
+            {campaignHistory.length ? (
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[640px] text-left text-xs">
+                  <thead><tr className="border-b border-slate-100 text-[10px] uppercase tracking-wider text-slate-400"><th className="py-2 pr-4">Sent</th><th className="py-2 pr-4">Subject</th><th className="py-2 pr-4">Audience</th><th className="py-2 pr-4 text-right">Sent / Failed</th><th className="py-2 pr-4">Campaign ID</th></tr></thead>
+                  <tbody>
+                    {campaignHistory.map((campaign) => (
+                      <tr key={campaign.campaignId} className="border-b border-slate-50 text-slate-600">
+                        <td className="py-2.5 pr-4 whitespace-nowrap">{campaign.sentAt ? new Date(campaign.sentAt).toLocaleString() : '—'}</td>
+                        <td className="py-2.5 pr-4 font-semibold text-slate-800">{campaign.subject || '—'}</td>
+                        <td className="py-2.5 pr-4 max-w-xs truncate">{campaign.audienceDescription || '—'}</td>
+                        <td className="py-2.5 pr-4 text-right"><span className="font-semibold text-emerald-800">{campaign.sentCount}</span>{campaign.failedCount ? <span className="ml-1 font-semibold text-rose-700">/ {campaign.failedCount} failed</span> : ''}</td>
+                        <td className="py-2.5 pr-4 font-mono text-[10px] text-slate-400">{campaign.campaignId}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : <p className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">{isLoadingCampaignHistory ? 'Loading campaign history…' : 'No campaigns sent yet.'}</p>}
+          </section>
         </div>
       )}
 
@@ -6321,6 +6486,19 @@ function AdminPortal({
             </div>
           </div>
           {bookingLoadError && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{bookingLoadError}</div>}
+          <div className="flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-emerald-800">Daily reports</p>
+              <h3 className="mt-1 text-base font-bold text-slate-950">Therapist hours &amp; branch audit</h3>
+              <p className="mt-1 text-xs text-slate-500">Download a PDF of therapist hours served, or a per-branch audit of therapist working hours, for a single day.</p>
+            </div>
+            <div className="flex flex-wrap items-end gap-3">
+              <label className="text-[11px] font-semibold text-slate-500">Report date<input type="date" value={dailyReportDate} onChange={(event) => setDailyReportDate(event.target.value)} className="mt-1 block rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-800" /></label>
+              <label className="text-[11px] font-semibold text-slate-500">Branch<select value={dailyReportBranchId} onChange={(event) => setDailyReportBranchId(event.target.value)} className="mt-1 block rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-800"><option value="all">All branches</option>{branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}</select></label>
+              <button type="button" onClick={downloadTherapistHoursPdf} className="inline-flex items-center gap-2 rounded-lg bg-emerald-950 px-3.5 py-2.5 text-xs font-bold text-white hover:bg-emerald-800"><Download className="h-3.5 w-3.5" />Therapist hours (PDF)</button>
+              <button type="button" onClick={downloadBranchAuditPdf} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3.5 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-50"><Download className="h-3.5 w-3.5" />Branch audit (PDF)</button>
+            </div>
+          </div>
           {(() => {
             const branchName = selectedBranchId === 'all' ? '' : branches.find((branch) => String(branch.id) === String(selectedBranchId))?.name || '';
             const rows = bookings.filter((booking) => booking.date >= reportStartDate && booking.date <= reportEndDate && (!branchName || booking.branchName === branchName));

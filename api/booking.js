@@ -469,6 +469,154 @@ async function bqUpdateSquarePaymentByOrderId(bigquery, orderId, fields) {
 }
 // --- end BigQuery-backed Square payment records -----------------------------
 
+// --- BigQuery-backed marketing campaign log ---------------------------------
+// Every targeted email campaign send is logged here (one row per send) along
+// with the individual recipients it reached, so campaigns can be audited or
+// analyzed later even though the audience itself is resolved live from Sheets
+// at send time. Same design conventions as the tables above.
+const BIGQUERY_CAMPAIGN_LOG_TABLE = process.env.BIGQUERY_CAMPAIGN_LOG_TABLE || 'campaign_log';
+const BIGQUERY_CAMPAIGN_RECIPIENTS_TABLE = process.env.BIGQUERY_CAMPAIGN_RECIPIENTS_TABLE || 'campaign_recipients';
+const CAMPAIGN_LOG_TABLE_FIELDS = [
+  { name: 'campaign_id', type: 'STRING', mode: 'REQUIRED' },
+  { name: 'sent_at', type: 'STRING' },
+  { name: 'sender_email', type: 'STRING' },
+  { name: 'subject', type: 'STRING' },
+  { name: 'preview', type: 'STRING' },
+  { name: 'message', type: 'STRING' },
+  { name: 'goal', type: 'STRING' },
+  { name: 'audience_query', type: 'STRING' },
+  { name: 'audience_description', type: 'STRING' },
+  { name: 'recipient_count', type: 'INT64' },
+  { name: 'sent_count', type: 'INT64' },
+  { name: 'failed_count', type: 'INT64' },
+  { name: 'status', type: 'STRING' },
+];
+const CAMPAIGN_RECIPIENTS_TABLE_FIELDS = [
+  { name: 'campaign_id', type: 'STRING', mode: 'REQUIRED' },
+  { name: 'email', type: 'STRING' },
+  { name: 'name', type: 'STRING' },
+  { name: 'delivery_status', type: 'STRING' },
+  { name: 'sent_at', type: 'STRING' },
+];
+
+function campaignLogTableRef() {
+  return `\`${BIGQUERY_PROJECT_ID}.${BIGQUERY_DATASET_ID}.${BIGQUERY_CAMPAIGN_LOG_TABLE}\``;
+}
+function campaignRecipientsTableRef() {
+  return `\`${BIGQUERY_PROJECT_ID}.${BIGQUERY_DATASET_ID}.${BIGQUERY_CAMPAIGN_RECIPIENTS_TABLE}\``;
+}
+
+let ensureCampaignTablesPromise = null;
+async function ensureCampaignTables(bigquery) {
+  if (!ensureCampaignTablesPromise) {
+    ensureCampaignTablesPromise = (async () => {
+      const dataset = bigquery.dataset(BIGQUERY_DATASET_ID);
+      const [datasetExists] = await dataset.exists();
+      if (!datasetExists) {
+        try {
+          await bigquery.createDataset(BIGQUERY_DATASET_ID, { location: process.env.BIGQUERY_LOCATION || 'US' });
+        } catch (error) {
+          const [existsNow] = await dataset.exists();
+          if (!existsNow) throw error;
+        }
+      }
+      for (const [tableName, fields] of [
+        [BIGQUERY_CAMPAIGN_LOG_TABLE, CAMPAIGN_LOG_TABLE_FIELDS],
+        [BIGQUERY_CAMPAIGN_RECIPIENTS_TABLE, CAMPAIGN_RECIPIENTS_TABLE_FIELDS],
+      ]) {
+        const table = dataset.table(tableName);
+        const [tableExists] = await table.exists();
+        if (!tableExists) {
+          const schema = fields.map(({ name, type, mode }) => ({ name, type, mode: mode || 'NULLABLE' }));
+          try {
+            await dataset.createTable(tableName, { schema });
+          } catch (error) {
+            const [existsNow] = await table.exists();
+            if (!existsNow) throw error;
+          }
+        }
+      }
+    })().catch((error) => {
+      ensureCampaignTablesPromise = null;
+      throw error;
+    });
+  }
+  return ensureCampaignTablesPromise;
+}
+
+async function bqLogCampaignSend(bigquery, campaignId, entry) {
+  await ensureCampaignTables(bigquery);
+  const params = {
+    campaign_id: campaignId,
+    sent_at: entry.sentAt || new Date().toISOString(),
+    sender_email: entry.senderEmail || '',
+    subject: entry.subject || '',
+    preview: entry.preview || '',
+    message: entry.message || '',
+    goal: entry.goal || '',
+    audience_query: entry.audienceQuery || '',
+    audience_description: entry.audienceDescription || '',
+    recipient_count: Math.trunc(Number(entry.recipientCount) || 0),
+    sent_count: Math.trunc(Number(entry.sentCount) || 0),
+    failed_count: Math.trunc(Number(entry.failedCount) || 0),
+    status: entry.status || '',
+  };
+  const columnNames = Object.keys(params);
+  await bigquery.query({
+    query: `INSERT INTO ${campaignLogTableRef()} (${columnNames.join(', ')}) VALUES (${columnNames.map((name) => `@${name}`).join(', ')})`,
+    params,
+  });
+}
+
+async function bqLogCampaignRecipients(bigquery, campaignId, recipients) {
+  if (!recipients.length) return;
+  await ensureCampaignTables(bigquery);
+  const rows = recipients.map((recipient) => ({
+    campaign_id: campaignId,
+    email: recipient.email || '',
+    name: recipient.name || '',
+    delivery_status: recipient.deliveryStatus || '',
+    sent_at: recipient.sentAt || new Date().toISOString(),
+  }));
+  const valuesSql = rows.map((_, index) =>
+    `(@campaign_id_${index}, @email_${index}, @name_${index}, @delivery_status_${index}, @sent_at_${index})`).join(', ');
+  const params = {};
+  rows.forEach((row, index) => {
+    params[`campaign_id_${index}`] = row.campaign_id;
+    params[`email_${index}`] = row.email;
+    params[`name_${index}`] = row.name;
+    params[`delivery_status_${index}`] = row.delivery_status;
+    params[`sent_at_${index}`] = row.sent_at;
+  });
+  await bigquery.query({
+    query: `INSERT INTO ${campaignRecipientsTableRef()} (campaign_id, email, name, delivery_status, sent_at) VALUES ${valuesSql}`,
+    params,
+  });
+}
+
+async function bqFetchRecentCampaigns(bigquery, limit) {
+  await ensureCampaignTables(bigquery);
+  const [rows] = await bigquery.query({
+    query: `SELECT * FROM ${campaignLogTableRef()} ORDER BY sent_at DESC LIMIT @limit`,
+    params: { limit: Math.trunc(Number(limit) || 25) },
+  });
+  return rows.map((record) => ({
+    campaignId: record.campaign_id || '',
+    sentAt: record.sent_at || '',
+    senderEmail: record.sender_email || '',
+    subject: record.subject || '',
+    preview: record.preview || '',
+    goal: record.goal || '',
+    audienceQuery: record.audience_query || '',
+    audienceDescription: record.audience_description || '',
+    recipientCount: Number(record.recipient_count) || 0,
+    sentCount: Number(record.sent_count) || 0,
+    failedCount: Number(record.failed_count) || 0,
+    status: record.status || '',
+  }));
+}
+// --- end BigQuery-backed marketing campaign log -----------------------------
+
 function parseCookies(req) {
   return Object.fromEntries((req.headers.cookie || '').split(';').filter(Boolean).map((part) => {
     const index = part.indexOf('=');
@@ -2715,34 +2863,38 @@ async function fetchGoogleReviews() {
   if (cachedGoogleReviews && Date.now() - cachedGoogleReviewsAt < GOOGLE_REVIEWS_CACHE_MS) {
     return cachedGoogleReviews;
   }
-  const url = new URL('https://maps.googleapis.com/maps/api/place/details/json');
-  url.searchParams.set('place_id', GOOGLE_PLACE_ID);
-  url.searchParams.set('fields', 'name,rating,user_ratings_total,reviews,url');
-  url.searchParams.set('reviews_sort', 'newest');
-  url.searchParams.set('key', GOOGLE_PLACES_API_KEY);
-  const response = await fetch(url.toString());
+  // Uses Places API (New) rather than the legacy `maps.googleapis.com/maps/api/place/details`
+  // endpoint, which Google now rejects for projects that only have the new API enabled
+  // ("You're calling a legacy API, which is not enabled for your project").
+  const placeResourceId = GOOGLE_PLACE_ID.startsWith('places/') ? GOOGLE_PLACE_ID : `places/${GOOGLE_PLACE_ID}`;
+  const url = new URL(`https://places.googleapis.com/v1/${placeResourceId}`);
+  const response = await fetch(url.toString(), {
+    headers: {
+      'X-Goog-Api-Key': GOOGLE_PLACES_API_KEY,
+      'X-Goog-FieldMask': 'displayName,rating,userRatingCount,reviews,googleMapsUri',
+    },
+  });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok || (data.status && data.status !== 'OK')) {
-    const detail = data.error_message || data.status || `Google Places API returned status ${response.status}`;
+  if (!response.ok) {
+    const detail = data.error?.message || `Google Places API returned status ${response.status}`;
     const error = new Error(detail);
     error.statusCode = 502;
     throw error;
   }
-  const result = data.result || {};
   const payload = {
-    businessName: result.name || '',
-    rating: result.rating || 0,
-    totalRatings: result.user_ratings_total || 0,
+    businessName: data.displayName?.text || '',
+    rating: data.rating || 0,
+    totalRatings: data.userRatingCount || 0,
     reviewUrl: `https://search.google.com/local/writereview?placeid=${encodeURIComponent(GOOGLE_PLACE_ID)}`,
-    mapsUrl: result.url || '',
-    reviews: (result.reviews || []).map((review) => ({
-      authorName: review.author_name || 'Google user',
-      authorPhotoUrl: review.profile_photo_url || '',
-      authorUrl: review.author_url || '',
+    mapsUrl: data.googleMapsUri || '',
+    reviews: (data.reviews || []).map((review) => ({
+      authorName: review.authorAttribution?.displayName || 'Google user',
+      authorPhotoUrl: review.authorAttribution?.photoUri || '',
+      authorUrl: review.authorAttribution?.uri || '',
       rating: review.rating || 0,
-      relativeTime: review.relative_time_description || '',
-      time: review.time ? review.time * 1000 : null,
-      text: review.text || '',
+      relativeTime: review.relativePublishTimeDescription || '',
+      time: review.publishTime ? new Date(review.publishTime).getTime() : null,
+      text: review.text?.text || review.originalText?.text || '',
     })),
   };
   cachedGoogleReviews = payload;
@@ -2866,12 +3018,12 @@ export default async function handler(req, res) {
     }
 
     const view = String(req.query?.view || '');
-    const validGetViews = ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'business-name', 'square-config', 'google-reviews', 'branches', 'services', 'therapists', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal', 'find-booking', 'availability', 'unavailability'];
+    const validGetViews = ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'business-name', 'square-config', 'google-reviews', 'branches', 'services', 'therapists', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal', 'find-booking', 'availability', 'unavailability', 'campaign-log'];
     if (req.method === 'GET' && !validGetViews.includes(view)) {
       return res.status(404).json({ message: 'Unknown booking view' });
     }
     const ownerOnlyRequest =
-      (req.method === 'GET' && ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'google-ads-report', 'loyalty-dashboard', 'google-reviews', 'unavailability'].includes(view)) ||
+      (req.method === 'GET' && ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'google-ads-report', 'loyalty-dashboard', 'google-reviews', 'unavailability', 'campaign-log'].includes(view)) ||
       ['business-profile', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-link', 'unavailability-delete'].includes(view) ||
       (req.method === 'POST' && ['branches', 'services', 'therapists', 'unavailability'].includes(view));
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
@@ -4557,21 +4709,54 @@ export default async function handler(req, res) {
       if (sendBlockReason) return res.status(409).json({ message: sendBlockReason });
       const gmail = createGmailApi();
       const results = { sent: 0, failed: 0 };
+      const deliveryLog = [];
+      const sentAt = new Date().toISOString();
       for (const recipient of audience.recipients) {
         try {
           const unsubscribeUrl = getCampaignUnsubscribeUrl(req, recipient.token);
           await sendMarketingEmail(gmail, campaign, recipient, businessProfile, unsubscribeUrl);
           results.sent += 1;
+          deliveryLog.push({ email: recipient.email, name: recipient.name, deliveryStatus: 'SENT', sentAt });
         } catch (error) {
           results.failed += 1;
+          deliveryLog.push({ email: recipient.email, name: recipient.name, deliveryStatus: 'FAILED', sentAt });
           console.error('Marketing campaign delivery failed:', error.message || error);
         }
       }
+      // Every send is logged to BigQuery with a campaign ID for future reference/audit,
+      // even if the logging itself fails — a logging error must never block delivery results.
+      const campaignId = crypto.randomUUID();
+      try {
+        await bqLogCampaignSend(bigquery, campaignId, {
+          sentAt,
+          senderEmail: MARKETING_SENDER_EMAIL,
+          subject: campaign.subject,
+          preview: campaign.preview,
+          message: campaign.message,
+          goal: String(req.body?.goal || ''),
+          audienceQuery: audience.criteria.query,
+          audienceDescription: audience.criteria.description,
+          recipientCount: audience.recipients.length,
+          sentCount: results.sent,
+          failedCount: results.failed,
+          status: results.failed === 0 ? 'SENT' : (results.sent === 0 ? 'FAILED' : 'PARTIAL'),
+        });
+        await bqLogCampaignRecipients(bigquery, campaignId, deliveryLog);
+      } catch (error) {
+        console.error('Campaign log write to BigQuery failed:', error.message || error);
+      }
       return res.status(200).json({
         ...results,
+        campaignId,
         audienceCount: audience.recipients.length,
         description: audience.criteria.description,
       });
+    }
+
+    if (req.method === 'GET' && view === 'campaign-log') {
+      const bigquery = getBigQueryClient();
+      const campaigns = await bqFetchRecentCampaigns(bigquery, req.query?.limit || 25);
+      return res.status(200).json({ campaigns });
     }
 
     if (req.query?.view === 'therapist-dashboard' || req.query?.view === 'therapist-session') {

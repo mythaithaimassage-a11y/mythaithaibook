@@ -49,7 +49,12 @@ Configure these Vercel environment variables before using it:
 - `BIGQUERY_DATASET` (optional; defaults to `booking_system`)
 - `BIGQUERY_BOOKINGS_TABLE` (optional; defaults to `bookings`)
 - `BIGQUERY_SQUARE_PAYMENTS_TABLE` (optional; defaults to `square_payments`)
+- `BIGQUERY_CAMPAIGN_LOG_TABLE` (optional; defaults to `campaign_log`)
+- `BIGQUERY_CAMPAIGN_RECIPIENTS_TABLE` (optional; defaults to `campaign_recipients`)
 - `BIGQUERY_LOCATION` (optional; defaults to `US`)
+- `GOOGLE_PLACES_API_KEY` / `GOOGLE_PLACE_ID` (optional; enables the Google
+  Reviews section — requires the **Places API (New)** enabled on the project,
+  not the legacy Places API)
 
 Share the Google Sheet with the service account email as an Editor. Enable the
 Google Sheets API and Google Calendar API in the Google Cloud project. The
@@ -59,11 +64,12 @@ the primary calendar with `GOOGLE_PRIMARY_CALENDAR_ID`.
 ## Booking records in BigQuery
 
 Booking records (customer name, service, therapist, date/time, payment,
-receipt, cancellation status, etc.) and Square payment link/checkout records
-are stored in typed **BigQuery** tables rather than Google Sheets tabs. Every
-other data set used by this app (branches, services, therapists, loyalty
-program, patient history, marketing contacts, availability blocks) remains in
-Google Sheets and is unaffected by this section.
+receipt, cancellation status, etc.), Square payment link/checkout records, and
+targeted email campaign logs are stored in typed **BigQuery** tables rather
+than Google Sheets tabs. Every other data set used by this app (branches,
+services, therapists, loyalty program, patient history, marketing contacts,
+availability blocks) remains in Google Sheets and is unaffected by this
+section.
 
 Enable the **BigQuery API** in the same Google Cloud project used for Sheets
 and Calendar, and grant the existing service account
@@ -76,10 +82,12 @@ Set `BIGQUERY_PROJECT_ID` (or reuse `GOOGLE_CLOUD_PROJECT` if already set) to
 the Google Cloud project ID, e.g. `my-thai-thai-booking-system`. The dataset
 (`BIGQUERY_DATASET`, default `booking_system`) and tables
 (`BIGQUERY_BOOKINGS_TABLE`, default `bookings`; `BIGQUERY_SQUARE_PAYMENTS_TABLE`,
-default `square_payments`) are **created automatically** on first use — no
-manual DDL is required. If your project is on **BigQuery Sandbox** (no
-billing account linked), link a billing account first: Sandbox datasets/tables
-auto-expire after 60 days of inactivity and have tighter query/DML quotas.
+default `square_payments`; `BIGQUERY_CAMPAIGN_LOG_TABLE`/`BIGQUERY_CAMPAIGN_RECIPIENTS_TABLE`,
+default `campaign_log`/`campaign_recipients`) are **created automatically** on
+first use — no manual DDL is required. If your project is on **BigQuery
+Sandbox** (no billing account linked), link a billing account first: Sandbox
+datasets/tables auto-expire after 60 days of inactivity and have tighter
+query/DML quotas.
 
 Note: all timestamp columns (`date`, `time`, `created_at`,
 `receipt_issued_at`, etc.) are stored as plain `STRING` columns (not BigQuery
@@ -240,10 +248,15 @@ shows your Google Business Profile's average rating, total rating count, and
 most recent reviews, along with quick links to view all reviews on Google and
 to send customers straight to your review form.
 
-This uses the [Places API (Place Details)](https://developers.google.com/maps/documentation/places/web-service/details)
+This uses the [Places API (New) — Place Details](https://developers.google.com/maps/documentation/places/web-service/place-details)
 with an API key, so it does not require the more restrictive Google Business
-Profile API / OAuth setup. To enable it, add these server-side Vercel
-Environment Variables:
+Profile API / OAuth setup. **Enable "Places API (New)"** in
+[Google Cloud Console](https://console.cloud.google.com/apis/library/places-backend.googleapis.com)
+for your project — the older, legacy "Places API" is not used and will not
+work here (Google now rejects `maps.googleapis.com/maps/api/place/details`
+calls for projects that only have the new API enabled, returning "You're
+calling a legacy API, which is not enabled for your project"). To enable this
+section, add these server-side Vercel Environment Variables:
 
 - `GOOGLE_PLACES_API_KEY` (an API key with the **Places API** enabled in
   [Google Cloud Console](https://console.cloud.google.com/apis/credentials);
@@ -396,6 +409,32 @@ For example, ask for customers with at least two past Wednesday bookings at a
 named branch, or the most recently active customers at a branch in the last 30
 days. Audience rules use recorded booking dates and do not infer appointment
 attendance.
+
+Every campaign send is logged with a unique campaign ID to the
+`campaign_log`/`campaign_recipients` BigQuery tables (subject, preview,
+message, campaign goal, resolved audience description, and per-recipient send
+status), auto-created the same way as the bookings/Square-payments tables
+above. A **Campaign history** list in the Email marketing tab shows recent
+sends (date, subject, audience, sent/failed counts) pulled from BigQuery for
+future reference/audit — this is a delivery log only; it does not affect
+future audience matching, which is always resolved live from Sheets/BigQuery
+at send time.
+
+## Daily therapist hours & branch audit PDF reports
+
+The **Sales & reports** tab has a **Daily reports** panel with a date picker
+and two one-click PDF downloads, generated entirely in the browser from
+already-loaded booking data (no extra API calls):
+
+- **Therapist hours (PDF)** — for the selected day, one row per therapist with
+  appointment count and total hours served (`duration_minutes` summed and
+  converted to hours), across all branches. Cancelled bookings are excluded.
+- **Branch audit (PDF)** — for the selected day, grouped by branch: a
+  per-therapist hours summary followed by a full appointment-level detail
+  table (time, therapist, service, duration, status) for audit purposes.
+
+Both reports default to today (in `America/Toronto`, matching the calendar
+time zone) and can be filtered by branch using the existing branch selector.
 
 In the owner **Booking Calendar**, open a linked appointment to review its
 patient and payment details. If payment was received outside the booking flow,
