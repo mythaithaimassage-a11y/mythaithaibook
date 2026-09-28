@@ -1,4 +1,5 @@
 import { google } from 'googleapis';
+import { BigQuery } from '@google-cloud/bigquery';
 import crypto from 'node:crypto';
 
 // Body parsing is done manually (see readRawBody/parseRequestBody below) so the Square
@@ -140,7 +141,6 @@ const LOYALTY_SHEETS = {
   LoyaltyCompanies: ['Organization', 'Company ID', 'Contact Email', 'Access Token', 'Created At', 'Updated At'],
   SquarePayments: ['Payment Link ID', 'Order ID', 'Booking ID', 'Amount', 'Status', 'Email', 'Created At', 'Purpose', 'Square Payment ID'],
 };
-const RECEIPT_HEADERS = ['Receipt No.', 'Receipt Issued At', 'Receipt Email Status'];
 const MARKETING_CONTACT_HEADERS = [
   'Email',
   'Customer Name',
@@ -151,6 +151,194 @@ const MARKETING_CONTACT_HEADERS = [
   'Unsubscribed At',
 ];
 const MARKETING_SENDER_EMAIL = 'mythaithaimassage@gmail.com';
+
+// --- BigQuery-backed booking records --------------------------------------
+// Booking records (formerly rows in the Sheet1 tab) are stored in a proper,
+// typed BigQuery table instead of an untyped spreadsheet. Every other data
+// set (branches, services, therapists, loyalty, patient history, Square
+// payments, marketing contacts) remains in Google Sheets and is unaffected.
+//
+// Date/time/timestamp fields are intentionally kept as STRING columns (not
+// BigQuery DATE/TIMESTAMP types) because the rest of this file parses and
+// formats them itself (parseBookingDateTime, ISO strings, "h:mm AM/PM", …).
+// Storing them as plain strings preserves exact byte-for-byte compatibility
+// with the existing parsing/formatting code and avoids the BigQuery client
+// library's wrapper objects for temporal types leaking into the app.
+const BIGQUERY_PROJECT_ID = process.env.BIGQUERY_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || '';
+const BIGQUERY_DATASET_ID = process.env.BIGQUERY_DATASET || 'booking_system';
+const BIGQUERY_BOOKINGS_TABLE = process.env.BIGQUERY_BOOKINGS_TABLE || 'bookings';
+
+// Column order matches the historical Sheet1 layout (A-Z) exactly, so every
+// existing `row[N]` access throughout this file keeps working unchanged.
+const BOOKING_TABLE_FIELDS = [
+  { name: 'booking_id', prop: 'id', type: 'STRING', mode: 'REQUIRED' },
+  { name: 'customer_name', prop: 'customerName', type: 'STRING' },
+  { name: 'phone', prop: 'phone', type: 'STRING' },
+  { name: 'email', prop: 'email', type: 'STRING' },
+  { name: 'branch_name', prop: 'branchName', type: 'STRING' },
+  { name: 'service_name', prop: 'serviceName', type: 'STRING' },
+  { name: 'therapist_name', prop: 'therapistName', type: 'STRING' },
+  { name: 'date', prop: 'date', type: 'STRING' },
+  { name: 'time', prop: 'time', type: 'STRING' },
+  { name: 'payment_option', prop: 'paymentOption', type: 'STRING' },
+  { name: 'paid_amount', prop: 'paidAmount', type: 'FLOAT64' },
+  { name: 'total', prop: 'total', type: 'FLOAT64' },
+  { name: 'duration_minutes', prop: 'durationMinutes', type: 'INT64' },
+  { name: 'branch_address', prop: 'branchAddress', type: 'STRING' },
+  { name: 'intake_notes', prop: 'intakeNotes', type: 'STRING' },
+  { name: 'calendar_id', prop: 'calendarId', type: 'STRING' },
+  { name: 'calendar_event_id', prop: 'calendarEventId', type: 'STRING' },
+  { name: 'created_at', prop: 'createdAt', type: 'STRING' },
+  { name: 'receipt_number', prop: 'receiptNumber', type: 'STRING' },
+  { name: 'receipt_issued_at', prop: 'receiptIssuedAt', type: 'STRING' },
+  { name: 'receipt_email_status', prop: 'receiptEmailStatus', type: 'STRING' },
+  { name: 'membership_type', prop: 'membershipType', type: 'STRING' },
+  { name: 'discount_percent', prop: 'discountPercent', type: 'FLOAT64' },
+  { name: 'membership_discount_amount', prop: 'membershipDiscountAmount', type: 'FLOAT64' },
+  { name: 'status', prop: 'status', type: 'STRING' },
+  { name: 'status_notes', prop: 'statusNotes', type: 'STRING' },
+];
+// Sentinel first row so every existing `rows[0]?.[0] === 'Booking ID' ? rows.slice(1) : rows`
+// header-detection check throughout this file keeps working unchanged.
+const BOOKING_ROW_SENTINEL_HEADER = ['Booking ID'];
+
+let bigQueryClientSingleton = null;
+function getBigQueryClient() {
+  if (!bigQueryClientSingleton) {
+    if (!process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || !process.env.GOOGLE_PRIVATE_KEY) {
+      throw new Error('GOOGLE_SERVICE_ACCOUNT_EMAIL and GOOGLE_PRIVATE_KEY must be configured for BigQuery access');
+    }
+    if (!BIGQUERY_PROJECT_ID) {
+      throw new Error('BIGQUERY_PROJECT_ID (or GOOGLE_CLOUD_PROJECT) must be configured with your Google Cloud project ID, e.g. "my-thai-thai-booking-system"');
+    }
+    bigQueryClientSingleton = new BigQuery({
+      projectId: BIGQUERY_PROJECT_ID,
+      credentials: {
+        client_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
+        private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+      },
+    });
+  }
+  return bigQueryClientSingleton;
+}
+
+function bookingsTableRef() {
+  return `\`${BIGQUERY_PROJECT_ID}.${BIGQUERY_DATASET_ID}.${BIGQUERY_BOOKINGS_TABLE}\``;
+}
+
+let ensureBookingsTablePromise = null;
+async function ensureBookingsTable(bigquery) {
+  if (!ensureBookingsTablePromise) {
+    ensureBookingsTablePromise = (async () => {
+      const dataset = bigquery.dataset(BIGQUERY_DATASET_ID);
+      const [datasetExists] = await dataset.exists();
+      if (!datasetExists) {
+        try {
+          await bigquery.createDataset(BIGQUERY_DATASET_ID, { location: process.env.BIGQUERY_LOCATION || 'US' });
+        } catch (error) {
+          const [existsNow] = await dataset.exists();
+          if (!existsNow) throw error;
+        }
+      }
+      const table = dataset.table(BIGQUERY_BOOKINGS_TABLE);
+      const [tableExists] = await table.exists();
+      if (!tableExists) {
+        const schema = BOOKING_TABLE_FIELDS.map(({ name, type, mode }) => ({ name, type, mode: mode || 'NULLABLE' }));
+        try {
+          await dataset.createTable(BIGQUERY_BOOKINGS_TABLE, { schema });
+        } catch (error) {
+          const [existsNow] = await table.exists();
+          if (!existsNow) throw error;
+        }
+      }
+    })().catch((error) => {
+      ensureBookingsTablePromise = null;
+      throw error;
+    });
+  }
+  return ensureBookingsTablePromise;
+}
+
+// Converts a BigQuery result row (a plain object keyed by column name) into
+// the legacy 26-element positional array format (row[0]..row[25]) that every
+// existing booking-reading code path in this file already expects.
+function bookingRowArrayFromRecord(record) {
+  return BOOKING_TABLE_FIELDS.map(({ name, type }) => {
+    const value = record?.[name];
+    if (value === null || value === undefined) return type === 'FLOAT64' || type === 'INT64' ? 0 : '';
+    return value;
+  });
+}
+
+// Maps a legacy 26-element positional row array (row[0]..row[25]) back into
+// a { column_name: value } object suitable for a parameterized BigQuery query.
+function bookingParamsFromRowArray(rowArray) {
+  const params = {};
+  BOOKING_TABLE_FIELDS.forEach(({ name, type }, index) => {
+    const raw = rowArray[index];
+    if (type === 'FLOAT64') params[name] = raw === '' || raw === null || raw === undefined ? 0 : Number(raw) || 0;
+    else if (type === 'INT64') params[name] = raw === '' || raw === null || raw === undefined ? 0 : Math.trunc(Number(raw) || 0);
+    else params[name] = raw === null || raw === undefined ? '' : String(raw);
+  });
+  return params;
+}
+
+async function bqFetchBookingRows(bigquery) {
+  await ensureBookingsTable(bigquery);
+  const [rows] = await bigquery.query({
+    query: `SELECT * FROM ${bookingsTableRef()} ORDER BY created_at ASC`,
+  });
+  return { data: { values: [BOOKING_ROW_SENTINEL_HEADER, ...rows.map(bookingRowArrayFromRecord)] } };
+}
+
+async function bqInsertBookingRow(bigquery, rowArray) {
+  await ensureBookingsTable(bigquery);
+  const params = bookingParamsFromRowArray(rowArray);
+  const columnNames = BOOKING_TABLE_FIELDS.map(({ name }) => name);
+  const placeholders = columnNames.map((name) => `@${name}`);
+  await bigquery.query({
+    query: `INSERT INTO ${bookingsTableRef()} (${columnNames.join(', ')}) VALUES (${placeholders.join(', ')})`,
+    params,
+  });
+}
+
+async function bqAppendBookingRows(bigquery, rowArrays) {
+  for (const rowArray of rowArrays) {
+    await bqInsertBookingRow(bigquery, rowArray);
+  }
+}
+
+// fields uses the same camelCase property names as the row-array mapping
+// (e.g. { paidAmount: 50 }, { status: 'Cancelled', statusNotes: '...' }).
+async function bqUpdateBookingFields(bigquery, bookingId, fields) {
+  await ensureBookingsTable(bigquery);
+  const entries = Object.entries(fields).map(([prop, value]) => {
+    const field = BOOKING_TABLE_FIELDS.find((candidate) => candidate.prop === prop);
+    if (!field) throw new Error(`Unknown booking field: ${prop}`);
+    return { field, value };
+  });
+  if (!entries.length) return;
+  const setClauses = entries.map(({ field }) => `${field.name} = @set_${field.name}`);
+  const params = { where_booking_id: bookingId };
+  entries.forEach(({ field, value }) => {
+    if (field.type === 'FLOAT64') params[`set_${field.name}`] = value === '' || value === null || value === undefined ? 0 : Number(value) || 0;
+    else if (field.type === 'INT64') params[`set_${field.name}`] = value === '' || value === null || value === undefined ? 0 : Math.trunc(Number(value) || 0);
+    else params[`set_${field.name}`] = value === null || value === undefined ? '' : String(value);
+  });
+  await bigquery.query({
+    query: `UPDATE ${bookingsTableRef()} SET ${setClauses.join(', ')} WHERE booking_id = @where_booking_id`,
+    params,
+  });
+}
+
+async function bqDeleteBookingRow(bigquery, bookingId) {
+  await ensureBookingsTable(bigquery);
+  await bigquery.query({
+    query: `DELETE FROM ${bookingsTableRef()} WHERE booking_id = @booking_id`,
+    params: { booking_id: bookingId },
+  });
+}
+// --- end BigQuery-backed booking records ----------------------------------
 
 function parseCookies(req) {
   return Object.fromEntries((req.headers.cookie || '').split(';').filter(Boolean).map((part) => {
@@ -1505,22 +1693,6 @@ function getFirstPaidSingleSessionBookingId(rows, email) {
   return String(candidates[0]?.[0] || '');
 }
 
-async function ensureReceiptHeaders(sheets) {
-  const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
-  const result = await sheets.spreadsheets.values.get({
-    spreadsheetId,
-    range: 'Sheet1!S1:U1',
-  });
-  if (RECEIPT_HEADERS.some((header, index) => result.data.values?.[0]?.[index] !== header)) {
-    await sheets.spreadsheets.values.update({
-      spreadsheetId,
-      range: 'Sheet1!S1:U1',
-      valueInputOption: 'RAW',
-      requestBody: { values: [RECEIPT_HEADERS] },
-    });
-  }
-}
-
 async function ensureMarketingContactsSheet(sheets) {
   const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
   if (!spreadsheetId) throw new Error('GOOGLE_SPREADSHEET_ID is not configured');
@@ -1679,12 +1851,12 @@ function parseBookingDate(value) {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
-async function resolveMarketingAudience(sheets, query) {
+async function resolveMarketingAudience(sheets, bigquery, query) {
   const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
   if (!spreadsheetId) throw new Error('GOOGLE_SPREADSHEET_ID is not configured');
   const [contacts, bookingResult, membersResult] = await Promise.all([
     getMarketingContactRows(sheets),
-    sheets.spreadsheets.values.get({ spreadsheetId, range: 'Sheet1!A:U' }),
+    bqFetchBookingRows(bigquery),
     sheets.spreadsheets.values.get({ spreadsheetId, range: 'LoyaltyMembers!A:J' }).catch((error) => {
       if (error.code === 400) return { data: { values: [] } };
       throw error;
@@ -2623,6 +2795,7 @@ export default async function handler(req, res) {
     if (req.method === 'GET' && view === 'loyalty-dashboard') {
       res.setHeader('Cache-Control', 'no-store');
       const settings = await getLoyaltySettings(sheets);
+      const bigquery = getBigQueryClient();
       const [membersResult, ledgerResult, bookingsResult] = await Promise.all([
         sheets.spreadsheets.values.get({
           spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
@@ -2632,10 +2805,7 @@ export default async function handler(req, res) {
           spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
           range: 'LoyaltyLedger!A:J',
         }),
-        sheets.spreadsheets.values.get({
-          spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-          range: 'Sheet1!A:U',
-        }),
+        bqFetchBookingRows(bigquery),
       ]);
       const memberRows = (membersResult.data.values || []).slice(1).filter((row) => row[0]);
       const ledgerRows = (ledgerResult.data.values || []).slice(1).filter((row) => row[0]);
@@ -3260,10 +3430,11 @@ export default async function handler(req, res) {
       }
       const settings = await getLoyaltySettings(sheets);
       if (!settings.enabled) return res.status(409).json({ message: 'The loyalty program is currently paused.' });
+      const bigquery = getBigQueryClient();
       const [membersResult, ledgerResult, bookingsResult] = await Promise.all([
         sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'LoyaltyMembers!A:K' }),
         sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'LoyaltyLedger!A:J' }),
-        sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'Sheet1!A:U' }),
+        bqFetchBookingRows(bigquery),
       ]);
       const bookingRows = bookingsResult.data.values || [];
       const hasHeader = bookingRows[0]?.[0] === 'Booking ID';
@@ -3408,10 +3579,11 @@ export default async function handler(req, res) {
       if (!Number.isInteger(points) || points < settings.redemptionPoints || points > 1000000 || points % settings.redemptionPoints !== 0) {
         return res.status(400).json({ message: `Redeem points in multiples of ${settings.redemptionPoints}.` });
       }
+      const bigquery = getBigQueryClient();
       const [membersResult, ledgerResult, bookingsResult] = await Promise.all([
         sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'LoyaltyMembers!A:J' }),
         sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'LoyaltyLedger!A:J' }),
-        sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'Sheet1!A:U' }),
+        bqFetchBookingRows(bigquery),
       ]);
       const member = (membersResult.data.values || []).slice(1)
         .find((row) => normalizeLoyaltyEmail(row[0]) === email);
@@ -3594,6 +3766,7 @@ export default async function handler(req, res) {
         return res.status(400).json({ message: 'Choose a patient, note type, and enter a note of no more than 3,000 characters.' });
       }
 
+      const bigquery = getBigQueryClient();
       const [accountsResult, bookingResult] = await Promise.all([
         sheets.spreadsheets.values.get({
           spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
@@ -3602,10 +3775,7 @@ export default async function handler(req, res) {
           if (error.code === 400) return { data: { values: [] } };
           throw error;
         }),
-        sheets.spreadsheets.values.get({
-          spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-          range: 'Sheet1!A:R',
-        }),
+        bqFetchBookingRows(bigquery),
       ]);
       const sheetAccount = (accountsResult.data.values || []).slice(1)
         .map((row) => ({ id: row[0], name: row[2], status: row[4] }))
@@ -3964,7 +4134,8 @@ export default async function handler(req, res) {
 
     if (req.method === 'POST' && view === 'campaign-audience') {
       const query = String(req.body?.query || '');
-      const audience = await resolveMarketingAudience(sheets, query);
+      const bigquery = getBigQueryClient();
+      const audience = await resolveMarketingAudience(sheets, bigquery, query);
       const businessProfile = await getBusinessProfile(sheets);
       const sendBlockReason = getCampaignSendBlockReason(businessProfile);
       return res.status(200).json({
@@ -3984,7 +4155,8 @@ export default async function handler(req, res) {
 
     if (req.method === 'POST' && view === 'campaign-generate') {
       const query = String(req.body?.query || '');
-      const audience = await resolveMarketingAudience(sheets, query);
+      const bigquery = getBigQueryClient();
+      const audience = await resolveMarketingAudience(sheets, bigquery, query);
       const draft = await generateCampaignCopy(
         req.body?.goal,
         audience.criteria.description,
@@ -4009,7 +4181,8 @@ export default async function handler(req, res) {
       if (campaign.preview.length > 200 || !campaign.message || campaign.message.length > 5000) {
         return res.status(400).json({ message: 'Preview text must be 200 characters or fewer and the message must be 1-5000 characters.' });
       }
-      const audience = await resolveMarketingAudience(sheets, String(req.body?.query || ''));
+      const bigquery = getBigQueryClient();
+      const audience = await resolveMarketingAudience(sheets, bigquery, String(req.body?.query || ''));
       if (audience.recipients.length === 0) {
         return res.status(409).json({ message: 'This audience has no active, opted-in recipients.' });
       }
@@ -4118,8 +4291,9 @@ export default async function handler(req, res) {
     }
 
     if (req.query?.view === 'therapist-dashboard') {
+      const bigquery = getBigQueryClient();
       const [bookingResult, historyResult, roster, allBranches] = await Promise.all([
-        sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'Sheet1!A:R' }),
+        bqFetchBookingRows(bigquery),
         sheets.spreadsheets.values.get({ spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID, range: 'PatientHistory!A:AH' }),
         getTherapists(sheets),
         getBranches(sheets),
@@ -4379,13 +4553,8 @@ export default async function handler(req, res) {
         if (!bookingId || bookingId.length > 100 || !email) {
           return res.status(400).json({ message: 'A booking reference and the email used at booking are required.' });
         }
-        if (!process.env.GOOGLE_SPREADSHEET_ID) {
-          throw new Error('GOOGLE_SPREADSHEET_ID is not configured');
-        }
-        const result = await sheets.spreadsheets.values.get({
-          spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-          range: 'Sheet1!A:Z',
-        });
+        const bigquery = getBigQueryClient();
+        const result = await bqFetchBookingRows(bigquery);
         const rows = result.data.values || [];
         const hasHeader = rows[0]?.[0] === 'Booking ID';
         const startIndex = hasHeader ? 1 : 0;
@@ -4429,10 +4598,8 @@ export default async function handler(req, res) {
         const date = req.query.date || new Date().toISOString().slice(0, 10);
         const branch = String(req.query.branch || '').toLowerCase();
         const therapist = String(req.query.therapist || '').toLowerCase();
-        const sheetResult = await sheets.spreadsheets.values.get({
-          spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-          range: 'Sheet1!A:Z',
-        });
+        const bigquery = getBigQueryClient();
+        const sheetResult = await bqFetchBookingRows(bigquery);
         const sheetRows = sheetResult.data.values || [];
         const hasHeader = sheetRows[0]?.[0] === 'Booking ID';
         const dataRows = hasHeader ? sheetRows.slice(1) : sheetRows;
@@ -4570,12 +4737,7 @@ export default async function handler(req, res) {
         }
 
         if (pendingAutoLinks.length > 0) {
-          await sheets.spreadsheets.values.append({
-            spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-            range: 'Sheet1!A:X',
-            valueInputOption: 'USER_ENTERED',
-            requestBody: { values: pendingAutoLinks },
-          });
+          await bqAppendBookingRows(bigquery, pendingAutoLinks);
         }
 
         return res.status(200).json({
@@ -4587,10 +4749,7 @@ export default async function handler(req, res) {
         });
       }
 
-      const result = await sheets.spreadsheets.values.get({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'Sheet1!A:Z',
-      });
+      const result = await bqFetchBookingRows(getBigQueryClient());
       const rows = result.data.values || [];
       const dataRows = rows[0]?.[0] === 'Booking ID' ? rows.slice(1) : rows;
       return res.status(200).json({
@@ -4644,19 +4803,14 @@ export default async function handler(req, res) {
       if (paidAmount !== null && (Number.isNaN(paidAmount) || paidAmount < 0)) {
         return res.status(400).json({ message: 'Enter a valid amount paid' });
       }
-      if (!process.env.GOOGLE_SPREADSHEET_ID) {
-        throw new Error('GOOGLE_SPREADSHEET_ID is not configured');
-      }
 
-      const result = await sheets.spreadsheets.values.get({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'Sheet1!A:U',
-      });
+      const bigquery = getBigQueryClient();
+      const result = await bqFetchBookingRows(bigquery);
       const rows = result.data.values || [];
       const hasHeader = rows[0]?.[0] === 'Booking ID';
       const startIndex = hasHeader ? 1 : 0;
       const rowIndex = rows.findIndex((row, index) => index >= startIndex && String(row[0] || '') === bookingId);
-      if (rowIndex < 0) return res.status(404).json({ message: 'Booking was not found in Google Sheets' });
+      if (rowIndex < 0) return res.status(404).json({ message: 'Booking was not found' });
 
       const row = rows[rowIndex];
       const resolvedTotal = total !== null ? total : (Number(row[11]) || 0);
@@ -4671,25 +4825,12 @@ export default async function handler(req, res) {
         paidAmount: resolvedPaid,
         total: resolvedTotal,
       };
-      const sheetRow = rowIndex + 1;
-      await sheets.spreadsheets.values.update({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: `Sheet1!C${sheetRow}:L${sheetRow}`,
-        valueInputOption: 'USER_ENTERED',
-        requestBody: {
-          values: [[
-            updatedRow.phone,
-            updatedRow.email,
-            row[4] || '',
-            row[5] || '',
-            row[6] || '',
-            row[7] || '',
-            row[8] || '',
-            updatedRow.paymentOption,
-            updatedRow.paidAmount,
-            updatedRow.total,
-          ]],
-        },
+      await bqUpdateBookingFields(bigquery, bookingId, {
+        phone: updatedRow.phone,
+        email: updatedRow.email,
+        paymentOption: updatedRow.paymentOption,
+        paidAmount: updatedRow.paidAmount,
+        total: updatedRow.total,
       });
 
       return res.status(200).json({
@@ -4726,18 +4867,12 @@ export default async function handler(req, res) {
       if (!(requestedAmount > 0)) {
         return res.status(400).json({ message: 'Enter a valid payment amount' });
       }
-      if (!process.env.GOOGLE_SPREADSHEET_ID) {
-        throw new Error('GOOGLE_SPREADSHEET_ID is not configured');
-      }
-      const result = await sheets.spreadsheets.values.get({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'Sheet1!A:U',
-      });
+      const result = await bqFetchBookingRows(getBigQueryClient());
       const rows = result.data.values || [];
       const hasHeader = rows[0]?.[0] === 'Booking ID';
       const startIndex = hasHeader ? 1 : 0;
       const rowIndex = rows.findIndex((row, index) => index >= startIndex && String(row[0] || '') === bookingId);
-      if (rowIndex < 0) return res.status(404).json({ message: 'Booking was not found in Google Sheets' });
+      if (rowIndex < 0) return res.status(404).json({ message: 'Booking was not found' });
       const row = rows[rowIndex];
       const total = Number(row[11]) || 0;
       const paidAmount = Number(row[10]) || 0;
@@ -4843,10 +4978,8 @@ export default async function handler(req, res) {
         ]] },
       });
 
-      const bookingResult = await sheets.spreadsheets.values.get({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'Sheet1!A:U',
-      });
+      const bigquery = getBigQueryClient();
+      const bookingResult = await bqFetchBookingRows(bigquery);
       const bookingRows = bookingResult.data.values || [];
       const bookingRowIndex = bookingRows.findIndex((row, index) => index > 0 && String(row[0] || '') === bookingId);
       let updatedPaid = amountPaid;
@@ -4858,12 +4991,7 @@ export default async function handler(req, res) {
         customerName = String(bookingRow[1] || '');
         const currentPaid = Number(bookingRow[10]) || 0;
         updatedPaid = Math.min(bookingTotal, Math.round((currentPaid + amountPaid) * 100) / 100);
-        await sheets.spreadsheets.values.update({
-          spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-          range: `Sheet1!K${bookingRowIndex + 1}`,
-          valueInputOption: 'RAW',
-          requestBody: { values: [[updatedPaid]] },
-        });
+        await bqUpdateBookingFields(bigquery, bookingId, { paidAmount: updatedPaid });
       }
 
       const businessProfile = await getBusinessProfile(sheets);
@@ -4931,18 +5059,13 @@ export default async function handler(req, res) {
       if (!bookingId || bookingId.length > 100) {
         return res.status(400).json({ message: 'A valid booking ID is required' });
       }
-      if (!process.env.GOOGLE_SPREADSHEET_ID) {
-        throw new Error('GOOGLE_SPREADSHEET_ID is not configured');
-      }
-      const result = await sheets.spreadsheets.values.get({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'Sheet1!A:U',
-      });
+      const bigquery = getBigQueryClient();
+      const result = await bqFetchBookingRows(bigquery);
       const rows = result.data.values || [];
       const hasHeader = rows[0]?.[0] === 'Booking ID';
       const startIndex = hasHeader ? 1 : 0;
       const rowIndex = rows.findIndex((row, index) => index >= startIndex && String(row[0] || '') === bookingId);
-      if (rowIndex < 0) return res.status(404).json({ message: 'Booking was not found in Google Sheets' });
+      if (rowIndex < 0) return res.status(404).json({ message: 'Booking was not found' });
 
       const row = rows[rowIndex];
       const total = Number(row[11]) || 0;
@@ -4951,12 +5074,7 @@ export default async function handler(req, res) {
       }
       const paidAmount = Number(row[10]) || 0;
       if (paidAmount + 0.005 < total) {
-        await sheets.spreadsheets.values.update({
-          spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-          range: `Sheet1!K${rowIndex + 1}`,
-          valueInputOption: 'RAW',
-          requestBody: { values: [[total]] },
-        });
+        await bqUpdateBookingFields(bigquery, bookingId, { paidAmount: total });
       }
       return res.status(200).json({
         booking: {
@@ -4976,18 +5094,13 @@ export default async function handler(req, res) {
       if (!bookingId || bookingId.length > 100) {
         return res.status(400).json({ message: 'A valid booking ID is required' });
       }
-      if (!process.env.GOOGLE_SPREADSHEET_ID) {
-        throw new Error('GOOGLE_SPREADSHEET_ID is not configured');
-      }
-      const result = await sheets.spreadsheets.values.get({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'Sheet1!A:U',
-      });
+      const bigquery = getBigQueryClient();
+      const result = await bqFetchBookingRows(bigquery);
       const rows = result.data.values || [];
       const hasHeader = rows[0]?.[0] === 'Booking ID';
       const startIndex = hasHeader ? 1 : 0;
       const rowIndex = rows.findIndex((row, index) => index >= startIndex && String(row[0] || '') === bookingId);
-      if (rowIndex < 0) return res.status(404).json({ message: 'Booking was not found in Google Sheets' });
+      if (rowIndex < 0) return res.status(404).json({ message: 'Booking was not found' });
 
       const row = rows[rowIndex];
       const booking = {
@@ -5049,7 +5162,7 @@ export default async function handler(req, res) {
       const discountedSubtotal = Math.round((originalSubtotal - loyaltyDiscount) * 100) / 100;
       const tax = isTaxExempt ? 0 : Math.round(discountedSubtotal * 0.13 * 100) / 100;
       const receipt = {
-        number: row[18] || `MTT-${new Date().getFullYear()}-${String(rowIndex + 1).padStart(6, '0')}`,
+        number: row[18] || `MTT-${new Date().getFullYear()}-${String(Math.floor(100000 + Math.random() * 900000))}`,
         issuedAt: row[19] || new Date().toISOString(),
         subtotal,
         tax,
@@ -5060,13 +5173,10 @@ export default async function handler(req, res) {
         pointsBalance,
         loyaltyMember,
       };
-      const sheetRow = rowIndex + 1;
-      if (hasHeader) await ensureReceiptHeaders(sheets);
-      await sheets.spreadsheets.values.update({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: `Sheet1!S${sheetRow}:U${sheetRow}`,
-        valueInputOption: 'RAW',
-        requestBody: { values: [[receipt.number, receipt.issuedAt, row[20] || 'pending']] },
+      await bqUpdateBookingFields(bigquery, bookingId, {
+        receiptNumber: receipt.number,
+        receiptIssuedAt: receipt.issuedAt,
+        receiptEmailStatus: row[20] || 'pending',
       });
       for (const { rowNumber } of linkedRedemptions) {
         await sheets.spreadsheets.values.update({
@@ -5081,20 +5191,10 @@ export default async function handler(req, res) {
         try {
           await sendReceiptEmail(createGmailApi(), booking, receipt, businessProfile);
         } catch (error) {
-          await sheets.spreadsheets.values.update({
-            spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-            range: `Sheet1!U${sheetRow}`,
-            valueInputOption: 'RAW',
-            requestBody: { values: [['failed']] },
-          });
+          await bqUpdateBookingFields(bigquery, bookingId, { receiptEmailStatus: 'failed' });
           throw new Error(`Receipt ${receipt.number} was created but could not be emailed: ${error.message}`);
         }
-        await sheets.spreadsheets.values.update({
-          spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-          range: `Sheet1!U${sheetRow}`,
-          valueInputOption: 'RAW',
-          requestBody: { values: [['sent']] },
-        });
+        await bqUpdateBookingFields(bigquery, bookingId, { receiptEmailStatus: 'sent' });
       }
       return res.status(200).json({
         receipt,
@@ -5139,18 +5239,13 @@ export default async function handler(req, res) {
       if (!bookingId || bookingId.length > 100) {
         return res.status(400).json({ message: 'A valid booking ID is required' });
       }
-      if (!process.env.GOOGLE_SPREADSHEET_ID) {
-        throw new Error('GOOGLE_SPREADSHEET_ID is not configured');
-      }
-      const result = await sheets.spreadsheets.values.get({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'Sheet1!A:X',
-      });
+      const bigquery = getBigQueryClient();
+      const result = await bqFetchBookingRows(bigquery);
       const rows = result.data.values || [];
       const hasHeader = rows[0]?.[0] === 'Booking ID';
       const startIndex = hasHeader ? 1 : 0;
       const rowIndex = rows.findIndex((row, index) => index >= startIndex && String(row[0] || '') === bookingId);
-      if (rowIndex < 0) return res.status(404).json({ message: 'Booking was not found in Google Sheets' });
+      if (rowIndex < 0) return res.status(404).json({ message: 'Booking was not found' });
 
       const row = rows[rowIndex];
       const calendarId = row[15] || PRIMARY_CALENDAR_ID;
@@ -5166,7 +5261,7 @@ export default async function handler(req, res) {
           console.error('Delete booking calendar cleanup error:', calendarError);
         }
       }
-      await deleteSheetRows(sheets, 'Sheet1', [rowIndex + 1]);
+      await bqDeleteBookingRow(bigquery, bookingId);
       return res.status(200).json({
         deleted: true,
         bookingId,
@@ -5205,13 +5300,8 @@ export default async function handler(req, res) {
       if (!bookingId || bookingId.length > 100 || !email) {
         return res.status(400).json({ message: 'A booking reference and the email used at booking are required.' });
       }
-      if (!process.env.GOOGLE_SPREADSHEET_ID) {
-        throw new Error('GOOGLE_SPREADSHEET_ID is not configured');
-      }
-      const result = await sheets.spreadsheets.values.get({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'Sheet1!A:Z',
-      });
+      const bigquery = getBigQueryClient();
+      const result = await bqFetchBookingRows(bigquery);
       const rows = result.data.values || [];
       const hasHeader = rows[0]?.[0] === 'Booking ID';
       const startIndex = hasHeader ? 1 : 0;
@@ -5266,12 +5356,7 @@ export default async function handler(req, res) {
         statusNotes = `Cancelled ${new Date().toISOString()} — no payment was on file.`;
       }
 
-      await sheets.spreadsheets.values.update({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: `Sheet1!Y${rowIndex + 1}:Z${rowIndex + 1}`,
-        valueInputOption: 'RAW',
-        requestBody: { values: [['Cancelled', statusNotes]] },
-      });
+      await bqUpdateBookingFields(bigquery, bookingId, { status: 'Cancelled', statusNotes });
 
       const calendarId = row[15] || PRIMARY_CALENDAR_ID;
       const calendarEventId = row[16] || '';
@@ -5328,13 +5413,8 @@ export default async function handler(req, res) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(newDate) || !/^\d{1,2}:\d{2}\s*(AM|PM)$/i.test(newTime)) {
         return res.status(400).json({ message: 'Choose a valid new date and time.' });
       }
-      if (!process.env.GOOGLE_SPREADSHEET_ID) {
-        throw new Error('GOOGLE_SPREADSHEET_ID is not configured');
-      }
-      const result = await sheets.spreadsheets.values.get({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'Sheet1!A:Z',
-      });
+      const bigquery = getBigQueryClient();
+      const result = await bqFetchBookingRows(bigquery);
       const rows = result.data.values || [];
       const hasHeader = rows[0]?.[0] === 'Booking ID';
       const startIndex = hasHeader ? 1 : 0;
@@ -5379,18 +5459,7 @@ export default async function handler(req, res) {
         }
       }
       const statusNotes = `Rescheduled ${new Date().toISOString()} from ${originalDate} ${originalTime} to ${newDate} ${newTime} — no refund, per cancellation/reschedule policy.`;
-      await sheets.spreadsheets.values.update({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: `Sheet1!H${rowIndex + 1}:I${rowIndex + 1}`,
-        valueInputOption: 'RAW',
-        requestBody: { values: [[newDate, newTime]] },
-      });
-      await sheets.spreadsheets.values.update({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: `Sheet1!Z${rowIndex + 1}`,
-        valueInputOption: 'RAW',
-        requestBody: { values: [[statusNotes]] },
-      });
+      await bqUpdateBookingFields(bigquery, bookingId, { date: newDate, time: newTime, statusNotes });
 
       let emailSent = false;
       try {
@@ -5585,14 +5654,7 @@ export default async function handler(req, res) {
       payload.membershipDiscountAmount,
     ];
 
-    await sheets.spreadsheets.values.append({
-      spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-      range: 'Sheet1!A:X',
-      valueInputOption: 'USER_ENTERED',
-      requestBody: {
-        values: [rowValues],
-      },
-    });
+    await bqInsertBookingRow(getBigQueryClient(), rowValues);
 
     const hasLoyaltyEnrollmentRequest = payload.loyaltyOptIn === true || payload.platinumEnrollment === true;
     let loyaltyEnrollmentSaved = !hasLoyaltyEnrollmentRequest;

@@ -43,11 +43,53 @@ Configure these Vercel environment variables before using it:
   therapist sessions)
 - `THERAPIST_ACCOUNTS` (JSON array of therapist accounts with scrypt password
   hashes; see below)
+- `BIGQUERY_PROJECT_ID` (or `GOOGLE_CLOUD_PROJECT`; the Google Cloud project ID
+  that hosts the booking-records BigQuery dataset, e.g.
+  `my-thai-thai-booking-system`)
+- `BIGQUERY_DATASET` (optional; defaults to `booking_system`)
+- `BIGQUERY_BOOKINGS_TABLE` (optional; defaults to `bookings`)
+- `BIGQUERY_LOCATION` (optional; defaults to `US`)
 
 Share the Google Sheet with the service account email as an Editor. Enable the
 Google Sheets API and Google Calendar API in the Google Cloud project. The
 service account creates calendars named `<Therapist> - MY THAI THAI` and shares
 the primary calendar with `GOOGLE_PRIMARY_CALENDAR_ID`.
+
+## Booking records in BigQuery
+
+Booking records (customer name, service, therapist, date/time, payment,
+receipt, cancellation status, etc.) are stored in a typed **BigQuery** table
+rather than a Google Sheets tab. Every other data set used by this app
+(branches, services, therapists, loyalty program, patient history, Square
+payments, marketing contacts) remains in Google Sheets and is unaffected by
+this section.
+
+Enable the **BigQuery API** in the same Google Cloud project used for Sheets
+and Calendar, and grant the existing service account
+(`GOOGLE_SERVICE_ACCOUNT_EMAIL`) these IAM roles on that project:
+
+- `BigQuery Data Editor` (create/read/write the dataset and table)
+- `BigQuery Job User` (run queries)
+
+Set `BIGQUERY_PROJECT_ID` (or reuse `GOOGLE_CLOUD_PROJECT` if already set) to
+the Google Cloud project ID, e.g. `my-thai-thai-booking-system`. The dataset
+(`BIGQUERY_DATASET`, default `booking_system`) and table
+(`BIGQUERY_BOOKINGS_TABLE`, default `bookings`) are **created automatically**
+on first use — no manual DDL is required. If your project is on **BigQuery
+Sandbox** (no billing account linked), link a billing account first: Sandbox
+datasets/tables auto-expire after 60 days of inactivity and have tighter
+query/DML quotas.
+
+Note: `date`, `time`, `created_at`, and `receipt_issued_at` are stored as plain
+`STRING` columns (not BigQuery `DATE`/`TIMESTAMP` types) on purpose, so the
+existing date/time parsing and formatting code in `api/booking.js` keeps
+working unchanged without adapting to the BigQuery client library's temporal
+wrapper objects.
+
+This migration only affects **new** bookings going forward — no historical
+data was migrated. Older bookings remain archived in the original `Sheet1` tab
+of the Google Sheet for reference, but the app no longer reads from or writes
+to that tab.
 
 Booking confirmation emails are sent through Gmail API using OAuth authorization
 granted by the sender mailbox owner. This works with a regular Gmail mailbox;
@@ -77,9 +119,8 @@ Sheets and Calendar booking writes can still succeed while confirmation email
 delivery fails. The Calendar event does not invite attendees.
 
 The Admin Dashboard schedule loads live booking rows from `GET /api/booking`,
-which reads `Sheet1!A:R`. Existing sheets may include the header row from the
-schema, but the API also works when bookings are already present without a
-header row.
+which reads from the BigQuery `bookings` table (see "Booking records in
+BigQuery" below).
 
 The admin dashboard includes a live Google Calendar tab with date and branch
 filters, a native embedded Google Calendar view for
