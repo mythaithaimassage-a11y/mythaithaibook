@@ -397,6 +397,15 @@ in one action and emails each removed employee, copying the company contact.
 Removal does not alter past receipts or ledger history; it only ends the
 member's active benefits and points/hours balance going forward.
 
+The **Recent rewards activity** panel has a **Reset ledger** button for manually
+clearing recorded loyalty history. Choose **One member** and pick them from the
+list to delete just their ledger entries, or **Entire ledger** to delete every
+entry for every member. Wiping the whole ledger requires typing `CLEAR LEDGER`
+to confirm. Clearing deletes rows from `LoyaltyLedger` only: point balances and
+Platinum prepaid hours reset to zero, but members keep their enrolment,
+membership plan and paid-through date, and past receipts are unaffected.
+Because it is a permanent delete, there is no undo.
+
 Each Platinum company also gets a self-service **Company portal**: a private,
 token-based link (no login required) that the registered company contact can
 use to see how many employees are enrolled, each employee's role (primary

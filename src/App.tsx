@@ -3611,6 +3611,11 @@ function AdminPortal({
   const [memberPendingRemoval, setMemberPendingRemoval] = useState(null);
   const [companyPendingRemoval, setCompanyPendingRemoval] = useState('');
   const [isRemovingLoyaltyEntry, setIsRemovingLoyaltyEntry] = useState(false);
+  const [isLedgerResetOpen, setIsLedgerResetOpen] = useState(false);
+  const [ledgerResetScope, setLedgerResetScope] = useState('member');
+  const [ledgerResetEmail, setLedgerResetEmail] = useState('');
+  const [ledgerResetConfirm, setLedgerResetConfirm] = useState('');
+  const [isClearingLedger, setIsClearingLedger] = useState(false);
   const [copyingPortalFor, setCopyingPortalFor] = useState('');
   const [selectedLoyaltyMember, setSelectedLoyaltyMember] = useState(null);
   const [loyaltyRedeemPoints, setLoyaltyRedeemPoints] = useState('');
@@ -4018,6 +4023,45 @@ function AdminPortal({
       setLoyaltyError(error.message || 'Unable to remove this member.');
     } finally {
       setIsRemovingLoyaltyEntry(false);
+    }
+  };
+
+  const openLedgerReset = () => {
+    setLedgerResetScope('member');
+    setLedgerResetEmail('');
+    setLedgerResetConfirm('');
+    setLoyaltyError('');
+    setLoyaltyNotice('');
+    setIsLedgerResetOpen(true);
+  };
+
+  const clearLoyaltyLedger = async () => {
+    setIsClearingLedger(true);
+    setLoyaltyError('');
+    setLoyaltyNotice('');
+    try {
+      const response = await fetch('/api/booking?view=loyalty-clear-ledger', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scope: ledgerResetScope,
+          email: ledgerResetScope === 'member' ? ledgerResetEmail : '',
+          confirm: ledgerResetScope === 'all' ? ledgerResetConfirm : '',
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Unable to clear the loyalty ledger.');
+      setLoyaltyNotice(ledgerResetScope === 'all'
+        ? `Cleared all ${data.clearedCount} loyalty ledger entries. Every member's points and prepaid hours are now reset to zero.`
+        : `Cleared ${data.clearedCount} ledger entr${data.clearedCount === 1 ? 'y' : 'ies'} for ${data.email}. Their points and prepaid hours are now reset to zero.`);
+      setIsLedgerResetOpen(false);
+      setLedgerResetEmail('');
+      setLedgerResetConfirm('');
+      await loadLoyaltyDashboard();
+    } catch (error) {
+      setLoyaltyError(error.message || 'Unable to clear the loyalty ledger.');
+    } finally {
+      setIsClearingLedger(false);
     }
   };
 
@@ -5980,7 +6024,10 @@ function AdminPortal({
               </section>
 
               <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                <h3 className="text-base font-semibold text-slate-900">Recent rewards activity</h3>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="text-base font-semibold text-slate-900">Recent rewards activity</h3>
+                  <button type="button" onClick={openLedgerReset} className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-50"><Trash2 className="h-3.5 w-3.5" />Reset ledger</button>
+                </div>
                 <div className="mt-3 divide-y divide-slate-100">
                   {recentLoyaltyTransactions.length ? (
                     recentLoyaltyTransactions.map((transaction) => (
@@ -6054,6 +6101,39 @@ function AdminPortal({
                 </div>
                 <p className="rounded-xl bg-rose-50 p-3 text-xs leading-5 text-rose-950">This immediately removes the member from the loyalty program. Their points/hours balance and membership benefits will no longer apply. This does not affect past receipts. They will be emailed a notice.</p>
                 <div className="flex justify-end gap-2 pt-1"><button type="button" onClick={() => setMemberPendingRemoval(null)} className="rounded-lg border border-slate-200 px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">Cancel</button><button type="button" onClick={removeLoyaltyMember} disabled={isRemovingLoyaltyEntry} className="rounded-lg bg-rose-800 px-4 py-2.5 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50">{isRemovingLoyaltyEntry ? 'Removing…' : 'Remove member'}</button></div>
+              </div>
+            </div>
+          )}
+          {isLedgerResetOpen && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setIsLedgerResetOpen(false); }}>
+              <div className="w-full max-w-md space-y-4 rounded-2xl bg-white p-5 shadow-2xl sm:p-6" role="dialog" aria-modal="true" aria-labelledby="reset-ledger-title">
+                <div className="flex items-start justify-between gap-3">
+                  <div><p className="text-[10px] font-bold uppercase tracking-wider text-rose-700">Manual reset</p><h3 id="reset-ledger-title" className="mt-1 text-lg font-bold text-slate-900">Clear loyalty ledger</h3><p className="mt-1 text-xs text-slate-500">Deletes recorded points, prepaid hours and redemptions.</p></div>
+                  <button type="button" onClick={() => setIsLedgerResetOpen(false)} aria-label="Close reset ledger dialog" className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700"><X className="h-4 w-4" /></button>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  {[['member', 'One member'], ['all', 'Entire ledger']].map(([value, label]) => (
+                    <button key={value} type="button" onClick={() => { setLedgerResetScope(value); setLedgerResetConfirm(''); }} className={`rounded-lg border px-3 py-2.5 text-xs font-semibold ${ledgerResetScope === value ? 'border-rose-700 bg-rose-50 text-rose-900' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>{label}</button>
+                  ))}
+                </div>
+                {ledgerResetScope === 'member' ? (
+                  <label className="block text-xs font-semibold text-slate-600">Member
+                    <select value={ledgerResetEmail} onChange={(event) => setLedgerResetEmail(event.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900">
+                      <option value="">Select a member…</option>
+                      {(loyaltyDashboard?.members || []).map((member) => (
+                        <option key={member.email} value={member.email}>{member.name || member.email} · {member.email}</option>
+                      ))}
+                    </select>
+                  </label>
+                ) : (
+                  <label className="block text-xs font-semibold text-slate-600">Type CLEAR LEDGER to confirm
+                    <input type="text" value={ledgerResetConfirm} onChange={(event) => setLedgerResetConfirm(event.target.value)} placeholder="CLEAR LEDGER" className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900" />
+                  </label>
+                )}
+                <p className="rounded-xl bg-rose-50 p-3 text-xs leading-5 text-rose-950">{ledgerResetScope === 'all'
+                  ? 'This permanently deletes every ledger entry for every member. All point balances and Platinum prepaid hours reset to zero. Members themselves are not removed, and past receipts are unaffected. This cannot be undone.'
+                  : 'This permanently deletes every ledger entry for the selected member. Their point balance and Platinum prepaid hours reset to zero. Their membership stays active and past receipts are unaffected. This cannot be undone.'}</p>
+                <div className="flex justify-end gap-2 pt-1"><button type="button" onClick={() => setIsLedgerResetOpen(false)} className="rounded-lg border border-slate-200 px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">Cancel</button><button type="button" onClick={clearLoyaltyLedger} disabled={isClearingLedger || (ledgerResetScope === 'member' ? !ledgerResetEmail : ledgerResetConfirm.trim().toUpperCase() !== 'CLEAR LEDGER')} className="rounded-lg bg-rose-800 px-4 py-2.5 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50">{isClearingLedger ? 'Clearing…' : ledgerResetScope === 'all' ? 'Clear entire ledger' : 'Clear member ledger'}</button></div>
               </div>
             </div>
           )}

@@ -638,6 +638,8 @@ const LOYALTY_TABLE_NAMES = {
   LoyaltyLedger: process.env.BIGQUERY_LOYALTY_LEDGER_TABLE || 'loyalty_ledger',
   LoyaltyCompanies: process.env.BIGQUERY_LOYALTY_COMPANIES_TABLE || 'loyalty_companies',
 };
+// Typed verbatim by the owner before the whole ledger can be wiped.
+const LOYALTY_LEDGER_RESET_PHRASE = 'CLEAR LEDGER';
 const LOYALTY_TABLE_COLUMNS = {
   LoyaltySettings: ['settings_json', 'updated_at'],
   LoyaltyMembers: [
@@ -3651,13 +3653,13 @@ export default async function handler(req, res) {
     }
     const ownerOnlyRequest =
       (req.method === 'GET' && ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'google-ads-report', 'loyalty-dashboard', 'google-reviews', 'unavailability', 'campaign-log', 'campaign-audience-options', 'review-request-audience'].includes(view)) ||
-      ['business-profile', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-link', 'unavailability-delete', 'review-request-send'].includes(view) ||
+      ['business-profile', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-clear-ledger', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-link', 'unavailability-delete', 'review-request-send'].includes(view) ||
       (req.method === 'POST' && ['branches', 'services', 'therapists', 'unavailability'].includes(view));
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
     if (ownerOnlyRequest && !getOwnerSession(req)) {
       return res.status(401).json({ message: 'Owner sign-in required' });
     }
-    if (['business-profile', 'branches', 'services', 'therapists', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-signup', 'company-portal-bulk-signup', 'company-portal-link', 'square-create-checkout', 'cancel-booking', 'reschedule-booking', 'unavailability', 'unavailability-delete', 'review-request-send'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
+    if (['business-profile', 'branches', 'services', 'therapists', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-clear-ledger', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-signup', 'company-portal-bulk-signup', 'company-portal-link', 'square-create-checkout', 'cancel-booking', 'reschedule-booking', 'unavailability', 'unavailability-delete', 'review-request-send'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
       return res.status(403).json({ message: 'Profile update origin is not allowed' });
     }
 
@@ -4457,6 +4459,39 @@ export default async function handler(req, res) {
         emailsSent,
         emailsFailed: matches.length - emailsSent,
       });
+    }
+
+    if (req.method === 'POST' && view === 'loyalty-clear-ledger') {
+      const scope = String(req.body?.scope || '').trim().toLowerCase();
+      if (scope !== 'member' && scope !== 'all') {
+        return res.status(400).json({ message: 'Choose whether to clear one member or the entire ledger.' });
+      }
+      const email = normalizeLoyaltyEmail(req.body?.email);
+      if (scope === 'member' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return res.status(400).json({ message: 'A valid member email is required to clear a single ledger.' });
+      }
+      // Wiping every entry is unrecoverable, so require the exact phrase the UI shows.
+      if (scope === 'all' && String(req.body?.confirm || '').trim().toUpperCase() !== LOYALTY_LEDGER_RESET_PHRASE) {
+        return res.status(400).json({ message: `Type ${LOYALTY_LEDGER_RESET_PHRASE} to confirm clearing the entire ledger.` });
+      }
+      await ensureLoyaltyTables();
+      const ledgerRows = (await bqLoyaltyValuesGet('LoyaltyLedger!A:J')).data.values || [];
+      const rowNumbers = [];
+      for (let index = 1; index < ledgerRows.length; index += 1) {
+        const row = ledgerRows[index] || [];
+        if (!row.some((cell) => String(cell || '').trim())) continue;
+        if (scope === 'member' && normalizeLoyaltyEmail(row[1]) !== email) continue;
+        rowNumbers.push(index + 1);
+      }
+      if (!rowNumbers.length) {
+        return res.status(404).json({
+          message: scope === 'member'
+            ? 'That member has no recorded ledger entries to clear.'
+            : 'The loyalty ledger is already empty.',
+        });
+      }
+      await bqLoyaltyDeleteRows('LoyaltyLedger', rowNumbers);
+      return res.status(200).json({ scope, email: scope === 'member' ? email : '', clearedCount: rowNumbers.length });
     }
 
     if (req.method === 'POST' && view === 'loyalty-topup') {
