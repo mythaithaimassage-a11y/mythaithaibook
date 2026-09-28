@@ -2304,7 +2304,7 @@ async function recordMarketingConsent(sheets, payload) {
 // asked repeatedly.
 const REVIEW_REQUEST_HEADERS = ['Email', 'Customer Name', 'Booking ID', 'Requested At'];
 const REVIEW_REQUEST_COOLDOWN_DAYS = 180;
-const REVIEW_REQUEST_LOOKBACK_DAYS = 365;
+const REVIEW_REQUEST_LOOKBACK_DAYS = 730;
 const REVIEW_REQUEST_MAX_RECIPIENTS = 50;
 
 async function ensureReviewRequestsSheet(sheets) {
@@ -2383,16 +2383,32 @@ async function collectReviewRequestCandidates(sheets, bigquery) {
     if (!previous || requestedAt > previous) lastRequestedAt.set(email, requestedAt);
   }
   const today = new Date();
-  const todayKey = today.toISOString().slice(0, 10);
-  const earliestKey = new Date(today.getTime() - REVIEW_REQUEST_LOOKBACK_DAYS * 86400000).toISOString().slice(0, 10);
   const cooldownCutoff = new Date(today.getTime() - REVIEW_REQUEST_COOLDOWN_DAYS * 86400000).toISOString();
+  const earliestVisit = new Date(today.getTime() - REVIEW_REQUEST_LOOKBACK_DAYS * 86400000);
+  const localDateParts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    timeZone: CALENDAR_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(today).map((part) => [part.type, part.value]));
+  const startOfClinicToday = new Date(Date.UTC(
+    Number(localDateParts.year), Number(localDateParts.month) - 1, Number(localDateParts.day), 12,
+  ));
+  const stats = { totalBookings: bookingRows.length, missingEmail: 0, notVisitedYet: 0, cancelled: 0, tooOld: 0 };
   const byEmail = new Map();
   for (const row of bookingRows) {
     const email = String(row[3] || '').trim().toLowerCase();
     const date = String(row[7] || '').trim();
-    if (!/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(email)) continue;
-    if (!date || date >= todayKey || date < earliestKey) continue;
-    if (String(row[24] || '').trim() === 'Cancelled') continue;
+    if (!/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(email)) { stats.missingEmail += 1; continue; }
+    if (String(row[24] || '').trim() === 'Cancelled') { stats.cancelled += 1; continue; }
+    const visitedAt = parseBookingDate(date);
+    if (!visitedAt) { stats.notVisitedYet += 1; continue; }
+    // Prefer the clinic-timezone appointment-end check so a session that
+    // finished earlier today already counts. Legacy/migrated rows with a
+    // missing or unparseable time fall back to "the date is before today".
+    const visited = isAppointmentCompleteByTime(date, row[8], row[12]) || visitedAt < startOfClinicToday;
+    if (!visited) { stats.notVisitedYet += 1; continue; }
+    if (visitedAt < earliestVisit) { stats.tooOld += 1; continue; }
     const existing = byEmail.get(email);
     if (existing && existing.visitDate >= date) continue;
     byEmail.set(email, {
@@ -2404,7 +2420,7 @@ async function collectReviewRequestCandidates(sheets, bigquery) {
       visitDate: date,
     });
   }
-  return [...byEmail.values()]
+  const candidates = [...byEmail.values()]
     .map((candidate) => {
       const requestedAt = lastRequestedAt.get(candidate.email) || '';
       return {
@@ -2417,6 +2433,7 @@ async function collectReviewRequestCandidates(sheets, bigquery) {
       };
     })
     .sort((a, b) => (a.visitDate < b.visitDate ? 1 : a.visitDate > b.visitDate ? -1 : 0));
+  return { candidates, stats };
 }
 
 async function sendReviewRequestEmail(gmail, { candidate, reviewUrl, businessProfile }) {
@@ -3687,7 +3704,7 @@ export default async function handler(req, res) {
         return res.status(200).json({ enabled: false, candidates: [] });
       }
       const bigquery = getBigQueryClient();
-      const [candidates, businessProfile] = await Promise.all([
+      const [{ candidates, stats }, businessProfile] = await Promise.all([
         collectReviewRequestCandidates(sheets, bigquery),
         getBusinessProfile(sheets),
       ]);
@@ -3695,6 +3712,7 @@ export default async function handler(req, res) {
       return res.status(200).json({
         enabled: true,
         candidates,
+        stats,
         cooldownDays: REVIEW_REQUEST_COOLDOWN_DAYS,
         lookbackDays: REVIEW_REQUEST_LOOKBACK_DAYS,
         maxRecipients: REVIEW_REQUEST_MAX_RECIPIENTS,
@@ -3719,7 +3737,7 @@ export default async function handler(req, res) {
         return res.status(409).json({ message: `Review requests are limited to ${REVIEW_REQUEST_MAX_RECIPIENTS} customers at a time.` });
       }
       const bigquery = getBigQueryClient();
-      const [candidates, businessProfile, reviews] = await Promise.all([
+      const [{ candidates }, businessProfile, reviews] = await Promise.all([
         collectReviewRequestCandidates(sheets, bigquery),
         getBusinessProfile(sheets),
         fetchGoogleReviews(),

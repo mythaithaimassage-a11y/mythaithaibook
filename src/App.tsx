@@ -6319,7 +6319,19 @@ function AdminPortal({
                   {isLoadingReviewRequests && <p className="py-8 text-center text-sm text-slate-500">Finding customers who have visited…</p>}
 
                   {!isLoadingReviewRequests && reviewRequestData && !reviewRequestData.candidates?.length && (
-                    <p className="py-8 text-center text-sm text-slate-500">No past visits with an email address were found yet.</p>
+                    <div className="py-8 text-center text-sm text-slate-500">
+                      <p className="font-semibold text-slate-700">No completed visits to ask yet.</p>
+                      {reviewRequestData.stats && (
+                        <p className="mx-auto mt-2 max-w-sm text-xs leading-5">
+                          Checked {reviewRequestData.stats.totalBookings} booking{reviewRequestData.stats.totalBookings === 1 ? '' : 's'}:
+                          {' '}{reviewRequestData.stats.notVisitedYet} not finished yet,
+                          {' '}{reviewRequestData.stats.cancelled} cancelled,
+                          {' '}{reviewRequestData.stats.missingEmail} without a valid email,
+                          {' '}{reviewRequestData.stats.tooOld} older than {reviewRequestData.lookbackDays} days.
+                          A customer appears here once their appointment end time has passed.
+                        </p>
+                      )}
+                    </div>
                   )}
 
                   {!isLoadingReviewRequests && !!reviewRequestData?.candidates?.length && (

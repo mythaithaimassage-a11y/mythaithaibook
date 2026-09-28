@@ -281,11 +281,16 @@ most recent reviews, along with a quick link to view all reviews on Google.
 ### Asking past customers for a review
 
 The **Ask for a review** button in that section opens a picker listing every
-customer who has actually attended an appointment (a past-dated booking that
-was not cancelled) within the last 365 days, deduplicated by email and showing
+customer who has actually attended an appointment — a booking whose end time
+has already passed in the clinic's timezone and that was not cancelled, within
+the last 730 days — deduplicated by email and showing
 their most recent visit. Selecting customers and pressing **Send** emails each
 one a short message with a button linking to your Google review form.
 
+- An appointment counts as attended as soon as its end time passes, so a
+  customer who was treated earlier the same day can be asked immediately.
+- Rows with a missing or unrecognised time fall back to counting as attended
+  once their date is before today, so migrated historical bookings still work.
 - Customers who have unsubscribed from marketing emails are listed but cannot
   be selected.
 - Every send is logged to a `ReviewRequests` tab in the Google Sheet (created
