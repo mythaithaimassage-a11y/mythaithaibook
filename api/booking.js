@@ -2298,6 +2298,175 @@ async function recordMarketingConsent(sheets, payload) {
   });
 }
 
+// --- Google review requests -----------------------------------------------
+// Owners can email past visitors a link to the clinic's Google review form.
+// Every send is logged in a ReviewRequests tab so the same customer is not
+// asked repeatedly.
+const REVIEW_REQUEST_HEADERS = ['Email', 'Customer Name', 'Booking ID', 'Requested At'];
+const REVIEW_REQUEST_COOLDOWN_DAYS = 180;
+const REVIEW_REQUEST_LOOKBACK_DAYS = 365;
+const REVIEW_REQUEST_MAX_RECIPIENTS = 50;
+
+async function ensureReviewRequestsSheet(sheets) {
+  const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
+  let spreadsheet = await sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets.properties' });
+  let exists = (spreadsheet.data.sheets || []).some((sheet) => sheet.properties?.title === 'ReviewRequests');
+  if (!exists) {
+    try {
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: { requests: [{ addSheet: { properties: { title: 'ReviewRequests' } } }] },
+      });
+    } catch (error) {
+      spreadsheet = await sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets.properties' });
+      exists = (spreadsheet.data.sheets || []).some((sheet) => sheet.properties?.title === 'ReviewRequests');
+      if (!exists) throw error;
+    }
+  }
+  const header = await sheets.spreadsheets.values.get({ spreadsheetId, range: 'ReviewRequests!A1:D1' });
+  const values = header.data.values?.[0] || [];
+  if (!values.length) {
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: 'ReviewRequests!A1:D1',
+      valueInputOption: 'RAW',
+      requestBody: { values: [REVIEW_REQUEST_HEADERS] },
+    });
+  } else if (REVIEW_REQUEST_HEADERS.some((field, index) => values[index] !== field)) {
+    throw new Error('ReviewRequests sheet has an unexpected header. Restore the Email, Customer Name, Booking ID and Requested At columns before retrying.');
+  }
+}
+
+async function getReviewRequestRows(sheets) {
+  await ensureReviewRequestsSheet(sheets);
+  const result = await sheets.spreadsheets.values.get({
+    spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+    range: 'ReviewRequests!A:D',
+  });
+  return (result.data.values || []).slice(1);
+}
+
+async function recordReviewRequests(sheets, entries) {
+  if (!entries.length) return;
+  await ensureReviewRequestsSheet(sheets);
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+    range: 'ReviewRequests!A:D',
+    valueInputOption: 'RAW',
+    requestBody: {
+      values: entries.map((entry) => [entry.email, entry.name || '', entry.bookingId || '', entry.requestedAt]),
+    },
+  });
+}
+
+// One entry per customer who has actually attended an appointment (past date,
+// not cancelled), carrying their most recent visit so the email can reference it.
+async function collectReviewRequestCandidates(sheets, bigquery) {
+  const [bookingResult, requestRows, contactRows] = await Promise.all([
+    bqFetchBookingRows(bigquery),
+    getReviewRequestRows(sheets),
+    getMarketingContactRows(sheets),
+  ]);
+  const allRows = bookingResult.data.values || [];
+  const bookingRows = allRows[0]?.[0] === 'Booking ID' ? allRows.slice(1) : allRows;
+  const unsubscribed = new Set(
+    contactRows
+      .filter((row) => String(row[2] || '').trim().toLowerCase() === 'unsubscribed')
+      .map((row) => String(row[0] || '').trim().toLowerCase()),
+  );
+  const lastRequestedAt = new Map();
+  for (const row of requestRows) {
+    const email = String(row[0] || '').trim().toLowerCase();
+    const requestedAt = String(row[3] || '').trim();
+    if (!email || !requestedAt) continue;
+    const previous = lastRequestedAt.get(email);
+    if (!previous || requestedAt > previous) lastRequestedAt.set(email, requestedAt);
+  }
+  const today = new Date();
+  const todayKey = today.toISOString().slice(0, 10);
+  const earliestKey = new Date(today.getTime() - REVIEW_REQUEST_LOOKBACK_DAYS * 86400000).toISOString().slice(0, 10);
+  const cooldownCutoff = new Date(today.getTime() - REVIEW_REQUEST_COOLDOWN_DAYS * 86400000).toISOString();
+  const byEmail = new Map();
+  for (const row of bookingRows) {
+    const email = String(row[3] || '').trim().toLowerCase();
+    const date = String(row[7] || '').trim();
+    if (!/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(email)) continue;
+    if (!date || date >= todayKey || date < earliestKey) continue;
+    if (String(row[24] || '').trim() === 'Cancelled') continue;
+    const existing = byEmail.get(email);
+    if (existing && existing.visitDate >= date) continue;
+    byEmail.set(email, {
+      email,
+      name: String(row[1] || '').trim(),
+      bookingId: String(row[0] || '').trim(),
+      serviceName: String(row[5] || '').trim(),
+      branchName: String(row[4] || '').trim(),
+      visitDate: date,
+    });
+  }
+  return [...byEmail.values()]
+    .map((candidate) => {
+      const requestedAt = lastRequestedAt.get(candidate.email) || '';
+      return {
+        ...candidate,
+        lastRequestedAt: requestedAt,
+        unsubscribed: unsubscribed.has(candidate.email),
+        // Pre-select only customers who have never been asked, or who were
+        // asked long enough ago that a fresh nudge is reasonable.
+        eligible: !unsubscribed.has(candidate.email) && (!requestedAt || requestedAt < cooldownCutoff),
+      };
+    })
+    .sort((a, b) => (a.visitDate < b.visitDate ? 1 : a.visitDate > b.visitDate ? -1 : 0));
+}
+
+async function sendReviewRequestEmail(gmail, { candidate, reviewUrl, businessProfile }) {
+  const recipient = String(candidate.email || '').trim().toLowerCase();
+  if (!/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(recipient)) {
+    throw new Error('A valid customer email is required to send a review request.');
+  }
+  const safeBusinessName = String(businessProfile.businessName || 'MY THAI THAI').replace(/[\r\n"]/g, '');
+  const greeting = candidate.name ? `Hello ${candidate.name},` : 'Hello,';
+  const visitLine = candidate.serviceName
+    ? `We hope you enjoyed your ${candidate.serviceName}${candidate.visitDate ? ` on ${candidate.visitDate}` : ''}.`
+    : 'We hope you enjoyed your recent visit.';
+  const subject = `How was your visit to ${safeBusinessName}?`;
+  const text = [
+    greeting,
+    '',
+    visitLine,
+    '',
+    'Would you take a moment to leave us a Google review? It only takes a minute and helps other people find us.',
+    '',
+    reviewUrl,
+    '',
+    'Thank you,',
+    safeBusinessName,
+  ].join('\n');
+  const html = `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>${escapeHtml(subject)}</title></head><body style="margin:0;background:#f3f5f4;padding:28px 12px;font-family:Arial,Helvetica,sans-serif;color:#18251f"><div style="display:none;max-height:0;overflow:hidden">${escapeHtml(visitLine)}</div><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td align="center"><table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width:600px;width:100%;background:#fff;border:1px solid #e2e9e5;border-radius:14px;overflow:hidden"><tr><td style="padding:26px 32px;background:#073d32;color:#fff"><p style="margin:0 0 8px;font-size:12px;letter-spacing:2px">${escapeHtml(safeBusinessName).toUpperCase()}</p><h1 style="margin:0;font-size:24px">How was your visit?</h1></td></tr><tr><td style="padding:28px 32px"><p style="margin:0 0 14px">${escapeHtml(greeting)}</p><p style="margin:0 0 18px;line-height:1.6">${escapeHtml(visitLine)}</p><p style="margin:0 0 24px;line-height:1.6">Would you take a moment to leave us a Google review? It only takes a minute and helps other people find us.</p><p style="margin:0 0 24px"><a href="${escapeHtml(reviewUrl)}" style="display:inline-block;padding:13px 24px;background:#087765;color:#fff;border-radius:9px;text-decoration:none;font-weight:bold">Leave a Google review</a></p><p style="margin:0;color:#5f6d66;font-size:13px;line-height:1.5">If the button does not work, paste this link into your browser:<br><a href="${escapeHtml(reviewUrl)}" style="color:#087765">${escapeHtml(reviewUrl)}</a></p></td></tr><tr><td style="padding:16px 32px;background:#f8faf9;color:#718078;font-size:12px">${escapeHtml(safeBusinessName)}${businessProfile.address ? ` · ${escapeHtml(businessProfile.address)}` : ''}<br>${escapeHtml(businessProfile.phone || '')}${businessProfile.phone && businessProfile.email ? ' · ' : ''}${escapeHtml(businessProfile.email || '')}</td></tr></table></td></tr></table></body></html>`;
+  const boundary = `review_${crypto.randomBytes(12).toString('hex')}`;
+  const encode = (value) => Buffer.from(value).toString('base64').match(/.{1,76}/g).join('\r\n');
+  const raw = [
+    `From: "${safeBusinessName}" <${GOOGLE_GMAIL_SENDER_EMAIL}>`,
+    `To: ${recipient}`,
+    `Subject: =?UTF-8?B?${Buffer.from(subject).toString('base64')}?=`,
+    'MIME-Version: 1.0',
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    '',
+    `--${boundary}`,
+    'Content-Type: text/plain; charset=UTF-8',
+    'Content-Transfer-Encoding: base64',
+    '',
+    encode(text),
+    `--${boundary}`,
+    'Content-Type: text/html; charset=UTF-8',
+    'Content-Transfer-Encoding: base64',
+    '',
+    encode(html),
+    `--${boundary}--`,
+  ].join('\r\n');
+  await gmail.users.messages.send({ userId: 'me', requestBody: { raw: Buffer.from(raw).toString('base64url') } });
+}
+
 const WEEKDAYS = [
   ['sunday', 0], ['monday', 1], ['tuesday', 2], ['wednesday', 3],
   ['thursday', 4], ['friday', 5], ['saturday', 6],
@@ -3459,19 +3628,19 @@ export default async function handler(req, res) {
     }
 
     const view = String(req.query?.view || '');
-    const validGetViews = ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'business-name', 'square-config', 'google-reviews', 'branches', 'services', 'therapists', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal', 'find-booking', 'availability', 'unavailability', 'campaign-log', 'campaign-audience-options'];
+    const validGetViews = ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'business-name', 'square-config', 'google-reviews', 'branches', 'services', 'therapists', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal', 'find-booking', 'availability', 'unavailability', 'campaign-log', 'campaign-audience-options', 'review-request-audience'];
     if (req.method === 'GET' && !validGetViews.includes(view)) {
       return res.status(404).json({ message: 'Unknown booking view' });
     }
     const ownerOnlyRequest =
-      (req.method === 'GET' && ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'google-ads-report', 'loyalty-dashboard', 'google-reviews', 'unavailability', 'campaign-log', 'campaign-audience-options'].includes(view)) ||
-      ['business-profile', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-link', 'unavailability-delete'].includes(view) ||
+      (req.method === 'GET' && ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'google-ads-report', 'loyalty-dashboard', 'google-reviews', 'unavailability', 'campaign-log', 'campaign-audience-options', 'review-request-audience'].includes(view)) ||
+      ['business-profile', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-link', 'unavailability-delete', 'review-request-send'].includes(view) ||
       (req.method === 'POST' && ['branches', 'services', 'therapists', 'unavailability'].includes(view));
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
     if (ownerOnlyRequest && !getOwnerSession(req)) {
       return res.status(401).json({ message: 'Owner sign-in required' });
     }
-    if (['business-profile', 'branches', 'services', 'therapists', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-signup', 'company-portal-bulk-signup', 'company-portal-link', 'square-create-checkout', 'cancel-booking', 'reschedule-booking', 'unavailability', 'unavailability-delete'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
+    if (['business-profile', 'branches', 'services', 'therapists', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-signup', 'company-portal-bulk-signup', 'company-portal-link', 'square-create-checkout', 'cancel-booking', 'reschedule-booking', 'unavailability', 'unavailability-delete', 'review-request-send'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
       return res.status(403).json({ message: 'Profile update origin is not allowed' });
     }
 
@@ -3510,6 +3679,79 @@ export default async function handler(req, res) {
       }
       const reviews = await fetchGoogleReviews();
       return res.status(200).json({ enabled: true, ...reviews });
+    }
+
+    if (req.method === 'GET' && view === 'review-request-audience') {
+      res.setHeader('Cache-Control', 'no-store');
+      if (!isGoogleReviewsConfigured()) {
+        return res.status(200).json({ enabled: false, candidates: [] });
+      }
+      const bigquery = getBigQueryClient();
+      const [candidates, businessProfile] = await Promise.all([
+        collectReviewRequestCandidates(sheets, bigquery),
+        getBusinessProfile(sheets),
+      ]);
+      const sendBlockReason = getCampaignSendBlockReason(businessProfile);
+      return res.status(200).json({
+        enabled: true,
+        candidates,
+        cooldownDays: REVIEW_REQUEST_COOLDOWN_DAYS,
+        lookbackDays: REVIEW_REQUEST_LOOKBACK_DAYS,
+        maxRecipients: REVIEW_REQUEST_MAX_RECIPIENTS,
+        senderEmail: MARKETING_SENDER_EMAIL,
+        sendReady: !sendBlockReason,
+        sendBlockReason,
+      });
+    }
+
+    if (req.method === 'POST' && view === 'review-request-send') {
+      if (!isGoogleReviewsConfigured()) {
+        return res.status(409).json({ message: 'Connect Google Reviews before sending review requests.' });
+      }
+      const requested = Array.isArray(req.body?.emails) ? req.body.emails : [];
+      const selected = new Set(
+        requested.map((value) => String(value || '').trim().toLowerCase()).filter(Boolean),
+      );
+      if (!selected.size) {
+        return res.status(400).json({ message: 'Select at least one customer to ask for a review.' });
+      }
+      if (selected.size > REVIEW_REQUEST_MAX_RECIPIENTS) {
+        return res.status(409).json({ message: `Review requests are limited to ${REVIEW_REQUEST_MAX_RECIPIENTS} customers at a time.` });
+      }
+      const bigquery = getBigQueryClient();
+      const [candidates, businessProfile, reviews] = await Promise.all([
+        collectReviewRequestCandidates(sheets, bigquery),
+        getBusinessProfile(sheets),
+        fetchGoogleReviews(),
+      ]);
+      const sendBlockReason = getCampaignSendBlockReason(businessProfile);
+      if (sendBlockReason) return res.status(409).json({ message: sendBlockReason });
+      // Only addresses that are still valid past visitors and not unsubscribed
+      // may be emailed, regardless of what the client submitted.
+      const recipients = candidates.filter((candidate) => selected.has(candidate.email) && !candidate.unsubscribed);
+      if (!recipients.length) {
+        return res.status(409).json({ message: 'None of the selected customers can be emailed right now. Refresh the list and try again.' });
+      }
+      const gmail = createGmailApi();
+      const requestedAt = new Date().toISOString();
+      const results = { sent: 0, failed: 0 };
+      const logged = [];
+      for (const candidate of recipients) {
+        try {
+          await sendReviewRequestEmail(gmail, { candidate, reviewUrl: reviews.reviewUrl, businessProfile });
+          results.sent += 1;
+          logged.push({ email: candidate.email, name: candidate.name, bookingId: candidate.bookingId, requestedAt });
+        } catch (error) {
+          results.failed += 1;
+          console.error('Review request delivery failed:', error.message || error);
+        }
+      }
+      try {
+        await recordReviewRequests(sheets, logged);
+      } catch (error) {
+        console.error('Review request log write failed:', error.message || error);
+      }
+      return res.status(200).json({ ...results, skipped: selected.size - recipients.length });
     }
 
     if (req.method === 'GET' && view === 'branches') {

@@ -3559,6 +3559,13 @@ function AdminPortal({
   const [googleReviews, setGoogleReviews] = useState(null);
   const [isLoadingGoogleReviews, setIsLoadingGoogleReviews] = useState(false);
   const [googleReviewsError, setGoogleReviewsError] = useState('');
+  const [reviewRequestOpen, setReviewRequestOpen] = useState(false);
+  const [reviewRequestData, setReviewRequestData] = useState(null);
+  const [reviewRequestSelected, setReviewRequestSelected] = useState([]);
+  const [isLoadingReviewRequests, setIsLoadingReviewRequests] = useState(false);
+  const [isSendingReviewRequests, setIsSendingReviewRequests] = useState(false);
+  const [reviewRequestError, setReviewRequestError] = useState('');
+  const [reviewRequestResult, setReviewRequestResult] = useState('');
   const [googleAdsStartDate, setGoogleAdsStartDate] = useState(() => {
     const date = new Date();
     date.setDate(date.getDate() - 29);
@@ -3734,6 +3741,59 @@ function AdminPortal({
   useEffect(() => {
     if (activeTab === 'reviews') loadGoogleReviews();
   }, [activeTab]);
+
+  const loadReviewRequests = async () => {
+    setIsLoadingReviewRequests(true);
+    setReviewRequestError('');
+    setReviewRequestResult('');
+    try {
+      const response = await fetch('/api/booking?view=review-request-audience');
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+      setReviewRequestData(data);
+      setReviewRequestSelected((data.candidates || []).filter((c) => c.eligible).map((c) => c.email));
+    } catch (error) {
+      setReviewRequestError(error.message || 'Unable to load customers who have visited.');
+    } finally {
+      setIsLoadingReviewRequests(false);
+    }
+  };
+
+  const openReviewRequests = () => {
+    setReviewRequestOpen(true);
+    loadReviewRequests();
+  };
+
+  const toggleReviewRequestRecipient = (email) => {
+    setReviewRequestSelected((current) =>
+      current.includes(email) ? current.filter((value) => value !== email) : [...current, email],
+    );
+  };
+
+  const sendReviewRequests = async () => {
+    if (!reviewRequestSelected.length) return;
+    setIsSendingReviewRequests(true);
+    setReviewRequestError('');
+    setReviewRequestResult('');
+    try {
+      const response = await fetch('/api/booking?view=review-request-send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ emails: reviewRequestSelected }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+      const summary = `Review request sent to ${data.sent} customer${data.sent === 1 ? '' : 's'}.` +
+        (data.failed ? ` ${data.failed} failed to send.` : '') +
+        (data.skipped ? ` ${data.skipped} skipped (unsubscribed or no longer eligible).` : '');
+      await loadReviewRequests();
+      setReviewRequestResult(summary);
+    } catch (error) {
+      setReviewRequestError(error.message || 'Unable to send review requests.');
+    } finally {
+      setIsSendingReviewRequests(false);
+    }
+  };
 
   const loadLoyaltyDashboard = async () => {
     setIsLoadingLoyalty(true);
@@ -6151,9 +6211,9 @@ function AdminPortal({
                     <RefreshCw className={`h-3.5 w-3.5 ${isLoadingGoogleReviews ? 'animate-spin' : ''}`} />Refresh
                   </button>
                   {googleReviews?.reviewUrl && (
-                    <a href={googleReviews.reviewUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-900 transition hover:bg-amber-50">
-                      Ask for a review <Globe className="h-3.5 w-3.5" />
-                    </a>
+                    <button type="button" onClick={openReviewRequests} className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-900 transition hover:bg-amber-50">
+                      Ask for a review <Mail className="h-3.5 w-3.5" />
+                    </button>
                   )}
                   {googleReviews?.mapsUrl && (
                     <a href={googleReviews.mapsUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-900 transition hover:bg-amber-50">
@@ -6232,8 +6292,88 @@ function AdminPortal({
                   </ul>
                 )}
               </section>
-              <p className="text-xs leading-5 text-slate-500">Reviews are read-only and refresh from Google every few minutes. Use "Ask for a review" to send customers straight to your Google review form.</p>
+              <p className="text-xs leading-5 text-slate-500">Reviews are read-only and refresh from Google every few minutes. Use "Ask for a review" to email past customers a link to your Google review form.</p>
             </>
+          )}
+
+          {reviewRequestOpen && (
+            <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/50 p-4 sm:p-8">
+              <div className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white shadow-xl">
+                <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+                  <div>
+                    <h3 className="text-base font-bold text-slate-950">Ask past customers for a review</h3>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Emails a Google review link to customers who have already attended an appointment
+                      {reviewRequestData?.lookbackDays ? ` in the last ${reviewRequestData.lookbackDays} days` : ''}.
+                      {reviewRequestData?.senderEmail ? ` Sent from ${reviewRequestData.senderEmail}.` : ''}
+                    </p>
+                  </div>
+                  <button type="button" onClick={() => setReviewRequestOpen(false)} className="rounded-lg p-1.5 text-slate-500 transition hover:bg-slate-100"><X className="h-4 w-4" /></button>
+                </div>
+
+                <div className="max-h-[55vh] overflow-y-auto px-5 py-4">
+                  {reviewRequestError && <div role="alert" className="mb-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">{reviewRequestError}</div>}
+                  {reviewRequestResult && <div className="mb-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">{reviewRequestResult}</div>}
+                  {reviewRequestData?.sendBlockReason && <div role="alert" className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">{reviewRequestData.sendBlockReason}</div>}
+
+                  {isLoadingReviewRequests && <p className="py-8 text-center text-sm text-slate-500">Finding customers who have visited…</p>}
+
+                  {!isLoadingReviewRequests && reviewRequestData && !reviewRequestData.candidates?.length && (
+                    <p className="py-8 text-center text-sm text-slate-500">No past visits with an email address were found yet.</p>
+                  )}
+
+                  {!isLoadingReviewRequests && !!reviewRequestData?.candidates?.length && (
+                    <>
+                      <div className="mb-2 flex items-center justify-between text-xs">
+                        <span className="font-semibold text-slate-600">{reviewRequestSelected.length} of {reviewRequestData.candidates.length} selected</span>
+                        <div className="flex gap-3">
+                          <button type="button" onClick={() => setReviewRequestSelected(reviewRequestData.candidates.filter((c) => !c.unsubscribed).map((c) => c.email))} className="font-semibold text-emerald-800 hover:underline">Select all</button>
+                          <button type="button" onClick={() => setReviewRequestSelected([])} className="font-semibold text-slate-500 hover:underline">Clear</button>
+                        </div>
+                      </div>
+                      <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200">
+                        {reviewRequestData.candidates.map((candidate) => (
+                          <li key={candidate.email} className="flex items-start gap-3 px-3 py-2.5">
+                            <input
+                              type="checkbox"
+                              className="mt-1 h-4 w-4 accent-emerald-700 disabled:opacity-40"
+                              checked={reviewRequestSelected.includes(candidate.email)}
+                              disabled={candidate.unsubscribed}
+                              onChange={() => toggleReviewRequestRecipient(candidate.email)}
+                            />
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-sm font-semibold text-slate-900">{candidate.name || candidate.email}</p>
+                              <p className="truncate text-xs text-slate-500">{candidate.email}</p>
+                              <p className="mt-0.5 text-xs text-slate-500">
+                                Last visit {candidate.visitDate}{candidate.serviceName ? ` · ${candidate.serviceName}` : ''}
+                              </p>
+                              {candidate.unsubscribed && <p className="mt-0.5 text-xs font-semibold text-amber-800">Unsubscribed from emails</p>}
+                              {!candidate.unsubscribed && candidate.lastRequestedAt && (
+                                <p className="mt-0.5 text-xs text-slate-400">Already asked on {candidate.lastRequestedAt.slice(0, 10)}</p>
+                              )}
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
+                </div>
+
+                <div className="flex items-center justify-between gap-3 border-t border-slate-200 px-5 py-4">
+                  <button type="button" onClick={loadReviewRequests} disabled={isLoadingReviewRequests || isSendingReviewRequests} className="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50">
+                    <RefreshCw className={`h-3.5 w-3.5 ${isLoadingReviewRequests ? 'animate-spin' : ''}`} />Refresh
+                  </button>
+                  <button
+                    type="button"
+                    onClick={sendReviewRequests}
+                    disabled={isSendingReviewRequests || isLoadingReviewRequests || !reviewRequestSelected.length || reviewRequestData?.sendReady === false}
+                    className="inline-flex items-center gap-2 rounded-xl bg-emerald-950 px-4 py-2.5 text-xs font-bold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-45"
+                  >
+                    <Mail className="h-4 w-4" />{isSendingReviewRequests ? 'Sending…' : `Send to ${reviewRequestSelected.length}`}
+                  </button>
+                </div>
+              </div>
+            </div>
           )}
         </div>
       )}

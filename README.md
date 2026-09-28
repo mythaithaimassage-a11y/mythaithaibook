@@ -276,8 +276,25 @@ in Sheets rather than moving to BigQuery.
 
 The owner dashboard has a **Google Reviews** section (under **Grow**) that
 shows your Google Business Profile's average rating, total rating count, and
-most recent reviews, along with quick links to view all reviews on Google and
-to send customers straight to your review form.
+most recent reviews, along with a quick link to view all reviews on Google.
+
+### Asking past customers for a review
+
+The **Ask for a review** button in that section opens a picker listing every
+customer who has actually attended an appointment (a past-dated booking that
+was not cancelled) within the last 365 days, deduplicated by email and showing
+their most recent visit. Selecting customers and pressing **Send** emails each
+one a short message with a button linking to your Google review form.
+
+- Customers who have unsubscribed from marketing emails are listed but cannot
+  be selected.
+- Every send is logged to a `ReviewRequests` tab in the Google Sheet (created
+  automatically), so customers asked within the last 180 days are shown as
+  already asked and are not pre-selected. They can still be selected manually.
+- Up to 50 customers can be emailed at a time.
+- Sending uses the same Gmail OAuth mailbox and business-profile requirements
+  as email campaigns; if those are not configured the button explains what is
+  missing.
 
 This uses the [Places API (New) — Place Details](https://developers.google.com/maps/documentation/places/web-service/place-details)
 with an API key, so it does not require the more restrictive Google Business
