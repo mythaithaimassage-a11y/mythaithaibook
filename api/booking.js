@@ -1,7 +1,16 @@
 import { google } from 'googleapis';
 import crypto from 'node:crypto';
 
-export const config = { maxDuration: 60 };
+// Body parsing is done manually (see readRawBody/parseRequestBody below) so the Square
+// webhook handler can verify its HMAC signature against the exact raw request bytes;
+// every other view still gets the same parsed `req.body` object it always has.
+export const config = { api: { bodyParser: false }, maxDuration: 60 };
+
+async function readRawBody(req) {
+  const chunks = [];
+  for await (const chunk of req) chunks.push(chunk);
+  return Buffer.concat(chunks).toString('utf8');
+}
 
 const CALENDAR_TIME_ZONE = process.env.GOOGLE_CALENDAR_TIME_ZONE || 'America/Toronto';
 const CALENDAR_OWNER_EMAIL = process.env.GOOGLE_CALENDAR_OWNER_EMAIL || 'mythaithaimassage@gmail.com';
@@ -23,6 +32,12 @@ const THERAPIST_SESSION_SECRET = process.env.THERAPIST_SESSION_SECRET || '';
 const THERAPIST_ACCOUNTS = process.env.THERAPIST_ACCOUNTS || '[]';
 const OWNER_ADMIN_PASSWORD = process.env.OWNER_ADMIN_PASSWORD || '';
 const OWNER_ADMIN_SESSION_SECRET = process.env.OWNER_ADMIN_SESSION_SECRET || '';
+const SQUARE_ACCESS_TOKEN = process.env.SQUARE_ACCESS_TOKEN || '';
+const SQUARE_LOCATION_ID = process.env.SQUARE_LOCATION_ID || '';
+const SQUARE_ENVIRONMENT = (process.env.SQUARE_ENVIRONMENT || 'production').toLowerCase() === 'sandbox' ? 'sandbox' : 'production';
+const SQUARE_WEBHOOK_SIGNATURE_KEY = process.env.SQUARE_WEBHOOK_SIGNATURE_KEY || '';
+const SQUARE_WEBHOOK_NOTIFICATION_URL = process.env.SQUARE_WEBHOOK_NOTIFICATION_URL || '';
+const SQUARE_API_VERSION = '2024-08-21';
 const BUSINESS_PROFILE_FIELDS = ['businessName', 'legalName', 'tagline', 'email', 'phone', 'website', 'address', 'taxRegistrationNumber', 'photoUrl'];
 const LEGACY_BUSINESS_PROFILE_FIELDS = ['businessName', 'tagline', 'email', 'phone', 'website', 'address'];
 const DEFAULT_BUSINESS_PROFILE = {
@@ -58,6 +73,7 @@ const LOYALTY_SHEETS = {
   LoyaltyMembers: ['Email', 'Name', 'Phone', 'Enrolled At', 'Updated At', 'Membership Type', 'Organization', 'Paid Through', 'Company ID', 'Company Contact Email', 'Is Primary Contact'],
   LoyaltyLedger: ['Transaction ID', 'Email', 'Booking ID', 'Type', 'Points', 'Reward Value', 'Description', 'Created At', 'Hours', 'Receipt No.'],
   LoyaltyCompanies: ['Organization', 'Company ID', 'Contact Email', 'Access Token', 'Created At', 'Updated At'],
+  SquarePayments: ['Payment Link ID', 'Order ID', 'Booking ID', 'Amount', 'Status', 'Email', 'Created At', 'Purpose', 'Square Payment ID'],
 };
 const RECEIPT_HEADERS = ['Receipt No.', 'Receipt Issued At', 'Receipt Email Status'];
 const MARKETING_CONTACT_HEADERS = [
@@ -1816,9 +1832,74 @@ async function sendGmailConfirmation(gmail, payload) {
   });
 }
 
+function squareApiBase() {
+  return SQUARE_ENVIRONMENT === 'sandbox' ? 'https://connect.squareupsandbox.com' : 'https://connect.squareup.com';
+}
+
+function isSquareConfigured() {
+  return Boolean(SQUARE_ACCESS_TOKEN && SQUARE_LOCATION_ID);
+}
+
+async function squareRequest(method, path, body) {
+  const response = await fetch(`${squareApiBase()}${path}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${SQUARE_ACCESS_TOKEN}`,
+      'Square-Version': SQUARE_API_VERSION,
+      'Content-Type': 'application/json',
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = data?.errors?.[0]?.detail || `Square API returned status ${response.status}`;
+    const error = new Error(detail);
+    error.statusCode = 502;
+    throw error;
+  }
+  return data;
+}
+
+function getSquareWebhookNotificationUrl(req) {
+  if (SQUARE_WEBHOOK_NOTIFICATION_URL) return SQUARE_WEBHOOK_NOTIFICATION_URL;
+  const host = req.headers['x-forwarded-host'] || req.headers.host;
+  const protocol = req.headers['x-forwarded-proto'] === 'http' ? 'http' : 'https';
+  return `${protocol}://${host}/api/booking?view=square-webhook`;
+}
+
+function isValidSquareWebhookSignature(req, rawBody) {
+  if (!SQUARE_WEBHOOK_SIGNATURE_KEY) return false;
+  const signature = req.headers['x-square-hmacsha256-signature'];
+  if (!signature) return false;
+  const notificationUrl = getSquareWebhookNotificationUrl(req);
+  const expected = crypto.createHmac('sha256', SQUARE_WEBHOOK_SIGNATURE_KEY)
+    .update(notificationUrl + rawBody)
+    .digest('base64');
+  const provided = Buffer.from(String(signature));
+  const expectedBuffer = Buffer.from(expected);
+  return provided.length === expectedBuffer.length && crypto.timingSafeEqual(provided, expectedBuffer);
+}
+
 export default async function handler(req, res) {
   if (!['GET', 'POST'].includes(req.method)) {
     return res.status(405).json({ message: 'Method Not Allowed' });
+  }
+
+  // Manual body parsing (bodyParser is disabled above): mirrors the previous automatic
+  // JSON parsing for every existing view, while keeping the raw text available so the
+  // Square webhook handler below can verify its signature against the exact bytes sent.
+  let rawRequestBody = '';
+  req.body = {};
+  if (req.method === 'POST') {
+    rawRequestBody = await readRawBody(req);
+    const contentType = String(req.headers['content-type'] || '');
+    if (contentType.includes('application/json') && rawRequestBody) {
+      try {
+        req.body = JSON.parse(rawRequestBody);
+      } catch {
+        return res.status(400).json({ message: 'Request body must be valid JSON' });
+      }
+    }
   }
 
   try {
@@ -1865,7 +1946,7 @@ export default async function handler(req, res) {
     }
 
     const view = String(req.query?.view || '');
-    const validGetViews = ['', 'calendar', 'patient-history', 'business-profile', 'business-name', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal'];
+    const validGetViews = ['', 'calendar', 'patient-history', 'business-profile', 'business-name', 'square-config', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal'];
     if (req.method === 'GET' && !validGetViews.includes(view)) {
       return res.status(404).json({ message: 'Unknown booking view' });
     }
@@ -1876,7 +1957,7 @@ export default async function handler(req, res) {
     if (ownerOnlyRequest && !getOwnerSession(req)) {
       return res.status(401).json({ message: 'Owner sign-in required' });
     }
-    if (['business-profile', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-signup', 'company-portal-bulk-signup', 'company-portal-link'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
+    if (['business-profile', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-signup', 'company-portal-bulk-signup', 'company-portal-link', 'square-create-checkout'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
       return res.status(403).json({ message: 'Profile update origin is not allowed' });
     }
 
@@ -1901,6 +1982,11 @@ export default async function handler(req, res) {
         businessName: businessProfile.businessName,
         photoUrl: businessProfile.photoUrl,
       });
+    }
+
+    if (req.method === 'GET' && view === 'square-config') {
+      res.setHeader('Cache-Control', 'no-store');
+      return res.status(200).json({ enabled: isSquareConfigured() });
     }
 
     if (req.method === 'GET' && view === 'loyalty-program') {
@@ -3928,6 +4014,218 @@ export default async function handler(req, res) {
           autoLinked: true,
         },
       });
+    }
+
+    if (req.method === 'POST' && req.query?.view === 'square-create-checkout') {
+      if (!isSquareConfigured()) {
+        return res.status(503).json({ message: 'Online payments are not configured yet. Add SQUARE_ACCESS_TOKEN and SQUARE_LOCATION_ID to enable this.' });
+      }
+      const bookingId = String(req.body?.bookingId || '').trim();
+      const requestedAmount = Math.round((Number(req.body?.amount) || 0) * 100) / 100;
+      if (!bookingId || bookingId.length > 100) {
+        return res.status(400).json({ message: 'A valid booking ID is required' });
+      }
+      if (!(requestedAmount > 0)) {
+        return res.status(400).json({ message: 'Enter a valid payment amount' });
+      }
+      if (!process.env.GOOGLE_SPREADSHEET_ID) {
+        throw new Error('GOOGLE_SPREADSHEET_ID is not configured');
+      }
+      const result = await sheets.spreadsheets.values.get({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: 'Sheet1!A:U',
+      });
+      const rows = result.data.values || [];
+      const hasHeader = rows[0]?.[0] === 'Booking ID';
+      const startIndex = hasHeader ? 1 : 0;
+      const rowIndex = rows.findIndex((row, index) => index >= startIndex && String(row[0] || '') === bookingId);
+      if (rowIndex < 0) return res.status(404).json({ message: 'Booking was not found in Google Sheets' });
+      const row = rows[rowIndex];
+      const total = Number(row[11]) || 0;
+      const paidAmount = Number(row[10]) || 0;
+      const remaining = Math.round((total - paidAmount) * 100) / 100;
+      if (remaining <= 0) {
+        return res.status(409).json({ message: 'This booking is already fully paid' });
+      }
+      if (requestedAmount > remaining + 0.005) {
+        return res.status(400).json({ message: `The payment amount cannot exceed the remaining balance of $${remaining.toFixed(2)}` });
+      }
+      const email = String(row[3] || '').trim();
+      const customerName = String(row[1] || '').trim();
+      await ensureLoyaltySheets(sheets);
+      const idempotencyKey = crypto.randomUUID();
+      const businessProfile = await getBusinessProfile(sheets);
+      const businessName = businessProfile?.name || 'My Thai Thai Massage';
+      const purpose = requestedAmount + 0.005 >= remaining ? 'full' : 'deposit';
+      const payment = await squareRequest('POST', '/v2/online-checkout/payment-links', {
+        idempotency_key: idempotencyKey,
+        quick_pay: {
+          name: `${businessName} - Booking ${bookingId}`,
+          price_money: { amount: Math.round(requestedAmount * 100), currency: 'CAD' },
+          location_id: SQUARE_LOCATION_ID,
+        },
+        checkout_options: {
+          redirect_url: `${req.headers['x-forwarded-proto'] === 'http' ? 'http' : 'https'}://${req.headers['x-forwarded-host'] || req.headers.host}/?paymentComplete=1&bookingId=${encodeURIComponent(bookingId)}`,
+        },
+        payment_note: `Booking ${bookingId} (${purpose} payment)`,
+      });
+      const paymentLink = payment?.payment_link;
+      if (!paymentLink?.url) {
+        return res.status(502).json({ message: 'Square did not return a payment link. Please try again.' });
+      }
+      await sheets.spreadsheets.values.append({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: 'SquarePayments!A:I',
+        valueInputOption: 'RAW',
+        requestBody: { values: [[
+          paymentLink.id || '',
+          paymentLink.order_id || '',
+          bookingId,
+          requestedAmount,
+          'PENDING',
+          email,
+          new Date().toISOString(),
+          purpose,
+          '',
+        ]] },
+      });
+      return res.status(200).json({
+        url: paymentLink.url,
+        paymentLinkId: paymentLink.id || '',
+        orderId: paymentLink.order_id || '',
+        amount: requestedAmount,
+        customerName,
+      });
+    }
+
+    if (req.method === 'POST' && req.query?.view === 'square-webhook') {
+      if (!SQUARE_WEBHOOK_SIGNATURE_KEY) {
+        return res.status(503).json({ message: 'Square webhook signature key is not configured' });
+      }
+      if (!isValidSquareWebhookSignature(req, rawRequestBody)) {
+        return res.status(401).json({ message: 'Invalid Square webhook signature' });
+      }
+      const eventType = String(req.body?.type || '');
+      const paymentObject = req.body?.data?.object?.payment;
+      if (!['payment.updated', 'payment.created'].includes(eventType) || !paymentObject) {
+        return res.status(200).json({ received: true });
+      }
+      if (paymentObject.status !== 'COMPLETED') {
+        return res.status(200).json({ received: true });
+      }
+      if (!process.env.GOOGLE_SPREADSHEET_ID) {
+        throw new Error('GOOGLE_SPREADSHEET_ID is not configured');
+      }
+      const orderId = String(paymentObject.order_id || '');
+      const squarePaymentId = String(paymentObject.id || '');
+      const paymentsResult = await sheets.spreadsheets.values.get({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: 'SquarePayments!A:I',
+      });
+      const paymentRows = paymentsResult.data.values || [];
+      const paymentRowIndex = paymentRows.findIndex((row, index) => index > 0 && orderId && String(row[1] || '') === orderId);
+      if (paymentRowIndex < 0) {
+        // Unknown or already-cleaned-up payment link; acknowledge so Square stops retrying.
+        return res.status(200).json({ received: true, matched: false });
+      }
+      const paymentRow = paymentRows[paymentRowIndex];
+      if (String(paymentRow[4] || '') === 'COMPLETED') {
+        return res.status(200).json({ received: true, alreadyProcessed: true });
+      }
+      const bookingId = String(paymentRow[2] || '');
+      const amountPaid = Number(paymentRow[3]) || 0;
+      const payerEmail = String(paymentRow[5] || '').trim();
+      const paymentRowNumber = paymentRowIndex + 1;
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: `SquarePayments!E${paymentRowNumber}:I${paymentRowNumber}`,
+        valueInputOption: 'RAW',
+        requestBody: { values: [[
+          'COMPLETED', payerEmail, paymentRow[6] || new Date().toISOString(), paymentRow[7] || '', squarePaymentId,
+        ]] },
+      });
+
+      const bookingResult = await sheets.spreadsheets.values.get({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: 'Sheet1!A:U',
+      });
+      const bookingRows = bookingResult.data.values || [];
+      const bookingRowIndex = bookingRows.findIndex((row, index) => index > 0 && String(row[0] || '') === bookingId);
+      let updatedPaid = amountPaid;
+      let bookingTotal = 0;
+      let customerName = '';
+      if (bookingRowIndex >= 0) {
+        const bookingRow = bookingRows[bookingRowIndex];
+        bookingTotal = Number(bookingRow[11]) || 0;
+        customerName = String(bookingRow[1] || '');
+        const currentPaid = Number(bookingRow[10]) || 0;
+        updatedPaid = Math.min(bookingTotal, Math.round((currentPaid + amountPaid) * 100) / 100);
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+          range: `Sheet1!K${bookingRowIndex + 1}`,
+          valueInputOption: 'RAW',
+          requestBody: { values: [[updatedPaid]] },
+        });
+      }
+
+      const businessProfile = await getBusinessProfile(sheets);
+      if (payerEmail) {
+        try {
+          await sendFormattedLoyaltyEmail(createGmailApi(), {
+            email: payerEmail,
+            name: customerName,
+            subject: 'Payment received',
+            businessName: businessProfile?.name || 'My Thai Thai Massage',
+            heading: 'Thank you for your payment!',
+            intro: `We've received your payment of $${amountPaid.toFixed(2)} for booking ${bookingId}.`,
+            details: [
+              { label: 'Booking ID', value: bookingId },
+              { label: 'Amount paid', value: `$${amountPaid.toFixed(2)}` },
+              { label: 'Balance remaining', value: `$${Math.max(0, bookingTotal - updatedPaid).toFixed(2)}` },
+            ],
+            note: 'A receipt will be issued once your appointment is fully paid.',
+          });
+        } catch (error) {
+          console.error('Square payment confirmation email error:', error.message || error);
+        }
+
+        try {
+          const loyaltySettings = await getLoyaltySettings(sheets);
+          if (loyaltySettings.enabled) {
+            const membersResult = await sheets.spreadsheets.values.get({
+              spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+              range: 'LoyaltyMembers!A:J',
+            });
+            const alreadyEnrolled = (membersResult.data.values || []).slice(1)
+              .some((row) => normalizeLoyaltyEmail(row[0]) === normalizeLoyaltyEmail(payerEmail));
+            if (!alreadyEnrolled) {
+              const enrollment = await enrollLoyaltyMember(sheets, {
+                email: payerEmail,
+                customerName,
+                phone: '',
+              });
+              try {
+                await sendMembershipEmail(createGmailApi(), {
+                  email: payerEmail,
+                  name: customerName,
+                  membershipType: enrollment.membershipType,
+                  organization: '',
+                  companyId: '',
+                  companyContactEmail: '',
+                  hoursBalance: enrollment.hoursBalance,
+                  paidThrough: '',
+                }, loyaltySettings, businessProfile, 'welcome', '');
+              } catch (error) {
+                console.error('Square auto-enrollment welcome email error:', error.message || error);
+              }
+            }
+          }
+        } catch (error) {
+          console.error('Square auto-enrollment error:', error.message || error);
+        }
+      }
+
+      return res.status(200).json({ received: true, matched: true, bookingId, updatedPaid });
     }
 
     if (req.method === 'POST' && req.query?.view === 'mark-paid') {

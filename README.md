@@ -117,6 +117,45 @@ Environment Variables; the browser only receives campaign metrics. The report
 automatically paginates campaign results and reads the account currency from
 Google Ads.
 
+## Square online payments
+
+Customers can optionally pay their deposit or full balance online at booking
+time through Square's hosted checkout. Once a Square payment completes, the
+paid amount is written back to the booking automatically and, if the loyalty
+program is enabled, the payer is auto-enrolled as a Standard rewards member
+(if not already a member) so no separate loyalty sign-up step is required.
+
+To enable Square payments, add these server-side Vercel Environment Variables:
+
+- `SQUARE_ACCESS_TOKEN` (personal access token or OAuth access token for your
+  Square account/application)
+- `SQUARE_LOCATION_ID` (the Square location that payments should be attributed
+  to)
+- `SQUARE_ENVIRONMENT` (optional; `production` by default, set to `sandbox`
+  while testing with a Square sandbox account)
+- `SQUARE_WEBHOOK_SIGNATURE_KEY` (the signature key shown for the webhook
+  subscription in the Square Developer Dashboard)
+- `SQUARE_WEBHOOK_NOTIFICATION_URL` (optional; only needed if the auto-detected
+  `https://<your-domain>/api/booking?view=square-webhook` URL does not match
+  the notification URL registered with Square)
+
+Setup steps:
+
+1. In the [Square Developer Dashboard](https://developer.squareup.com/apps),
+   create (or open) an application and copy an access token and a location ID
+   into the Vercel environment variables above.
+2. Under that application's **Webhooks** settings, add a subscription pointed
+   at `https://<your-domain>/api/booking?view=square-webhook`, subscribed to
+   the `payment.updated` and `payment.created` events, then copy the generated
+   signature key into `SQUARE_WEBHOOK_SIGNATURE_KEY`.
+3. Redeploy so the new environment variables take effect. The customer booking
+   flow will automatically show a "Pay with Square" button on the confirmation
+   step whenever a deposit or full online payment option was selected and
+   Square is configured.
+
+If Square is not configured, the payment button is hidden and the app behaves
+exactly as before (pay-at-clinic / manually marked-paid bookings).
+
 The owner dashboard's **Loyalty program** section lets the owner configure the
 Standard, Gold, and Platinum plans, point earning and redemption, first-session
 bonus, monthly Gold Hot Stone allowance, and Platinum top-up price, hours, and

@@ -384,6 +384,20 @@ export default function App() {
     if (typeof window === 'undefined') return '';
     return new URLSearchParams(window.location.search).get('companyToken') || '';
   });
+  const [squarePaymentComplete, setSquarePaymentComplete] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    const params = new URLSearchParams(window.location.search);
+    return params.get('paymentComplete') === '1' ? (params.get('bookingId') || 'your booking') : '';
+  });
+
+  useEffect(() => {
+    if (squarePaymentComplete && typeof window !== 'undefined') {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('paymentComplete');
+      url.searchParams.delete('bookingId');
+      window.history.replaceState({}, '', url.toString());
+    }
+  }, [squarePaymentComplete]);
   const [viewMode, setViewMode] = useState('customer'); // 'customer' or 'admin'
   const [adminLang, setAdminLang] = useState('en'); // 'en' or 'th'
   const [servicesList, setServicesList] = useState(INITIAL_SERVICES);
@@ -407,6 +421,18 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-stone-100 font-sans text-stone-800 flex flex-col justify-between">
+      {squarePaymentComplete && (
+        <div role="status" className="sticky top-0 z-50 flex items-center justify-between gap-3 bg-emerald-700 px-4 py-2.5 text-xs sm:text-sm font-semibold text-white">
+          <span>Payment received for booking {squarePaymentComplete}. A receipt confirmation email is on its way.</span>
+          <button
+            type="button"
+            onClick={() => setSquarePaymentComplete('')}
+            className="rounded-full bg-white/10 px-2.5 py-1 text-[11px] font-bold hover:bg-white/20 transition"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
       <header className={`sticky top-0 z-40 flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3 shadow-sm sm:px-6 ${viewMode === 'therapist' ? 'border-slate-800 bg-black text-white' : 'border-slate-200 bg-white text-slate-900'}`}>
         <div className="flex items-center space-x-2 font-semibold tracking-wide">
           <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-950 text-xs font-black tracking-tight text-white shadow-sm">M</span>
@@ -1714,6 +1740,9 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
   const [loyaltyProgramError, setLoyaltyProgramError] = useState('');
   const [membershipBenefit, setMembershipBenefit] = useState(null);
   const [membershipCheckMessage, setMembershipCheckMessage] = useState('');
+  const [squareEnabled, setSquareEnabled] = useState(false);
+  const [squareCheckoutLoading, setSquareCheckoutLoading] = useState(false);
+  const [squareCheckoutError, setSquareCheckoutError] = useState('');
   
   const [bookingData, setBookingData] = useState({
     branch: branches[0],
@@ -1773,6 +1802,34 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
       });
     return () => { isCurrent = false; };
   }, []);
+
+  useEffect(() => {
+    let isCurrent = true;
+    fetch('/api/booking?view=square-config')
+      .then((response) => response.json())
+      .then((data) => { if (isCurrent) setSquareEnabled(Boolean(data.enabled)); })
+      .catch(() => { if (isCurrent) setSquareEnabled(false); });
+    return () => { isCurrent = false; };
+  }, []);
+
+  const payWithSquare = async (amount) => {
+    setSquareCheckoutError('');
+    setSquareCheckoutLoading(true);
+    try {
+      const response = await fetch('/api/booking?view=square-create-checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bookingId: bookingData.confirmationCode, amount }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Unable to start the Square payment.');
+      if (data.url) window.location.href = data.url;
+    } catch (requestError) {
+      setSquareCheckoutError(requestError.message || 'Unable to start the Square payment.');
+    } finally {
+      setSquareCheckoutLoading(false);
+    }
+  };
 
   const filteredServices = useMemo(() => {
     if (selectedCategory === 'All') return services;
@@ -2732,6 +2789,25 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
               <div className="inline-flex flex-col items-center space-y-1 rounded-xl border border-amber-300 bg-amber-50 px-4 py-2 text-xs text-amber-950">
                 <span className="font-semibold">Company Platinum request saved.</span>
                 <span>The clinic will verify your company and confirm payment before activating prepaid hours and booking benefits. We emailed {bookingData.customer.email}{loyaltyCompanyEmailNotified ? ' and copied the registered company contact' : ''} with the claim details.</span>
+              </div>
+            )}
+
+            {squareEnabled && bookingData.paymentOption !== 'clinic' && sheetsSyncStatus !== 'failed' && (
+              <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-5 max-w-md mx-auto text-left space-y-3">
+                <p className="text-sm font-semibold text-emerald-900">Pay online now with Square</p>
+                <p className="text-xs text-emerald-800">
+                  Securely pay your {bookingData.paymentOption === 'full' ? 'full balance' : 'deposit'} of{' '}
+                  <span className="font-bold">${(bookingData.paymentOption === 'full' ? financials.total : financials.deposit).toFixed(2)}</span> using Square.
+                </p>
+                {squareCheckoutError && <p role="alert" className="text-xs text-red-700">{squareCheckoutError}</p>}
+                <button
+                  type="button"
+                  disabled={squareCheckoutLoading}
+                  onClick={() => payWithSquare(bookingData.paymentOption === 'full' ? financials.total : financials.deposit)}
+                  className="w-full px-4 py-2.5 bg-emerald-700 text-white text-sm font-semibold rounded-xl hover:bg-emerald-800 transition disabled:opacity-60"
+                >
+                  {squareCheckoutLoading ? 'Preparing secure checkout…' : 'Pay with Square'}
+                </button>
               </div>
             )}
 
