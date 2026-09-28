@@ -87,6 +87,8 @@ function isTherapistScheduledAtBranch(therapist, branchId, dateStr) {
 
 
 const AVAILABLE_TIMES = ["09:30 AM", "11:00 AM", "01:00 PM", "02:30 PM", "04:00 PM", "05:30 PM", "07:00 PM"];
+// Flat online amount charged to confirm a booking; the balance is paid at the clinic.
+const BOOKING_DEPOSIT_AMOUNT = 10;
 const THERAPIST_CALENDAR_COLORS = [
   { name: 'Emerald', event: 'bg-emerald-100 border-emerald-700', dot: 'bg-emerald-600', text: 'text-emerald-950' },
   { name: 'Blue', event: 'bg-blue-100 border-blue-700', dot: 'bg-blue-600', text: 'text-blue-950' },
@@ -1995,7 +1997,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
       preCollectionConsent: false,
       consentTimestamp: '',
     },
-    paymentOption: 'deposit', // 'clinic', 'deposit', 'full'
+    paymentOption: 'deposit', // 'deposit' (flat $10 now, balance at clinic) or 'full'
     confirmationCode: ''
   });
 
@@ -2162,14 +2164,9 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
     const discountedBase = base - discountAmount;
     const tax = discountedBase * (bookingData.service.taxRate || 0);
     const total = discountedBase + tax;
-    let deposit = 0;
-    if (bookingData.paymentOption === 'deposit') {
-      deposit = Math.min(bookingData.service.deposit, total);
-    } else if (bookingData.paymentOption === 'full') {
-      deposit = total;
-    } else {
-      deposit = 0; // clinic
-    }
+    const deposit = bookingData.paymentOption === 'full'
+      ? total
+      : Math.min(BOOKING_DEPOSIT_AMOUNT, total);
     const balanceDue = Math.max(0, total - deposit);
     return { base, discountPercent, discountAmount, tax, total, deposit, balanceDue };
   };
@@ -2417,7 +2414,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                           RMT Tax Exempt
                         </span>
                       ) : (
-                        <span className="text-stone-400 text-[11px]">Deposit: ${s.deposit}</span>
+                        <span className="text-stone-400 text-[11px]">${BOOKING_DEPOSIT_AMOUNT} to confirm</span>
                       )}
                     </div>
                   </div>
@@ -3000,20 +2997,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
             <div>
               <h3 className="text-base font-bold text-stone-900 mb-3">Select Payment Option</h3>
               
-              <div className="grid gap-3 sm:grid-cols-3">
-                <div 
-                  onClick={() => updateBooking('paymentOption', 'clinic')}
-                  className={`p-4 rounded-xl border cursor-pointer transition ${
-                    bookingData.paymentOption === 'clinic'
-                      ? 'border-emerald-600 bg-emerald-50 ring-2 ring-emerald-600/20'
-                      : 'border-stone-200 hover:border-emerald-300'
-                  }`}
-                >
-                  <div className="font-bold text-stone-900 text-sm">Option A: Pay at Clinic</div>
-                  <p className="text-xs text-stone-500 mt-1">Book now, pay full amount after treatment</p>
-                  <div className="mt-3 text-xs font-bold text-emerald-800">$0.00 Online Due</div>
-                </div>
-
+              <div className="grid gap-3 sm:grid-cols-2">
                 <div 
                   onClick={() => updateBooking('paymentOption', 'deposit')}
                   className={`p-4 rounded-xl border cursor-pointer transition ${
@@ -3022,10 +3006,13 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                       : 'border-stone-200 hover:border-emerald-300'
                   }`}
                 >
-                  <div className="font-bold text-stone-900 text-sm">Option B: Pay Deposit</div>
-                  <p className="text-xs text-stone-500 mt-1">Hold slot with partial deposit online</p>
+                  <div className="font-bold text-stone-900 text-sm">Option A: Pay ${BOOKING_DEPOSIT_AMOUNT} Now</div>
+                  <p className="text-xs text-stone-500 mt-1">Confirm your slot online, pay the rest at the clinic</p>
                   <div className="mt-3 text-xs font-bold text-emerald-800">
                     ${financials.deposit.toFixed(2)} Online Due
+                  </div>
+                  <div className="text-[11px] text-stone-500 mt-1">
+                    ${Math.max(0, financials.total - Math.min(BOOKING_DEPOSIT_AMOUNT, financials.total)).toFixed(2)} due at clinic
                   </div>
                 </div>
 
@@ -3037,8 +3024,8 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                       : 'border-stone-200 hover:border-emerald-300'
                   }`}
                 >
-                  <div className="font-bold text-stone-900 text-sm">Option C: Full Prepayment</div>
-                  <p className="text-xs text-stone-500 mt-1">Pay 100% online in advance</p>
+                  <div className="font-bold text-stone-900 text-sm">Option B: Pay Full Amount Online</div>
+                  <p className="text-xs text-stone-500 mt-1">Pay 100% online in advance, nothing due at the clinic</p>
                   <div className="mt-3 text-xs font-bold text-emerald-800">
                     ${financials.total.toFixed(2)} Online Due
                   </div>
@@ -3143,7 +3130,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
               </div>
             )}
 
-            {squareEnabled && bookingData.paymentOption !== 'clinic' && sheetsSyncStatus !== 'failed' && (
+            {squareEnabled && sheetsSyncStatus !== 'failed' && (
               <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-5 max-w-md mx-auto text-left space-y-3">
                 <p className="text-sm font-semibold text-emerald-900">Pay online now with Square</p>
                 <p className="text-xs text-emerald-800">

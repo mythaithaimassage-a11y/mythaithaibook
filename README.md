@@ -200,8 +200,10 @@ Google Ads.
 
 ## Square online payments
 
-Customers can optionally pay their deposit or full balance online at booking
-time through Square's hosted checkout. Once a Square payment completes, the
+Every online booking must be paid through Square's hosted checkout, and there
+are exactly two payment options: pay a flat **$10 now** to confirm the slot and
+settle the balance at the clinic, or pay the **full amount online** in advance.
+Once a Square payment completes, the
 paid amount is written back to the booking automatically and, if the loyalty
 program is enabled, the payer is auto-enrolled as a Standard rewards member
 (if not already a member) so no separate loyalty sign-up step is required.
@@ -231,11 +233,12 @@ Setup steps:
    signature key into `SQUARE_WEBHOOK_SIGNATURE_KEY`.
 3. Redeploy so the new environment variables take effect. The customer booking
    flow will automatically show a "Pay with Square" button on the confirmation
-   step whenever a deposit or full online payment option was selected and
+   step for both payment options ($10 deposit or full prepayment) whenever
    Square is configured.
 
-If Square is not configured, the payment button is hidden and the app behaves
-exactly as before (pay-at-clinic / manually marked-paid bookings).
+If Square is not configured, the payment button is hidden and bookings are
+recorded with the selected payment option so staff can collect and mark the
+payment manually.
 
 ## Therapist and business availability blocks
 
