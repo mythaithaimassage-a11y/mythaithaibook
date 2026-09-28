@@ -52,11 +52,39 @@ const INITIAL_SERVICES = [
 ];
 
 const MOCK_THERAPISTS = [
-  { id: 1, name: "Kanya S.", thaiCertified: true, rmtCertified: false, branches: [1, 2], rating: 4.9, bio: "10+ years traditional Wat Pho Thai technique experience" },
-  { id: 2, name: "Michael T., RMT", thaiCertified: true, rmtCertified: true, branches: [1, 3], rating: 4.8, bio: "CMTO Registered Massage Therapist & Deep Tissue specialist" },
-  { id: 3, name: "Priya P.", thaiCertified: true, rmtCertified: false, branches: [2, 4], rating: 4.9, bio: "Hot stone specialist and body stretch master" },
-  { id: 4, name: "Somchai R., RMT", thaiCertified: true, rmtCertified: true, branches: [1, 4], rating: 5.0, bio: "Acupuncture practitioner and sports rehabilitation" }
+  { id: 1, name: "Kanya S.", thaiCertified: true, rmtCertified: false, branches: [1, 2], schedule: {}, rating: 4.9, bio: "10+ years traditional Wat Pho Thai technique experience" },
+  { id: 2, name: "Michael T., RMT", thaiCertified: true, rmtCertified: true, branches: [1, 3], schedule: {}, rating: 4.8, bio: "CMTO Registered Massage Therapist & Deep Tissue specialist" },
+  { id: 3, name: "Priya P.", thaiCertified: true, rmtCertified: false, branches: [2, 4], schedule: {}, rating: 4.9, bio: "Hot stone specialist and body stretch master" },
+  { id: 4, name: "Somchai R., RMT", thaiCertified: true, rmtCertified: true, branches: [1, 4], schedule: {}, rating: 5.0, bio: "Acupuncture practitioner and sports rehabilitation" }
 ];
+
+const WEEKDAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+
+// Mirrors the backend's weekdayKeyForDate — avoids timezone shifts on YYYY-MM-DD strings.
+function weekdayKeyForDate(dateStr) {
+  const parsed = new Date(`${String(dateStr || '').slice(0, 10)}T12:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return WEEKDAY_KEYS[parsed.getUTCDay()];
+}
+
+// Mirrors the backend's isTherapistScheduledAtBranch — filters the roster to whoever is
+// actually rotated into a branch on a given date, falling back to the static branch list
+// when no per-weekday rotation has been configured for that therapist.
+function isTherapistScheduledAtBranch(therapist, branchId, dateStr) {
+  const targetBranchId = Number(branchId);
+  const dayKey = weekdayKeyForDate(dateStr);
+  const scheduledBranch = dayKey ? therapist?.schedule?.[dayKey] : undefined;
+  if (scheduledBranch !== undefined && scheduledBranch !== null && scheduledBranch !== '') {
+    return Number(scheduledBranch) === targetBranchId;
+  }
+  const hasAnySchedule = therapist?.schedule && WEEKDAY_KEYS.some((key) => {
+    const value = therapist.schedule[key];
+    return value !== undefined && value !== null && value !== '';
+  });
+  if (hasAnySchedule) return false;
+  return (therapist?.branches || []).map(Number).includes(targetBranchId);
+}
+
 
 const AVAILABLE_TIMES = ["09:30 AM", "11:00 AM", "01:00 PM", "02:30 PM", "04:00 PM", "05:30 PM", "07:00 PM"];
 const THERAPIST_CALENDAR_COLORS = [
@@ -403,6 +431,7 @@ export default function App() {
   const [servicesList, setServicesList] = useState(INITIAL_SERVICES);
   const [servicesError, setServicesError] = useState('');
   const [therapistsList, setTherapistsList] = useState(MOCK_THERAPISTS);
+  const [therapistsError, setTherapistsError] = useState('');
   const [branchesList, setBranchesList] = useState(MOCK_BRANCHES);
   const [branchesError, setBranchesError] = useState('');
   const [selectedBranchId, setSelectedBranchId] = useState(1);
@@ -435,9 +464,24 @@ export default function App() {
     }
   };
 
+  const loadTherapists = async () => {
+    try {
+      const response = await fetch('/api/booking?view=therapists', { cache: 'no-store' });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+      if (Array.isArray(data.therapists) && data.therapists.length > 0) {
+        setTherapistsList(data.therapists);
+        setTherapistsError('');
+      }
+    } catch (error) {
+      setTherapistsError(error.message || 'Unable to load therapists; showing defaults.');
+    }
+  };
+
   useEffect(() => {
     loadBranches();
     loadServices();
+    loadTherapists();
   }, []);
 
   const activeBranches = useMemo(
@@ -448,6 +492,11 @@ export default function App() {
   const activeServices = useMemo(
     () => servicesList.filter((service) => service.active !== false),
     [servicesList]
+  );
+
+  const activeTherapists = useMemo(
+    () => therapistsList.filter((therapist) => therapist.active !== false),
+    [therapistsList]
   );
   
   // Google Sheets API Webhook URL state
@@ -523,7 +572,7 @@ export default function App() {
           <CustomerPortal 
             branches={activeBranches} 
             services={activeServices} 
-            therapists={therapistsList}
+            therapists={activeTherapists}
             sheetsWebhookUrl={sheetsWebhookUrl}
             onNewBooking={(newBkg) => setExistingBookings(prev => [newBkg, ...prev])}
           />
@@ -537,7 +586,8 @@ export default function App() {
               onServicesChange={setServicesList}
               servicesError={servicesError}
               therapists={therapistsList}
-              setTherapists={setTherapistsList}
+              onTherapistsChange={setTherapistsList}
+              therapistsError={therapistsError}
               bookings={existingBookings}
               setBookings={setExistingBookings}
               selectedBranchId={selectedBranchId}
@@ -903,7 +953,7 @@ function TherapistPortal() {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [summary, setSummary] = useState({ upcomingCount: 0, flaggedCount: 0 });
-  const [therapistProfile, setTherapistProfile] = useState({ branchNames: [], attendedHours: 0, attendedClientCount: 0 });
+  const [therapistProfile, setTherapistProfile] = useState({ branchNames: [], attendedHours: 0, attendedClientCount: 0, weeklySchedule: [], todayBranchName: null });
   const [attendedClients, setAttendedClients] = useState([]);
   const [calendarView, setCalendarView] = useState('agenda');
   const [calendarDate, setCalendarDate] = useState(new Date().toISOString().slice(0, 10));
@@ -934,7 +984,7 @@ function TherapistPortal() {
     setRebookingReminders(data.rebookingReminders || []);
     setSelectedAppointment((current) => current || data.appointments?.[0] || null);
     setSummary(data.summary || { upcomingCount: (data.appointments || []).length, flaggedCount: 0 });
-    setTherapistProfile(data.profile || { branchNames: [], attendedHours: 0, attendedClientCount: 0 });
+    setTherapistProfile(data.profile || { branchNames: [], attendedHours: 0, attendedClientCount: 0, weeklySchedule: [], todayBranchName: null });
     const savedProfile = data.professionalProfile || { email: '', phone: '', specialties: '', certifications: '', bio: '', updatedAt: '' };
     setProfessionalProfile(savedProfile);
     setProfileForm({
@@ -1466,6 +1516,23 @@ function TherapistPortal() {
       </div>
       {workspaceView === 'dashboard' && (
       <>
+      <div className="rounded-xl border border-indigo-200 bg-indigo-50/70 px-4 py-3.5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-xs font-bold uppercase tracking-wide text-indigo-900">This week's branch rotation</h2>
+          <span className="rounded-full bg-indigo-900 px-3 py-1 text-[11px] font-bold text-white">Today: {therapistProfile.todayBranchName || 'Not scheduled'}</span>
+        </div>
+        <div className="mt-2.5 grid grid-cols-2 gap-2 sm:grid-cols-4 md:grid-cols-7">
+          {(therapistProfile.weeklySchedule || []).map((entry) => (
+            <div key={entry.day} className="rounded-lg border border-indigo-200 bg-white px-2 py-1.5 text-center">
+              <p className="text-[10px] font-bold uppercase text-indigo-500">{entry.day}</p>
+              <p className="mt-0.5 text-[11px] font-semibold text-slate-800 leading-tight">{entry.branchName || 'Off'}</p>
+            </div>
+          ))}
+          {(!therapistProfile.weeklySchedule || therapistProfile.weeklySchedule.length === 0) && (
+            <p className="col-span-full text-xs text-indigo-800">No weekly rotation has been configured for you yet by the owner dashboard.</p>
+          )}
+        </div>
+      </div>
       <div className="grid items-start gap-4 xl:grid-cols-[270px_minmax(0,1fr)]">
         <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
           <header className="flex items-center gap-4 border-b border-slate-100 p-4">
@@ -1805,6 +1872,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
     platinumEnrollment: false,
     companyName: '',
     companyId: '',
+    guestTwoName: '',
     customer: { firstName: '', lastName: '', email: '', phone: '' },
     intake: {
       pressure: 'Medium',
@@ -1898,11 +1966,31 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
 
   const isCoupleService = /couple/i.test(bookingData.service?.name || '');
 
+  // Only offer therapists actually rotated into the selected branch on the selected date;
+  // falls back to full branch list if that therapist has no per-weekday rotation configured.
+  const branchTherapists = useMemo(
+    () => therapists.filter((therapist) => isTherapistScheduledAtBranch(therapist, bookingData.branch?.id, bookingData.date)),
+    [therapists, bookingData.branch, bookingData.date]
+  );
+
   useEffect(() => {
     if (bookingData.therapist?.id && bookingData.therapist2?.id && bookingData.therapist.id === bookingData.therapist2.id) {
       setBookingData((prev) => ({ ...prev, therapist2: null }));
     }
   }, [bookingData.therapist, bookingData.therapist2]);
+
+  // Clear any therapist selection that is no longer rotated into this branch/date combination
+  useEffect(() => {
+    setBookingData((prev) => {
+      const stillValid = (therapist) => !therapist || branchTherapists.some((t) => t.id === therapist.id);
+      if (stillValid(prev.therapist) && stillValid(prev.therapist2)) return prev;
+      return {
+        ...prev,
+        therapist: stillValid(prev.therapist) ? prev.therapist : null,
+        therapist2: stillValid(prev.therapist2) ? prev.therapist2 : null,
+      };
+    });
+  }, [branchTherapists]);
 
   const updateBooking = (field, val) => {
     setBookingData(prev => ({ ...prev, [field]: val }));
@@ -2002,10 +2090,13 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
 
     const code = 'MTT-' + Math.floor(100000 + Math.random() * 900000);
     const customerFullName = `${bookingData.customer.firstName} ${bookingData.customer.lastName}`;
+    const combinedCustomerName = isCoupleService && bookingData.guestTwoName.trim()
+      ? `${customerFullName} & ${bookingData.guestTwoName.trim()}`
+      : customerFullName;
 
     const payloadForSheets = {
       id: code,
-      customerName: customerFullName,
+      customerName: combinedCustomerName,
       phone: bookingData.customer.phone,
       email: bookingData.customer.email,
       marketingOptIn: bookingData.marketingOptIn,
@@ -2020,9 +2111,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
       serviceName: bookingData.service.name,
       therapistName: bookingData.therapist?.name || 'Any Available',
       therapistName2: isCoupleService ? (bookingData.therapist2?.name || 'Any Available') : undefined,
-      therapistCandidates: therapists
-        .filter((therapist) => therapist.branches.includes(bookingData.branch.id))
-        .map((therapist) => therapist.name),
+      therapistCandidates: branchTherapists.map((therapist) => therapist.name),
       date: bookingData.date,
       time: bookingData.time,
       durationMinutes: bookingData.service.duration,
@@ -2031,6 +2120,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
         `Pressure: ${bookingData.intake.pressure}`,
         bookingData.intake.focusAreas ? `Focus areas: ${bookingData.intake.focusAreas}` : '',
         bookingData.intake.injuries ? `Injuries: ${bookingData.intake.injuries}` : '',
+        isCoupleService && bookingData.guestTwoName.trim() ? `Guest 2: ${bookingData.guestTwoName.trim()}` : '',
       ].filter(Boolean).join('; '),
       patientHistory: {
         ...bookingData.intake,
@@ -2060,7 +2150,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
 
     const newRecord = {
       id: code,
-      customerName: customerFullName,
+      customerName: combinedCustomerName,
       phone: bookingData.customer.phone,
       email: bookingData.customer.email,
       serviceId: bookingData.service.id,
@@ -2251,6 +2341,10 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                   ? 'This is a couple session for 2 people. Pick a specific practitioner for each guest, or request any available therapist — we will always assign 2 different therapists.'
                   : 'Choose a specific practitioner or request any available therapist'}
               </p>
+              <p className="text-[11px] text-stone-400 mb-3">Showing therapists rotated into {bookingData.branch?.name || 'this branch'} on {bookingData.date}. Change the date below to see who is scheduled on a different day.</p>
+              {branchTherapists.length === 0 && (
+                <p role="status" className="text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-3">No therapist is specifically rotated to this branch on the selected date — choose "Any Available Practitioner" and the clinic will confirm staffing.</p>
+              )}
 
               {isCoupleService && <p className="text-xs font-bold text-emerald-800 mb-2">Guest 1 therapist</p>}
               <div className="grid gap-3 sm:grid-cols-3">
@@ -2267,7 +2361,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                   <p className="text-xs text-stone-500 mt-1">First available specialist</p>
                 </button>
 
-                {therapists.map(t => {
+                {branchTherapists.map(t => {
                   const disabled = isCoupleService && bookingData.therapist2?.id === t.id;
                   return (
                     <button
@@ -2309,7 +2403,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                       <p className="text-xs text-stone-500 mt-1">First available specialist</p>
                     </button>
 
-                    {therapists.map(t => {
+                    {branchTherapists.map(t => {
                       const disabled = bookingData.therapist?.id === t.id;
                       return (
                         <button
@@ -2494,6 +2588,20 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                   />
                 </div>
               </div>
+              {isCoupleService && (
+                <div className="mt-3 rounded-xl border border-emerald-200 bg-emerald-50/70 p-3.5">
+                  <label className="block text-xs font-bold text-emerald-900 mb-1">Guest 2 Full Name *</label>
+                  <p className="text-[11px] text-emerald-800 mb-2">This is a couple session for 2 people. The booking is under the primary guest above; please also provide the second guest's name so both therapists have the correct client on file.</p>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Alex Doe"
+                    value={bookingData.guestTwoName}
+                    onChange={(e) => updateBooking('guestTwoName', e.target.value)}
+                    className="w-full p-2.5 rounded-xl border border-emerald-300 bg-white focus:ring-2 focus:ring-emerald-600 focus:outline-none"
+                  />
+                </div>
+              )}
               <label className="mt-3 flex items-start gap-3 rounded-xl border border-stone-200 bg-stone-50 p-3.5 text-xs leading-5 text-stone-700">
                 <input
                   type="checkbox"
@@ -2696,7 +2804,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
               </button>
               <button
                 type="button"
-                disabled={!bookingData.customer.firstName || !bookingData.customer.phone || (!bookingData.intake.preCollectionConsent || (bookingData.intake.historyMode !== 'reuse' && (!bookingData.intake.consent || !bookingData.intake.signature)))}
+                disabled={!bookingData.customer.firstName || !bookingData.customer.phone || (isCoupleService && !bookingData.guestTwoName.trim()) || (!bookingData.intake.preCollectionConsent || (bookingData.intake.historyMode !== 'reuse' && (!bookingData.intake.consent || !bookingData.intake.signature)))}
                 onClick={() => setStep(4)}
                 className="px-6 py-2.5 bg-emerald-800 text-white font-semibold rounded-xl hover:bg-emerald-900 disabled:opacity-40 disabled:cursor-not-allowed transition shadow-sm flex items-center"
               >
@@ -2975,6 +3083,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                     platinumEnrollment: false,
                     companyName: '',
                     companyId: '',
+                    guestTwoName: '',
                     customer: { firstName: '', lastName: '', email: '', phone: '' },
                     intake: {
                       pressure: 'Medium', focusAreas: '', injuries: '', agreeTerms: false,
@@ -3011,7 +3120,8 @@ function AdminPortal({
   onServicesChange,
   servicesError,
   therapists, 
-  setTherapists,
+  onTherapistsChange,
+  therapistsError,
   bookings, 
   setBookings, 
   selectedBranchId, 
@@ -3606,38 +3716,68 @@ function AdminPortal({
     }
   };
 
-  // Staff management state
-  const [showAddTherapistModal, setShowAddTherapistModal] = useState(false);
-  const [deletingTherapistId, setDeletingTherapistId] = useState(null);
-  const [newTherapist, setNewTherapist] = useState({
-    name: '',
-    bio: '',
-    rating: '4.9',
-    thaiCertified: true,
-    rmtCertified: false
-  });
+  // Staff management state — therapist roster with per-weekday branch rotation, synced with the backend
+  const [therapistForm, setTherapistForm] = useState(() => therapists.map((therapist) => ({ ...therapist, schedule: { ...therapist.schedule } })));
+  const [isSavingTherapists, setIsSavingTherapists] = useState(false);
+  const [therapistSaveError, setTherapistSaveError] = useState('');
+  const [therapistSaveMessage, setTherapistSaveMessage] = useState('');
 
-  const handleAddTherapist = (e) => {
-    e.preventDefault();
-    if (!newTherapist.name.trim()) return;
-    const created = {
-      id: Date.now(),
-      name: newTherapist.name.trim(),
-      bio: newTherapist.bio.trim() || 'Experienced massage practitioner',
-      thaiCertified: newTherapist.thaiCertified,
-      rmtCertified: newTherapist.rmtCertified,
-      branches: [1, 2, 3, 4],
-      rating: parseFloat(newTherapist.rating) || 5.0
-    };
-    setTherapists(prev => [...prev, created]);
-    setNewTherapist({ name: '', bio: '', rating: '4.9', thaiCertified: true, rmtCertified: false });
-    setShowAddTherapistModal(false);
+  useEffect(() => {
+    setTherapistForm(therapists.map((therapist) => ({ ...therapist, schedule: { ...therapist.schedule } })));
+  }, [therapists]);
+
+  const updateTherapistField = (id, field, value) => {
+    setTherapistForm((prev) => prev.map((therapist) => (therapist.id === id ? { ...therapist, [field]: value } : therapist)));
   };
 
-  const handleRemoveTherapist = (id) => {
-    setTherapists(prev => prev.filter(th => th.id !== id));
-    setDeletingTherapistId(null);
+  const updateTherapistScheduleDay = (id, dayKey, branchIdRaw) => {
+    const branchId = branchIdRaw === '' ? null : Number(branchIdRaw);
+    setTherapistForm((prev) => prev.map((therapist) => (
+      therapist.id === id ? { ...therapist, schedule: { ...therapist.schedule, [dayKey]: branchId } } : therapist
+    )));
   };
+
+  const addTherapistRow = () => {
+    setTherapistForm((prev) => [
+      { id: -Date.now(), name: '', bio: '', rating: 4.9, thaiCertified: true, rmtCertified: false, branches: [], schedule: {}, active: true },
+      ...prev,
+    ]);
+  };
+
+  const removeTherapistRow = (id) => {
+    setTherapistForm((prev) => prev.filter((therapist) => therapist.id !== id));
+  };
+
+  const saveTherapistForm = async () => {
+    setIsSavingTherapists(true);
+    setTherapistSaveError('');
+    setTherapistSaveMessage('');
+    try {
+      const payload = therapistForm.map((therapist) => ({
+        ...therapist,
+        id: therapist.id > 0 ? therapist.id : undefined,
+        rating: Number(therapist.rating),
+      }));
+      const response = await fetch('/api/booking?view=therapists', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ therapists: payload }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+      onTherapistsChange(data.therapists);
+      setTherapistSaveMessage('Therapist roster and branch rotation saved. This syncs to the booking portal and therapist portal immediately.');
+    } catch (error) {
+      setTherapistSaveError(error.message || 'Unable to save therapists');
+    } finally {
+      setIsSavingTherapists(false);
+    }
+  };
+
+  const WEEKDAYS = [
+    { key: 'mon', label: 'Mon' }, { key: 'tue', label: 'Tue' }, { key: 'wed', label: 'Wed' },
+    { key: 'thu', label: 'Thu' }, { key: 'fri', label: 'Fri' }, { key: 'sat', label: 'Sat' }, { key: 'sun', label: 'Sun' },
+  ];
 
   const t = TRANSLATIONS[lang];
 
@@ -4589,58 +4729,53 @@ function AdminPortal({
 
       {/* TAB CONTENT: STAFF & THERAPISTS */}
       {activeTab === 'staff' && (
-        <div className="bg-white rounded-2xl p-6 border border-stone-200 shadow-sm space-y-6">
+        <div className="bg-white rounded-2xl p-6 border border-stone-200 shadow-sm space-y-4">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
             <div>
               <h2 className="text-lg font-bold text-stone-900">{t.staff}</h2>
-              <p className="text-xs text-stone-500">Manage registered therapists, credentials, and staffing assignments</p>
+              <p className="text-xs text-stone-500">Manage registered therapists, credentials, and which branch each therapist works at on each day of the week — supports rotation between branches. Changes sync to the booking portal and the therapist portal.</p>
             </div>
             <button
-              onClick={() => setShowAddTherapistModal(true)}
+              onClick={addTherapistRow}
               className="px-4 py-2 bg-emerald-800 text-white rounded-xl text-xs font-bold hover:bg-emerald-900 transition flex items-center shadow-sm"
             >
               <Plus className="w-4 h-4 mr-1.5" /> {t.addTherapist}
             </button>
           </div>
 
-          {/* Add Therapist Form Modal / Panel */}
-          {showAddTherapistModal && (
-            <div className="bg-stone-50 border border-stone-300 p-5 rounded-2xl space-y-4 animate-fadeIn">
-              <div className="flex justify-between items-center pb-2 border-b border-stone-200">
-                <h3 className="font-bold text-stone-900 text-sm flex items-center">
-                  <User className="w-4 h-4 mr-1.5 text-emerald-800" />
-                  {t.addTherapist}
-                </h3>
-                <button 
-                  onClick={() => setShowAddTherapistModal(false)}
-                  className="text-stone-400 hover:text-stone-700"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
+          {therapistsError && (
+            <p role="alert" className="text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">{therapistsError}</p>
+          )}
+          {therapistSaveError && (
+            <p role="alert" className="text-xs font-semibold text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{therapistSaveError}</p>
+          )}
+          {therapistSaveMessage && (
+            <p role="status" className="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">{therapistSaveMessage}</p>
+          )}
 
-              <form onSubmit={handleAddTherapist} className="space-y-4">
+          <div className="space-y-4">
+            {therapistForm.map((th) => (
+              <div key={th.id} className="p-4 rounded-xl border border-stone-200 bg-stone-50/50 space-y-3">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs font-bold text-stone-700 mb-1">Full Name *</label>
-                    <input 
+                    <input
                       type="text"
-                      required
                       placeholder="e.g. Somsak P., RMT"
-                      value={newTherapist.name}
-                      onChange={(e) => setNewTherapist(prev => ({ ...prev, name: e.target.value }))}
-                      className="w-full p-2.5 rounded-xl border border-stone-300 text-xs focus:ring-2 focus:ring-emerald-600 focus:outline-none"
+                      value={th.name}
+                      onChange={(e) => updateTherapistField(th.id, 'name', e.target.value)}
+                      className="w-full p-2.5 rounded-xl border border-stone-300 text-xs focus:ring-2 focus:ring-emerald-600 focus:outline-none font-bold"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-stone-700 mb-1">Initial Rating (1.0 - 5.0)</label>
-                    <input 
+                    <label className="block text-xs font-bold text-stone-700 mb-1">Rating (1.0 - 5.0)</label>
+                    <input
                       type="number"
                       step="0.1"
                       min="1.0"
                       max="5.0"
-                      value={newTherapist.rating}
-                      onChange={(e) => setNewTherapist(prev => ({ ...prev, rating: e.target.value }))}
+                      value={th.rating}
+                      onChange={(e) => updateTherapistField(th.id, 'rating', e.target.value)}
                       className="w-full p-2.5 rounded-xl border border-stone-300 text-xs focus:ring-2 focus:ring-emerald-600 focus:outline-none"
                     />
                   </div>
@@ -4648,105 +4783,95 @@ function AdminPortal({
 
                 <div>
                   <label className="block text-xs font-bold text-stone-700 mb-1">Professional Bio / Specialty</label>
-                  <input 
+                  <input
                     type="text"
                     placeholder="e.g. 8+ years deep tissue and Wat Pho traditional practitioner"
-                    value={newTherapist.bio}
-                    onChange={(e) => setNewTherapist(prev => ({ ...prev, bio: e.target.value }))}
+                    value={th.bio}
+                    onChange={(e) => updateTherapistField(th.id, 'bio', e.target.value)}
                     className="w-full p-2.5 rounded-xl border border-stone-300 text-xs focus:ring-2 focus:ring-emerald-600 focus:outline-none"
                   />
                 </div>
 
                 <div className="flex flex-wrap items-center gap-4 text-xs">
                   <label className="flex items-center space-x-2 cursor-pointer font-medium text-stone-800">
-                    <input 
+                    <input
                       type="checkbox"
-                      checked={newTherapist.thaiCertified}
-                      onChange={(e) => setNewTherapist(prev => ({ ...prev, thaiCertified: e.target.checked }))}
+                      checked={th.thaiCertified}
+                      onChange={(e) => updateTherapistField(th.id, 'thaiCertified', e.target.checked)}
                       className="rounded text-emerald-700 focus:ring-emerald-600 w-4 h-4"
                     />
                     <span>Traditional Thai Certified</span>
                   </label>
 
                   <label className="flex items-center space-x-2 cursor-pointer font-medium text-stone-800">
-                    <input 
+                    <input
                       type="checkbox"
-                      checked={newTherapist.rmtCertified}
-                      onChange={(e) => setNewTherapist(prev => ({ ...prev, rmtCertified: e.target.checked }))}
+                      checked={th.rmtCertified}
+                      onChange={(e) => updateTherapistField(th.id, 'rmtCertified', e.target.checked)}
                       className="rounded text-blue-700 focus:ring-blue-600 w-4 h-4"
                     />
                     <span>RMT Healthcare Certified (Ontario CMTO)</span>
                   </label>
+
+                  <label className="flex items-center space-x-2 cursor-pointer font-medium text-stone-800">
+                    <input
+                      type="checkbox"
+                      checked={th.active !== false}
+                      onChange={(e) => updateTherapistField(th.id, 'active', e.target.checked)}
+                      className="rounded text-emerald-700 focus:ring-emerald-600 w-4 h-4"
+                    />
+                    <span>Active</span>
+                  </label>
                 </div>
 
-                <div className="flex justify-end space-x-2 pt-2 border-t border-stone-200">
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1.5">Branch rotation — pick which branch this therapist works at on each day (leave "Off" if they don't work that day)</label>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2">
+                    {WEEKDAYS.map((day) => (
+                      <div key={day.key}>
+                        <label className="block text-[10px] font-bold text-stone-500 mb-0.5 uppercase">{day.label}</label>
+                        <select
+                          value={th.schedule?.[day.key] ?? ''}
+                          onChange={(e) => updateTherapistScheduleDay(th.id, day.key, e.target.value)}
+                          className="w-full p-1.5 text-[11px] rounded-lg border border-stone-300 focus:ring-2 focus:ring-emerald-600 focus:outline-none"
+                        >
+                          <option value="">Off</option>
+                          {branches.map((branch) => (
+                            <option key={branch.id} value={branch.id}>{branch.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex justify-end pt-1 border-t border-stone-200">
                   <button
                     type="button"
-                    onClick={() => setShowAddTherapistModal(false)}
-                    className="px-4 py-2 border border-stone-300 text-stone-600 rounded-xl text-xs font-bold hover:bg-stone-100 transition"
+                    onClick={() => removeTherapistRow(th.id)}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-red-600 hover:text-red-800 hover:bg-red-50 rounded-lg transition text-xs font-bold"
                   >
-                    {t.cancel}
+                    <Trash2 className="w-4 h-4" /> {t.removeTherapist}
                   </button>
-                  <button
-                    type="submit"
-                    className="px-5 py-2 bg-emerald-800 text-white rounded-xl text-xs font-bold hover:bg-emerald-900 transition shadow-sm"
-                  >
-                    {t.save}
-                  </button>
-                </div>
-              </form>
-            </div>
-          )}
-
-          <div className="grid gap-4 sm:grid-cols-2">
-            {therapists.map(th => (
-              <div key={th.id} className="p-4 rounded-xl border border-stone-200 bg-stone-50/50 flex justify-between items-start space-x-3 transition hover:shadow-sm">
-                <div className="space-y-1.5 flex-1">
-                  <div className="font-bold text-stone-900 text-base flex items-center justify-between">
-                    <span>{th.name}</span>
-                    <span className="font-bold text-xs text-amber-600 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">★ {th.rating}</span>
-                  </div>
-                  <p className="text-xs text-stone-500 line-clamp-2">{th.bio}</p>
-                  <div className="pt-1 flex flex-wrap gap-1">
-                    {th.rmtCertified && <span className="bg-blue-100 text-blue-800 text-[10px] font-bold px-2 py-0.5 rounded">RMT Certified</span>}
-                    {th.thaiCertified && <span className="bg-amber-100 text-amber-800 text-[10px] font-bold px-2 py-0.5 rounded">Traditional Thai Practitioner</span>}
-                  </div>
-                </div>
-
-                <div className="shrink-0 flex flex-col items-end justify-between self-stretch">
-                  {deletingTherapistId === th.id ? (
-                    <div className="flex flex-col items-end space-y-1">
-                      <button
-                        onClick={() => handleRemoveTherapist(th.id)}
-                        className="px-2.5 py-1 bg-red-600 text-white font-bold text-[11px] rounded-lg hover:bg-red-700 transition shadow-sm"
-                      >
-                        {t.confirmRemove}
-                      </button>
-                      <button
-                        onClick={() => setDeletingTherapistId(null)}
-                        className="text-[10px] text-stone-500 underline hover:text-stone-800"
-                      >
-                        {t.cancel}
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => setDeletingTherapistId(th.id)}
-                      className="p-1.5 text-stone-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition"
-                      title={t.removeTherapist}
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  )}
                 </div>
               </div>
             ))}
 
-            {therapists.length === 0 && (
+            {therapistForm.length === 0 && (
               <div className="col-span-full py-8 text-center text-stone-400 text-xs">
                 No therapists listed. Click "{t.addTherapist}" above to register staff members.
               </div>
             )}
+          </div>
+
+          <div className="flex justify-end pt-2">
+            <button
+              onClick={saveTherapistForm}
+              disabled={isSavingTherapists}
+              className="px-5 py-2.5 bg-emerald-800 text-white font-semibold rounded-xl hover:bg-emerald-900 disabled:opacity-50 transition text-sm"
+            >
+              {isSavingTherapists ? 'Saving…' : 'Save therapists & rotation'}
+            </button>
           </div>
         </div>
       )}

@@ -81,6 +81,39 @@ const DEFAULT_SERVICES = [
   { id: 19, name: "Registered Massage Therapy (RMT 90 min)", category: "RMT Healthcare", duration: 90, price: 170, deposit: 40, isRmt: true, taxRate: 0.00, description: "Regulated Healthcare with Insurance Receipt", active: true },
   { id: 20, name: "Traditional Thai Acupuncture (60 min)", category: "RMT Healthcare", duration: 60, price: 110, deposit: 25, isRmt: true, taxRate: 0.00, description: "Certified Medical Acupuncture", active: true },
 ];
+const THERAPIST_FIELDS = ['ID', 'Name', 'Bio', 'Rating', 'Thai Certified', 'RMT Certified', 'Branch IDs', 'Schedule', 'Active', 'Updated At'];
+const WEEKDAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+const DEFAULT_THERAPISTS = [
+  { id: 1, name: 'Kanya S.', bio: '10+ years traditional Wat Pho Thai technique experience', rating: 4.9, thaiCertified: true, rmtCertified: false, branches: [1, 2], schedule: {}, active: true },
+  { id: 2, name: 'Michael T., RMT', bio: 'CMTO Registered Massage Therapist & Deep Tissue specialist', rating: 4.8, thaiCertified: true, rmtCertified: true, branches: [1, 3], schedule: {}, active: true },
+  { id: 3, name: 'Priya P.', bio: 'Hot stone specialist and body stretch master', rating: 4.9, thaiCertified: true, rmtCertified: false, branches: [2, 4], schedule: {}, active: true },
+  { id: 4, name: 'Somchai R., RMT', bio: 'Acupuncture practitioner and sports rehabilitation', rating: 5.0, thaiCertified: true, rmtCertified: true, branches: [1, 4], schedule: {}, active: true },
+];
+
+// Returns the weekday key ('sun'..'sat') for a YYYY-MM-DD date string, avoiding timezone shifts.
+function weekdayKeyForDate(dateStr) {
+  const parsed = new Date(`${String(dateStr || '').slice(0, 10)}T12:00:00Z`);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return WEEKDAY_KEYS[parsed.getUTCDay()];
+}
+
+// Determines whether a therapist works at a given branch on a given date, honouring a
+// per-weekday rotation schedule when configured and falling back to their static branch list.
+function isTherapistScheduledAtBranch(therapist, branchId, dateStr) {
+  const targetBranchId = Number(branchId);
+  const dayKey = weekdayKeyForDate(dateStr);
+  const scheduledBranch = dayKey ? therapist?.schedule?.[dayKey] : undefined;
+  if (scheduledBranch !== undefined && scheduledBranch !== null && scheduledBranch !== '') {
+    return Number(scheduledBranch) === targetBranchId;
+  }
+  const hasAnySchedule = therapist?.schedule && WEEKDAY_KEYS.some((key) => {
+    const value = therapist.schedule[key];
+    return value !== undefined && value !== null && value !== '';
+  });
+  if (hasAnySchedule) return false;
+  return (therapist?.branches || []).map(Number).includes(targetBranchId);
+}
+
 const DEFAULT_LOYALTY_SETTINGS = {
   enabled: true,
   pointsPerDollar: 10,
@@ -743,6 +776,139 @@ async function saveServices(sheets, services) {
   await sheets.spreadsheets.values.update({
     spreadsheetId,
     range: `Services!A2:K${rows.length + 1}`,
+    valueInputOption: 'RAW',
+    requestBody: { values: rows },
+  });
+  return validated;
+}
+
+async function ensureTherapistsSheet(sheets) {
+  const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
+  if (!spreadsheetId) throw new Error('GOOGLE_SPREADSHEET_ID is not configured');
+  const spreadsheet = await sheets.spreadsheets.get({
+    spreadsheetId,
+    fields: 'sheets.properties',
+  });
+  const exists = (spreadsheet.data.sheets || [])
+    .some((sheet) => sheet.properties?.title === 'Therapists');
+  if (!exists) {
+    try {
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: { requests: [{ addSheet: { properties: { title: 'Therapists' } } }] },
+      });
+    } catch (error) {
+      const refreshed = await sheets.spreadsheets.get({
+        spreadsheetId,
+        fields: 'sheets.properties',
+      });
+      const createdByConcurrentRequest = (refreshed.data.sheets || [])
+        .some((sheet) => sheet.properties?.title === 'Therapists');
+      if (!createdByConcurrentRequest) throw error;
+    }
+    const seedRows = DEFAULT_THERAPISTS.map((therapist) => [
+      therapist.id, therapist.name, therapist.bio, therapist.rating,
+      therapist.thaiCertified ? 'TRUE' : 'FALSE', therapist.rmtCertified ? 'TRUE' : 'FALSE',
+      (therapist.branches || []).join(','), JSON.stringify(therapist.schedule || {}),
+      therapist.active ? 'TRUE' : 'FALSE', new Date().toISOString(),
+    ]);
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: 'Therapists!A1:J1',
+      valueInputOption: 'RAW',
+      requestBody: { values: [THERAPIST_FIELDS] },
+    });
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `Therapists!A2:J${seedRows.length + 1}`,
+      valueInputOption: 'RAW',
+      requestBody: { values: seedRows },
+    });
+  }
+}
+
+function validateTherapists(input) {
+  if (!Array.isArray(input) || input.length === 0) {
+    throw new Error('At least one therapist is required');
+  }
+  const seenIds = new Set();
+  return input.map((therapist) => {
+    const name = String(therapist?.name || '').trim();
+    if (!name) throw new Error('Every therapist requires a name');
+    let id = Number(therapist?.id);
+    if (!Number.isFinite(id) || id <= 0) id = Date.now() + Math.floor(Math.random() * 1000);
+    if (seenIds.has(id)) id = Date.now() + Math.floor(Math.random() * 1000) + seenIds.size;
+    seenIds.add(id);
+    let rating = Number(therapist?.rating);
+    if (!Number.isFinite(rating)) rating = 4.8;
+    rating = Math.min(5, Math.max(1, rating));
+    const branches = Array.isArray(therapist?.branches)
+      ? therapist.branches.map(Number).filter((value) => Number.isFinite(value) && value > 0)
+      : [];
+    const schedule = {};
+    WEEKDAY_KEYS.forEach((key) => {
+      const value = therapist?.schedule?.[key];
+      const branchId = Number(value);
+      schedule[key] = Number.isFinite(branchId) && branchId > 0 ? branchId : null;
+    });
+    return {
+      id,
+      name,
+      bio: String(therapist?.bio || '').trim(),
+      rating,
+      thaiCertified: therapist?.thaiCertified === true,
+      rmtCertified: therapist?.rmtCertified === true,
+      branches,
+      schedule,
+      active: therapist?.active !== false,
+    };
+  });
+}
+
+async function getTherapists(sheets) {
+  await ensureTherapistsSheet(sheets);
+  const result = await sheets.spreadsheets.values.get({
+    spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+    range: 'Therapists!A2:J',
+  });
+  const rows = result.data.values || [];
+  if (rows.length === 0) return DEFAULT_THERAPISTS;
+  return rows
+    .filter((row) => row[0] !== undefined && row[0] !== '')
+    .map((row) => {
+      let schedule = {};
+      try { schedule = JSON.parse(row[7] || '{}') || {}; } catch { schedule = {}; }
+      return {
+        id: Number(row[0]) || row[0],
+        name: row[1] || '',
+        bio: row[2] || '',
+        rating: Number(row[3]) || 4.8,
+        thaiCertified: String(row[4] || 'FALSE').toUpperCase() === 'TRUE',
+        rmtCertified: String(row[5] || 'FALSE').toUpperCase() === 'TRUE',
+        branches: String(row[6] || '').split(',').map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0),
+        schedule,
+        active: String(row[8] || 'TRUE').toUpperCase() !== 'FALSE',
+      };
+    });
+}
+
+async function saveTherapists(sheets, therapists) {
+  const validated = validateTherapists(therapists);
+  await ensureTherapistsSheet(sheets);
+  const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
+  const rows = validated.map((therapist) => [
+    therapist.id, therapist.name, therapist.bio, therapist.rating,
+    therapist.thaiCertified ? 'TRUE' : 'FALSE', therapist.rmtCertified ? 'TRUE' : 'FALSE',
+    therapist.branches.join(','), JSON.stringify(therapist.schedule || {}),
+    therapist.active ? 'TRUE' : 'FALSE', new Date().toISOString(),
+  ]);
+  await sheets.spreadsheets.values.clear({
+    spreadsheetId,
+    range: 'Therapists!A2:J',
+  });
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `Therapists!A2:J${rows.length + 1}`,
     valueInputOption: 'RAW',
     requestBody: { values: rows },
   });
@@ -2202,19 +2368,19 @@ export default async function handler(req, res) {
     }
 
     const view = String(req.query?.view || '');
-    const validGetViews = ['', 'calendar', 'patient-history', 'business-profile', 'business-name', 'square-config', 'branches', 'services', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal'];
+    const validGetViews = ['', 'calendar', 'patient-history', 'business-profile', 'business-name', 'square-config', 'branches', 'services', 'therapists', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal'];
     if (req.method === 'GET' && !validGetViews.includes(view)) {
       return res.status(404).json({ message: 'Unknown booking view' });
     }
     const ownerOnlyRequest =
       (req.method === 'GET' && ['', 'calendar', 'patient-history', 'business-profile', 'google-ads-report', 'loyalty-dashboard'].includes(view)) ||
       ['business-profile', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-link'].includes(view) ||
-      (req.method === 'POST' && ['branches', 'services'].includes(view));
+      (req.method === 'POST' && ['branches', 'services', 'therapists'].includes(view));
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
     if (ownerOnlyRequest && !getOwnerSession(req)) {
       return res.status(401).json({ message: 'Owner sign-in required' });
     }
-    if (['business-profile', 'branches', 'services', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-signup', 'company-portal-bulk-signup', 'company-portal-link', 'square-create-checkout'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
+    if (['business-profile', 'branches', 'services', 'therapists', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-signup', 'company-portal-bulk-signup', 'company-portal-link', 'square-create-checkout'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
       return res.status(403).json({ message: 'Profile update origin is not allowed' });
     }
 
@@ -2273,6 +2439,21 @@ export default async function handler(req, res) {
         return res.status(200).json({ services });
       } catch (validationError) {
         return res.status(400).json({ message: validationError.message || 'Unable to save services' });
+      }
+    }
+
+    if (req.method === 'GET' && view === 'therapists') {
+      res.setHeader('Cache-Control', 'no-store');
+      const therapists = await getTherapists(sheets);
+      return res.status(200).json({ therapists });
+    }
+
+    if (req.method === 'POST' && view === 'therapists') {
+      try {
+        const therapists = await saveTherapists(sheets, req.body?.therapists);
+        return res.status(200).json({ therapists });
+      } catch (validationError) {
+        return res.status(400).json({ message: validationError.message || 'Unable to save therapists' });
       }
     }
 
@@ -3808,9 +3989,11 @@ export default async function handler(req, res) {
     }
 
     if (req.query?.view === 'therapist-dashboard') {
-      const [bookingResult, historyResult] = await Promise.all([
+      const [bookingResult, historyResult, roster, allBranches] = await Promise.all([
         sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'Sheet1!A:R' }),
         sheets.spreadsheets.values.get({ spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID, range: 'PatientHistory!A:AH' }),
+        getTherapists(sheets),
+        getBranches(sheets),
       ]);
       const bookings = (bookingResult.data.values || []).filter((row) => row[0] && row[0] !== 'Booking ID');
       const histories = (historyResult.data.values || []).filter((row) => row[0] && row[0] !== 'Booking ID');
@@ -3940,6 +4123,19 @@ export default async function handler(req, res) {
           location: event.location || '',
           description: event.description || '',
         }));
+      const rosterEntry = roster.find((item) => String(item.name || '').trim().toLowerCase() === String(account.name || '').trim().toLowerCase());
+      const branchById = new Map(allBranches.map((branch) => [Number(branch.id), branch.name]));
+      const weeklySchedule = WEEKDAY_KEYS.map((dayKey) => {
+        const branchId = rosterEntry?.schedule?.[dayKey];
+        return { day: dayKey, branchId: branchId || null, branchName: branchId ? (branchById.get(Number(branchId)) || null) : null };
+      });
+      const todayBranchId = rosterEntry ? (() => {
+        const todayKey = weekdayKeyForDate(new Date().toISOString().slice(0, 10));
+        const scheduled = rosterEntry.schedule?.[todayKey];
+        if (scheduled) return Number(scheduled);
+        const hasAnySchedule = WEEKDAY_KEYS.some((key) => rosterEntry.schedule?.[key]);
+        return hasAnySchedule ? null : (rosterEntry.branches?.[0] || null);
+      })() : null;
       return res.status(200).json({
         therapist: { name: account.name },
         professionalProfile: {
@@ -3960,6 +4156,8 @@ export default async function handler(req, res) {
           branchNames,
           attendedHours,
           attendedClientCount: attended.length,
+          weeklySchedule,
+          todayBranchName: todayBranchId ? (branchById.get(Number(todayBranchId)) || null) : null,
         },
         attended,
         summary: {
