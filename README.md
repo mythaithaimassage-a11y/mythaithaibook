@@ -156,6 +156,31 @@ Setup steps:
 If Square is not configured, the payment button is hidden and the app behaves
 exactly as before (pay-at-clinic / manually marked-paid bookings).
 
+## Google Reviews
+
+The owner dashboard has a **Google Reviews** section (under **Grow**) that
+shows your Google Business Profile's average rating, total rating count, and
+most recent reviews, along with quick links to view all reviews on Google and
+to send customers straight to your review form.
+
+This uses the [Places API (Place Details)](https://developers.google.com/maps/documentation/places/web-service/details)
+with an API key, so it does not require the more restrictive Google Business
+Profile API / OAuth setup. To enable it, add these server-side Vercel
+Environment Variables:
+
+- `GOOGLE_PLACES_API_KEY` (an API key with the **Places API** enabled in
+  [Google Cloud Console](https://console.cloud.google.com/apis/credentials);
+  restrict it to the Places API for security)
+- `GOOGLE_PLACE_ID` (your business's Google Place ID — look it up with the
+  [Place ID Finder](https://developers.google.com/maps/documentation/places/web-service/place-id))
+
+Redeploy after adding these. Reviews are cached for 10 minutes per server
+instance to stay within Places API quotas; use **Refresh** in the dashboard to
+force a check sooner. If these variables are not set, the section shows setup
+instructions instead of an error. Note the Places API only returns up to 5 of
+the most relevant/recent reviews — for the full list, use the **View on
+Google** link.
+
 The owner dashboard's **Loyalty program** section lets the owner configure the
 Standard, Gold, and Platinum plans, point earning and redemption, first-session
 bonus, monthly Gold Hot Stone allowance, and Platinum top-up price, hours, and

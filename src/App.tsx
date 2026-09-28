@@ -8,7 +8,7 @@ import {
   TrendingUp, ChevronRight, AlertCircle, Sparkles, ShieldCheck, Check, X,
   DollarSign, Users, Award, Briefcase, RefreshCw, Layers, CheckSquare, Stethoscope, Database,
   Menu, Home, CalendarDays, UserRound, BarChart3, ChevronRight as ChevronRightIcon,
-  Megaphone, ReceiptText, Download, Eye, MousePointerClick, Upload, Crown
+  Megaphone, ReceiptText, Download, Eye, MousePointerClick, Upload, Crown, Star
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
@@ -3260,6 +3260,9 @@ function AdminPortal({
   const [googleAdsReport, setGoogleAdsReport] = useState(null);
   const [isLoadingGoogleAds, setIsLoadingGoogleAds] = useState(false);
   const [googleAdsError, setGoogleAdsError] = useState('');
+  const [googleReviews, setGoogleReviews] = useState(null);
+  const [isLoadingGoogleReviews, setIsLoadingGoogleReviews] = useState(false);
+  const [googleReviewsError, setGoogleReviewsError] = useState('');
   const [googleAdsStartDate, setGoogleAdsStartDate] = useState(() => {
     const date = new Date();
     date.setDate(date.getDate() - 29);
@@ -3393,6 +3396,25 @@ function AdminPortal({
 
   useEffect(() => {
     if (activeTab === 'google-ads') loadGoogleAdsReport();
+  }, [activeTab]);
+
+  const loadGoogleReviews = async () => {
+    setIsLoadingGoogleReviews(true);
+    setGoogleReviewsError('');
+    try {
+      const response = await fetch('/api/booking?view=google-reviews');
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Google Reviews returned status ${response.status}`);
+      setGoogleReviews(data);
+    } catch (error) {
+      setGoogleReviewsError(error.message || 'Unable to load Google reviews.');
+    } finally {
+      setIsLoadingGoogleReviews(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'reviews') loadGoogleReviews();
   }, [activeTab]);
 
   const loadLoyaltyDashboard = async () => {
@@ -4229,6 +4251,7 @@ function AdminPortal({
     { id: 'loyalty', label: 'Loyalty program', icon: Award, section: 'Grow' },
     { id: 'marketing', label: 'Email marketing', icon: Megaphone, section: 'Grow' },
     { id: 'google-ads', label: 'Google Ads', icon: TrendingUp, section: 'Grow' },
+    { id: 'reviews', label: 'Google Reviews', icon: Star, section: 'Grow' },
   ];
   const navigationSections = ['Workspace', 'Manage', 'Grow'];
   const pageTitle = {
@@ -4238,6 +4261,7 @@ function AdminPortal({
     loyalty: 'Loyalty program',
     marketing: 'Email marketing',
     'google-ads': 'Google Ads',
+    reviews: 'Google Reviews',
     services: t.services,
     staff: t.staff,
     branches: 'Branches',
@@ -5429,6 +5453,111 @@ function AdminPortal({
                 ) : <p className="p-8 text-center text-sm text-slate-500">{googleAdsReport.campaigns.length ? 'No campaigns match the current search and filters.' : 'No campaigns were returned for the selected dates.'}</p>}
               </section>
               <p className="text-xs leading-5 text-slate-500">Reporting is read-only. Create, edit, and manage budgets from Google Ads. Metrics are provided by Google Ads and may be delayed.</p>
+            </>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'reviews' && (
+        <div className="space-y-5">
+          <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <div className="bg-gradient-to-r from-slate-950 via-slate-900 to-amber-900 px-5 py-6 text-white sm:px-7">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div className="flex items-start gap-4">
+                  <span className="rounded-xl bg-white/10 p-3 text-amber-200"><Star className="h-5 w-5" /></span>
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-200">Grow your practice</p>
+                    <h2 className="mt-1 text-xl font-bold">Google Reviews</h2>
+                    <p className="mt-1 max-w-2xl text-sm text-slate-300">See your latest Google Business Profile reviews and rating at a glance.</p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" onClick={loadGoogleReviews} disabled={isLoadingGoogleReviews} className="inline-flex items-center gap-2 rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-xs font-semibold text-white transition hover:bg-white/15 disabled:opacity-50">
+                    <RefreshCw className={`h-3.5 w-3.5 ${isLoadingGoogleReviews ? 'animate-spin' : ''}`} />Refresh
+                  </button>
+                  {googleReviews?.reviewUrl && (
+                    <a href={googleReviews.reviewUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-900 transition hover:bg-amber-50">
+                      Ask for a review <Globe className="h-3.5 w-3.5" />
+                    </a>
+                  )}
+                  {googleReviews?.mapsUrl && (
+                    <a href={googleReviews.mapsUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-900 transition hover:bg-amber-50">
+                      View on Google
+                    </a>
+                  )}
+                </div>
+              </div>
+            </div>
+          </section>
+
+          {googleReviewsError && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{googleReviewsError}</div>}
+          {isLoadingGoogleReviews && !googleReviews && <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">Fetching your Google reviews…</div>}
+
+          {googleReviews?.enabled === false && (
+            <div role="alert" className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              <AlertCircle className="h-4 w-4 shrink-0" />
+              Google Reviews are not connected yet. Add <code className="mx-1 rounded bg-amber-100 px-1 py-0.5 font-mono">GOOGLE_PLACES_API_KEY</code> and <code className="mx-1 rounded bg-amber-100 px-1 py-0.5 font-mono">GOOGLE_PLACE_ID</code> to the server environment, then refresh.
+            </div>
+          )}
+
+          {googleReviews?.enabled && (
+            <>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <p className="text-xs font-medium text-slate-500">Average rating</p>
+                  <div className="mt-2 flex items-baseline gap-2">
+                    <span className="text-3xl font-bold text-slate-950">{googleReviews.rating?.toFixed(1) ?? '—'}</span>
+                    <div className="flex items-center gap-0.5">
+                      {Array.from({ length: 5 }, (_, index) => (
+                        <Star key={index} className={`h-4 w-4 ${index < Math.round(googleReviews.rating || 0) ? 'fill-amber-400 text-amber-400' : 'text-slate-200'}`} />
+                      ))}
+                    </div>
+                  </div>
+                </section>
+                <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <p className="text-xs font-medium text-slate-500">Total ratings</p>
+                  <p className="mt-2 text-3xl font-bold text-slate-950">{Number(googleReviews.totalRatings || 0).toLocaleString()}</p>
+                </section>
+                <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <p className="text-xs font-medium text-slate-500">Business</p>
+                  <p className="mt-2 truncate text-lg font-semibold text-slate-950">{googleReviews.businessName || 'Not available'}</p>
+                </section>
+              </div>
+
+              <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+                <div className="border-b border-slate-100 px-5 py-4">
+                  <h3 className="text-base font-semibold text-slate-900">Most recent reviews</h3>
+                  <p className="mt-1 text-xs text-slate-500">Google surfaces up to 5 recent reviews through the Places API.</p>
+                </div>
+                {googleReviews.reviews.length === 0 ? (
+                  <p className="p-8 text-center text-sm text-slate-500">No reviews are available yet.</p>
+                ) : (
+                  <ul className="divide-y divide-slate-100">
+                    {googleReviews.reviews.map((review, index) => (
+                      <li key={`${review.authorName}-${index}`} className="flex gap-3 px-5 py-4">
+                        {review.authorPhotoUrl ? (
+                          <img src={review.authorPhotoUrl} alt="" className="h-9 w-9 shrink-0 rounded-full object-cover" />
+                        ) : (
+                          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-xs font-bold text-slate-500">{(review.authorName || '?').charAt(0).toUpperCase()}</span>
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="text-sm font-semibold text-slate-900">{review.authorName}</span>
+                            <span className="text-[11px] text-slate-400">{review.relativeTime}</span>
+                          </div>
+                          <div className="mt-1 flex items-center gap-0.5">
+                            {Array.from({ length: 5 }, (_, starIndex) => (
+                              <Star key={starIndex} className={`h-3.5 w-3.5 ${starIndex < review.rating ? 'fill-amber-400 text-amber-400' : 'text-slate-200'}`} />
+                            ))}
+                          </div>
+                          {review.text && <p className="mt-2 text-sm leading-6 text-slate-600">{review.text}</p>}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+              <p className="text-xs leading-5 text-slate-500">Reviews are read-only and refresh from Google every few minutes. Use "Ask for a review" to send customers straight to your Google review form.</p>
             </>
           )}
         </div>

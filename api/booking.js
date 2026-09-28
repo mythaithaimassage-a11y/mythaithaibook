@@ -38,6 +38,8 @@ const SQUARE_ENVIRONMENT = (process.env.SQUARE_ENVIRONMENT || 'production').toLo
 const SQUARE_WEBHOOK_SIGNATURE_KEY = process.env.SQUARE_WEBHOOK_SIGNATURE_KEY || '';
 const SQUARE_WEBHOOK_NOTIFICATION_URL = process.env.SQUARE_WEBHOOK_NOTIFICATION_URL || '';
 const SQUARE_API_VERSION = '2024-08-21';
+const GOOGLE_PLACES_API_KEY = process.env.GOOGLE_PLACES_API_KEY || '';
+const GOOGLE_PLACE_ID = process.env.GOOGLE_PLACE_ID || '';
 const BUSINESS_PROFILE_FIELDS = ['businessName', 'legalName', 'tagline', 'email', 'phone', 'website', 'address', 'taxRegistrationNumber', 'photoUrl'];
 const LEGACY_BUSINESS_PROFILE_FIELDS = ['businessName', 'tagline', 'email', 'phone', 'website', 'address'];
 const DEFAULT_BUSINESS_PROFILE = {
@@ -2302,6 +2304,58 @@ function isSquareConfigured() {
   return Boolean(SQUARE_ACCESS_TOKEN && SQUARE_LOCATION_ID);
 }
 
+function isGoogleReviewsConfigured() {
+  return Boolean(GOOGLE_PLACES_API_KEY && GOOGLE_PLACE_ID);
+}
+
+let cachedGoogleReviews = null;
+let cachedGoogleReviewsAt = 0;
+const GOOGLE_REVIEWS_CACHE_MS = 10 * 60 * 1000;
+
+async function fetchGoogleReviews() {
+  if (!isGoogleReviewsConfigured()) {
+    const error = new Error('Google Reviews are not configured yet. Add GOOGLE_PLACES_API_KEY and GOOGLE_PLACE_ID to enable this.');
+    error.statusCode = 503;
+    throw error;
+  }
+  if (cachedGoogleReviews && Date.now() - cachedGoogleReviewsAt < GOOGLE_REVIEWS_CACHE_MS) {
+    return cachedGoogleReviews;
+  }
+  const url = new URL('https://maps.googleapis.com/maps/api/place/details/json');
+  url.searchParams.set('place_id', GOOGLE_PLACE_ID);
+  url.searchParams.set('fields', 'name,rating,user_ratings_total,reviews,url');
+  url.searchParams.set('reviews_sort', 'newest');
+  url.searchParams.set('key', GOOGLE_PLACES_API_KEY);
+  const response = await fetch(url.toString());
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || (data.status && data.status !== 'OK')) {
+    const detail = data.error_message || data.status || `Google Places API returned status ${response.status}`;
+    const error = new Error(detail);
+    error.statusCode = 502;
+    throw error;
+  }
+  const result = data.result || {};
+  const payload = {
+    businessName: result.name || '',
+    rating: result.rating || 0,
+    totalRatings: result.user_ratings_total || 0,
+    reviewUrl: `https://search.google.com/local/writereview?placeid=${encodeURIComponent(GOOGLE_PLACE_ID)}`,
+    mapsUrl: result.url || '',
+    reviews: (result.reviews || []).map((review) => ({
+      authorName: review.author_name || 'Google user',
+      authorPhotoUrl: review.profile_photo_url || '',
+      authorUrl: review.author_url || '',
+      rating: review.rating || 0,
+      relativeTime: review.relative_time_description || '',
+      time: review.time ? review.time * 1000 : null,
+      text: review.text || '',
+    })),
+  };
+  cachedGoogleReviews = payload;
+  cachedGoogleReviewsAt = Date.now();
+  return payload;
+}
+
 async function squareRequest(method, path, body) {
   const response = await fetch(`${squareApiBase()}${path}`, {
     method,
@@ -2408,12 +2462,12 @@ export default async function handler(req, res) {
     }
 
     const view = String(req.query?.view || '');
-    const validGetViews = ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'business-name', 'square-config', 'branches', 'services', 'therapists', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal'];
+    const validGetViews = ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'business-name', 'square-config', 'google-reviews', 'branches', 'services', 'therapists', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal'];
     if (req.method === 'GET' && !validGetViews.includes(view)) {
       return res.status(404).json({ message: 'Unknown booking view' });
     }
     const ownerOnlyRequest =
-      (req.method === 'GET' && ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'google-ads-report', 'loyalty-dashboard'].includes(view)) ||
+      (req.method === 'GET' && ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'google-ads-report', 'loyalty-dashboard', 'google-reviews'].includes(view)) ||
       ['business-profile', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-link'].includes(view) ||
       (req.method === 'POST' && ['branches', 'services', 'therapists'].includes(view));
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
@@ -2450,6 +2504,15 @@ export default async function handler(req, res) {
     if (req.method === 'GET' && view === 'square-config') {
       res.setHeader('Cache-Control', 'no-store');
       return res.status(200).json({ enabled: isSquareConfigured() });
+    }
+
+    if (req.method === 'GET' && view === 'google-reviews') {
+      res.setHeader('Cache-Control', 'no-store');
+      if (!isGoogleReviewsConfigured()) {
+        return res.status(200).json({ enabled: false });
+      }
+      const reviews = await fetchGoogleReviews();
+      return res.status(200).json({ enabled: true, ...reviews });
     }
 
     if (req.method === 'GET' && view === 'branches') {
