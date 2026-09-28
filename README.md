@@ -424,7 +424,31 @@ Platinum with a company contact email on file; the owner can also copy/
 re-share it any time from the **Members & balances** table with the **Copy
 portal link** button. Portal access, the token, and each company's
 registration details are stored in the BigQuery `loyalty_companies` table
-(auto-created alongside the other loyalty tables). Whenever an employee's completed visit
+(auto-created alongside the other loyalty tables).
+
+### Employee self-registration link
+
+So the primary contact does not have to onboard every colleague by hand, each
+Platinum company also gets a **separate, restricted employee signup link**
+(`?joinToken=…`) with its own token, stored in the `Join Token` column of
+`loyalty_companies`. Companies enrolled before this existed are backfilled with
+a join token automatically the next time their portal or portal link is opened.
+
+The primary contact copies it from the **Let employees sign themselves up**
+panel inside their company portal (the owner can also copy it from the
+**Members & balances** table with **Copy employee signup link**) and forwards it
+to the whole team. Opening it shows only the company name, the Platinum
+benefits, and a name/email/phone form — it deliberately exposes **no** employee
+roster, hours balance, top-up history, or bulk upload, and it cannot be used to
+open the admin company portal. This matters because the admin
+`?companyToken=…` link must *not* be forwarded to employees: it would reveal
+every colleague's contact details and usage.
+
+Employees who sign up this way are enrolled exactly as if the primary contact
+had added them: organization, company ID, and contact email are forced from the
+token record (so the link can never enrol someone under a different company),
+they are never marked as the primary contact, duplicate emails are rejected,
+and the usual Platinum welcome email is sent. Whenever an employee's completed visit
 deducts prepaid hours from the shared balance, the registered company contact
 is automatically emailed who used their benefit, the service, hours used, and
 the company's remaining shared balance, in addition to the employee's own

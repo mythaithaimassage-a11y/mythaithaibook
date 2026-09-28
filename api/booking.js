@@ -138,7 +138,7 @@ const LOYALTY_SHEETS = {
   LoyaltySettings: ['Settings JSON', 'Updated At'],
   LoyaltyMembers: ['Email', 'Name', 'Phone', 'Enrolled At', 'Updated At', 'Membership Type', 'Organization', 'Paid Through', 'Company ID', 'Company Contact Email', 'Is Primary Contact'],
   LoyaltyLedger: ['Transaction ID', 'Email', 'Booking ID', 'Type', 'Points', 'Reward Value', 'Description', 'Created At', 'Hours', 'Receipt No.'],
-  LoyaltyCompanies: ['Organization', 'Company ID', 'Contact Email', 'Access Token', 'Created At', 'Updated At'],
+  LoyaltyCompanies: ['Organization', 'Company ID', 'Contact Email', 'Access Token', 'Created At', 'Updated At', 'Join Token'],
 };
 const MARKETING_CONTACT_HEADERS = [
   'Email',
@@ -650,7 +650,7 @@ const LOYALTY_TABLE_COLUMNS = {
     'transaction_id', 'email', 'booking_id', 'type', 'points', 'reward_value',
     'description', 'created_at', 'hours', 'receipt_no',
   ],
-  LoyaltyCompanies: ['organization', 'company_id', 'contact_email', 'access_token', 'created_at', 'updated_at'],
+  LoyaltyCompanies: ['organization', 'company_id', 'contact_email', 'access_token', 'created_at', 'updated_at', 'join_token'],
 };
 const LOYALTY_ROW_INDEX_COLUMN = 'row_index';
 const LOYALTY_FIRST_DATA_ROW = 2;
@@ -699,7 +699,28 @@ async function ensureLoyaltyTables(bigquery = getBigQueryClient()) {
         const tableName = LOYALTY_TABLE_NAMES[title];
         const table = dataset.table(tableName);
         const [tableExists] = await table.exists();
-        if (tableExists) continue;
+        if (tableExists) {
+          // Tables created by an earlier release can be missing columns added since.
+          // BigQuery only allows appending NULLABLE columns, which is all we ever do.
+          const [metadata] = await table.getMetadata();
+          const existing = new Set((metadata.schema?.fields || []).map((field) => field.name));
+          const missing = columns.filter((name) => !existing.has(name));
+          if (missing.length) {
+            try {
+              await table.setMetadata({
+                schema: {
+                  fields: [
+                    ...(metadata.schema?.fields || []),
+                    ...missing.map((name) => ({ name, type: 'STRING', mode: 'NULLABLE' })),
+                  ],
+                },
+              });
+            } catch (error) {
+              console.error(`Loyalty table ${tableName} column migration failed:`, error.message || error);
+            }
+          }
+          continue;
+        }
         const schema = [
           { name: LOYALTY_ROW_INDEX_COLUMN, type: 'INT64', mode: 'REQUIRED' },
           ...columns.map((name) => ({ name, type: 'STRING', mode: 'NULLABLE' })),
@@ -1842,7 +1863,7 @@ function normalizeOrganizationKey(organization) {
 }
 
 async function getCompanyPortalRows(sheets) {
-  const result = await bqLoyaltyValuesGet('LoyaltyCompanies!A:F');
+  const result = await bqLoyaltyValuesGet('LoyaltyCompanies!A:G');
   return result.data.values || [];
 }
 
@@ -1863,14 +1884,17 @@ async function ensureCompanyPortalAccess(sheets, organization, companyId, contac
     const existingContactEmail = normalizeLoyaltyEmail(row[2]);
     const nextCompanyId = companyId || existingCompanyId;
     const nextContactEmail = contactEmail || existingContactEmail;
-    if (nextCompanyId !== existingCompanyId || nextContactEmail !== existingContactEmail) {
-      await bqLoyaltyValuesUpdate(`LoyaltyCompanies!B${rowIndex + 1}:F${rowIndex + 1}`, [[nextCompanyId, nextContactEmail, row[3] || '', row[4] || now, now]]);
+    // Companies enrolled before employee self-signup existed have no join token yet.
+    const joinToken = row[6] || crypto.randomBytes(24).toString('hex');
+    if (nextCompanyId !== existingCompanyId || nextContactEmail !== existingContactEmail || joinToken !== row[6]) {
+      await bqLoyaltyValuesUpdate(`LoyaltyCompanies!B${rowIndex + 1}:G${rowIndex + 1}`, [[nextCompanyId, nextContactEmail, row[3] || '', row[4] || now, now, joinToken]]);
     }
-    return { token: row[3] || '', isNew: false, contactEmail: nextContactEmail };
+    return { token: row[3] || '', joinToken, isNew: false, contactEmail: nextContactEmail };
   }
   const token = crypto.randomBytes(24).toString('hex');
-  await bqLoyaltyValuesAppend('LoyaltyCompanies!A:F', [[organization.trim(), companyId || '', contactEmail || '', token, now, now]]);
-  return { token, isNew: true, contactEmail: contactEmail || '' };
+  const joinToken = crypto.randomBytes(24).toString('hex');
+  await bqLoyaltyValuesAppend('LoyaltyCompanies!A:G', [[organization.trim(), companyId || '', contactEmail || '', token, now, now, joinToken]]);
+  return { token, joinToken, isNew: true, contactEmail: contactEmail || '' };
 }
 
 // Ensures at most one primary owner/contact per company: clears the "Is Primary Contact"
@@ -1898,6 +1922,16 @@ async function findCompanyPortalByToken(sheets, token) {
   const rowIndex = rows.findIndex((row, index) => index > 0 && row[3] === token);
   if (rowIndex < 1) return null;
   const row = rows[rowIndex];
+  return { organization: row[0] || '', companyId: row[1] || '', contactEmail: normalizeLoyaltyEmail(row[2]), joinToken: row[6] || '' };
+}
+
+// The join token is the employee-facing counterpart of the admin access token: it only
+// ever authorises self-enrolment, never reading the employee roster or usage history.
+async function findCompanyByJoinToken(sheets, joinToken) {
+  const rows = await getCompanyPortalRows(sheets);
+  const rowIndex = rows.findIndex((row, index) => index > 0 && row[6] && row[6] === joinToken);
+  if (rowIndex < 1) return null;
+  const row = rows[rowIndex];
   return { organization: row[0] || '', companyId: row[1] || '', contactEmail: normalizeLoyaltyEmail(row[2]) };
 }
 
@@ -1908,11 +1942,63 @@ function getManageBookingUrl(req, bookingId) {
   return `${protocol}://${host}/?manage=1&ref=${encodeURIComponent(bookingId)}`;
 }
 
+// Shared enrolment path for both the admin company portal and the restricted employee join link.
+// Organization, company ID, and contact email are forced from the token record (not client-supplied) so a
+// link cannot be used to enroll an employee under a different company. The new employee is never marked as
+// the primary contact (column K left blank) - only staff can designate a primary owner/contact, and only
+// that person's top-ups fund the company's shared prepaid-hour pool.
+async function enrollCompanyEmployee(sheets, res, company, payload) {
+  const settings = await getLoyaltySettings();
+  if (!settings.enabled) return res.status(409).json({ message: 'The loyalty program is currently paused.' });
+  const email = normalizeLoyaltyEmail(payload?.email);
+  const name = String(payload?.name || '').trim().slice(0, 120);
+  const phone = String(payload?.phone || '').trim().slice(0, 50);
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !name) {
+    return res.status(400).json({ message: 'Enter a valid employee email and name.' });
+  }
+  const membersResult = await bqLoyaltyValuesGet('LoyaltyMembers!A:K');
+  const rows = membersResult.data.values || [];
+  const existingIndex = rows.findIndex((row, index) => index > 0 && normalizeLoyaltyEmail(row[0]) === email);
+  if (existingIndex >= 1) {
+    const existingType = String(rows[existingIndex][5] || 'regular').toLowerCase();
+    const existingOrganization = String(rows[existingIndex][6] || '').trim();
+    if (existingType === 'platinum' && normalizeOrganizationKey(existingOrganization) === normalizeOrganizationKey(company.organization)) {
+      return res.status(409).json({ message: 'This employee is already signed up for your company\'s Platinum membership.' });
+    }
+    return res.status(409).json({ message: 'This email is already enrolled under a different membership. Contact the clinic to update it.' });
+  }
+  const now = new Date().toISOString();
+  await bqLoyaltyValuesAppend('LoyaltyMembers!A:K', [[email, name, phone, now, now, 'platinum', company.organization, '', company.companyId, company.contactEmail, '']]);
+  const ledgerRows = (await bqLoyaltyValuesGet('LoyaltyLedger!A:J')).data.values?.slice(1) || [];
+  const hoursBalance = loyaltyPlatinumHoursBalance(rows.slice(1), ledgerRows, company.organization, email);
+  const member = {
+    email, name, phone, membershipType: 'platinum', organization: company.organization, companyId: company.companyId, hoursBalance,
+  };
+  let emailSent = false;
+  let emailError = '';
+  try {
+    await sendMembershipEmail(createGmailApi(), member, settings, await getBusinessProfile(sheets), 'welcome', company.contactEmail);
+    emailSent = true;
+  } catch (error) {
+    emailError = error.message || 'Membership email could not be sent.';
+    console.error('Company portal signup email error:', emailError);
+  }
+  return res.status(200).json({ member, emailSent, emailError });
+}
+
 function getCompanyPortalUrl(req, token) {
   const host = req.headers['x-forwarded-host'] || req.headers.host;
   if (!host || /[\r\n/]/.test(host)) throw new Error('Unable to determine the public app address for the company portal link');
   const protocol = req.headers['x-forwarded-proto'] === 'http' ? 'http' : 'https';
   return `${protocol}://${host}/?companyToken=${encodeURIComponent(token)}`;
+}
+
+function getCompanyJoinUrl(req, joinToken) {
+  if (!joinToken) return '';
+  const host = req.headers['x-forwarded-host'] || req.headers.host;
+  if (!host || /[\r\n/]/.test(host)) return '';
+  const protocol = req.headers['x-forwarded-proto'] === 'http' ? 'http' : 'https';
+  return `${protocol}://${host}/?joinToken=${encodeURIComponent(joinToken)}`;
 }
 
 function validateLoyaltySettings(input) {
@@ -3691,7 +3777,7 @@ export default async function handler(req, res) {
     }
 
     const view = String(req.query?.view || '');
-    const validGetViews = ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'business-name', 'square-config', 'google-reviews', 'branches', 'services', 'therapists', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal', 'find-booking', 'availability', 'unavailability', 'campaign-log', 'campaign-audience-options', 'review-request-audience'];
+    const validGetViews = ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'business-name', 'square-config', 'google-reviews', 'branches', 'services', 'therapists', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal', 'company-join', 'find-booking', 'availability', 'unavailability', 'campaign-log', 'campaign-audience-options', 'review-request-audience'];
     if (req.method === 'GET' && !validGetViews.includes(view)) {
       return res.status(404).json({ message: 'Unknown booking view' });
     }
@@ -3703,7 +3789,7 @@ export default async function handler(req, res) {
     if (ownerOnlyRequest && !getOwnerSession(req)) {
       return res.status(401).json({ message: 'Owner sign-in required' });
     }
-    if (['business-profile', 'branches', 'services', 'therapists', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-clear-ledger', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-signup', 'company-portal-bulk-signup', 'company-portal-link', 'square-create-checkout', 'cancel-booking', 'reschedule-booking', 'unavailability', 'unavailability-delete', 'review-request-send', 'reassign-therapist'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
+    if (['business-profile', 'branches', 'services', 'therapists', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-clear-ledger', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-signup', 'company-portal-bulk-signup', 'company-join-signup', 'company-portal-link', 'square-create-checkout', 'cancel-booking', 'reschedule-booking', 'unavailability', 'unavailability-delete', 'review-request-send', 'reassign-therapist'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
       return res.status(403).json({ message: 'Profile update origin is not allowed' });
     }
 
@@ -4452,7 +4538,7 @@ export default async function handler(req, res) {
       }
       await ensureLoyaltyTables();
       const access = await ensureCompanyPortalAccess(sheets, organization, companyId, companyContactEmail);
-      return res.status(200).json({ organization, portalUrl: getCompanyPortalUrl(req, access.token) });
+      return res.status(200).json({ organization, portalUrl: getCompanyPortalUrl(req, access.token), joinUrl: getCompanyJoinUrl(req, access.joinToken) });
     }
 
     if (req.method === 'POST' && view === 'loyalty-remove-company') {
@@ -5119,6 +5205,15 @@ export default async function handler(req, res) {
       await ensureLoyaltyTables();
       const company = await findCompanyPortalByToken(sheets, token);
       if (!company) return res.status(404).json({ message: 'This company portal link is invalid or no longer active.' });
+      // Companies created before employee self-signup existed have no join token stored yet.
+      let joinToken = company.joinToken;
+      if (!joinToken) {
+        try {
+          joinToken = (await ensureCompanyPortalAccess(sheets, company.organization, company.companyId, company.contactEmail)).joinToken;
+        } catch (error) {
+          console.error('Company join token backfill error:', error.message);
+        }
+      }
       const [membersResult, ledgerResult] = await Promise.all([
         bqLoyaltyValuesGet('LoyaltyMembers!A:K'),
         bqLoyaltyValuesGet('LoyaltyLedger!A:J'),
@@ -5183,11 +5278,46 @@ export default async function handler(req, res) {
         organization: company.organization,
         companyId: company.companyId,
         contactEmail: company.contactEmail,
+        joinUrl: getCompanyJoinUrl(req, joinToken),
         employees,
         topUps,
         usage,
         totals,
       });
+    }
+
+    // Employee-facing join link. Deliberately returns only the company name and the Platinum
+    // plan benefits - never the employee roster, top-ups, or usage history that the admin
+    // `company-portal` view exposes.
+    if (view === 'company-join' && req.method === 'GET') {
+      const joinToken = String(req.query?.token || '');
+      if (!/^[a-f0-9]{48}$/.test(joinToken)) {
+        return res.status(400).json({ message: 'This signup link is invalid or incomplete.' });
+      }
+      await ensureLoyaltyTables();
+      const company = await findCompanyByJoinToken(sheets, joinToken);
+      if (!company) return res.status(404).json({ message: 'This signup link is invalid or no longer active.' });
+      const settings = await getLoyaltySettings();
+      return res.status(200).json({
+        organization: company.organization,
+        enabled: !!settings.enabled,
+        platinum: {
+          discountPercent: Number(settings.membershipPlans?.platinum?.discountPercent) || 0,
+          includedHours: Number(settings.membershipPlans?.platinum?.includedHours) || 0,
+          hotStoneDiscount: Number(settings.membershipPlans?.platinum?.hotStoneDiscount) || 0,
+        },
+      });
+    }
+
+    if (view === 'company-join-signup' && req.method === 'POST') {
+      const joinToken = String(req.body?.token || '');
+      if (!/^[a-f0-9]{48}$/.test(joinToken)) {
+        return res.status(400).json({ message: 'This signup link is invalid or incomplete.' });
+      }
+      await ensureLoyaltyTables();
+      const company = await findCompanyByJoinToken(sheets, joinToken);
+      if (!company) return res.status(404).json({ message: 'This signup link is invalid or no longer active.' });
+      return enrollCompanyEmployee(sheets, res, company, req.body);
     }
 
     if (view === 'company-portal-signup' && req.method === 'POST') {
@@ -5198,46 +5328,7 @@ export default async function handler(req, res) {
       await ensureLoyaltyTables();
       const company = await findCompanyPortalByToken(sheets, token);
       if (!company) return res.status(404).json({ message: 'This company portal link is invalid or no longer active.' });
-      const settings = await getLoyaltySettings();
-      if (!settings.enabled) return res.status(409).json({ message: 'The loyalty program is currently paused.' });
-      const email = normalizeLoyaltyEmail(req.body?.email);
-      const name = String(req.body?.name || '').trim().slice(0, 120);
-      const phone = String(req.body?.phone || '').trim().slice(0, 50);
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || !name) {
-        return res.status(400).json({ message: 'Enter a valid employee email and name.' });
-      }
-      const membersResult = await bqLoyaltyValuesGet('LoyaltyMembers!A:K');
-      const rows = membersResult.data.values || [];
-      const existingIndex = rows.findIndex((row, index) => index > 0 && normalizeLoyaltyEmail(row[0]) === email);
-      if (existingIndex >= 1) {
-        const existingType = String(rows[existingIndex][5] || 'regular').toLowerCase();
-        const existingOrganization = String(rows[existingIndex][6] || '').trim();
-        if (existingType === 'platinum' && normalizeOrganizationKey(existingOrganization) === normalizeOrganizationKey(company.organization)) {
-          return res.status(409).json({ message: 'This employee is already signed up for your company\'s Platinum membership.' });
-        }
-        return res.status(409).json({ message: 'This email is already enrolled under a different membership. Contact the clinic to update it.' });
-      }
-      const now = new Date().toISOString();
-      // Organization, company ID, and contact email are forced from the token record (not client-supplied) so a
-      // company portal link cannot be used to enroll an employee under a different company. The new employee is
-      // never marked as the primary contact (column K left blank) — only staff can designate a primary owner/contact,
-      // and only that person's top-ups fund the company's shared prepaid-hour pool.
-      await bqLoyaltyValuesAppend('LoyaltyMembers!A:K', [[email, name, phone, now, now, 'platinum', company.organization, '', company.companyId, company.contactEmail, '']]);
-      const ledgerRows = (await bqLoyaltyValuesGet('LoyaltyLedger!A:J')).data.values?.slice(1) || [];
-      const hoursBalance = loyaltyPlatinumHoursBalance(rows.slice(1), ledgerRows, company.organization, email);
-      const member = {
-        email, name, phone, membershipType: 'platinum', organization: company.organization, companyId: company.companyId, hoursBalance,
-      };
-      let emailSent = false;
-      let emailError = '';
-      try {
-        await sendMembershipEmail(createGmailApi(), member, settings, await getBusinessProfile(sheets), 'welcome', company.contactEmail);
-        emailSent = true;
-      } catch (error) {
-        emailError = error.message || 'Membership email could not be sent.';
-        console.error('Company portal signup email error:', emailError);
-      }
-      return res.status(200).json({ member, emailSent, emailError });
+      return enrollCompanyEmployee(sheets, res, company, req.body);
     }
 
     if (view === 'company-portal-bulk-signup' && req.method === 'POST') {

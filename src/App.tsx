@@ -8,7 +8,7 @@ import {
   TrendingUp, ChevronRight, AlertCircle, Sparkles, ShieldCheck, Check, X,
   DollarSign, Users, Award, Briefcase, RefreshCw, Layers, CheckSquare, Stethoscope, Database,
   Menu, Home, CalendarDays, UserRound, BarChart3, ChevronRight as ChevronRightIcon,
-  Megaphone, ReceiptText, Download, Eye, MousePointerClick, Upload, Crown, Star, CalendarX, CalendarOff, Ban
+  Megaphone, ReceiptText, Download, Eye, MousePointerClick, Upload, Crown, Star, CalendarX, CalendarOff, Ban, Copy
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
@@ -443,6 +443,10 @@ export default function App() {
     if (typeof window === 'undefined') return '';
     return new URLSearchParams(window.location.search).get('companyToken') || '';
   });
+  const [companyJoinToken] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    return new URLSearchParams(window.location.search).get('joinToken') || '';
+  });
   const [squarePaymentComplete, setSquarePaymentComplete] = useState(() => {
     if (typeof window === 'undefined') return '';
     const params = new URLSearchParams(window.location.search);
@@ -546,6 +550,10 @@ export default function App() {
 
   if (companyPortalToken) {
     return <CompanyPortal token={companyPortalToken} />;
+  }
+
+  if (companyJoinToken) {
+    return <CompanyJoinPortal token={companyJoinToken} />;
   }
 
   return (
@@ -658,6 +666,19 @@ function CompanyPortal({ token }) {
   const [bulkMessage, setBulkMessage] = useState('');
   const [bulkError, setBulkError] = useState('');
   const bulkFileInputRef = React.useRef(null);
+  const [joinLinkCopied, setJoinLinkCopied] = useState(false);
+
+  const copyJoinLink = async () => {
+    if (!data?.joinUrl) return;
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(data.joinUrl);
+      else window.prompt('Copy this employee signup link:', data.joinUrl);
+      setJoinLinkCopied(true);
+      setTimeout(() => setJoinLinkCopied(false), 2500);
+    } catch {
+      window.prompt('Copy this employee signup link:', data.joinUrl);
+    }
+  };
 
   const loadPortal = async () => {
     setLoading(true);
@@ -905,6 +926,19 @@ function CompanyPortal({ token }) {
               )}
             </section>
 
+            {data.joinUrl && (
+              <section className="rounded-xl border border-sky-200 bg-sky-50 p-5 shadow-sm">
+                <h2 className="text-sm font-bold uppercase tracking-wide text-sky-900">Let employees sign themselves up</h2>
+                <p className="mt-1 text-sm text-sky-900/80">Share this link with your whole team. It only opens a Platinum signup form — it never shows your employee list, hours, or top-up history, and it cannot be used to open this portal.</p>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <code className="flex-1 min-w-[240px] break-all rounded-lg border border-sky-200 bg-white px-3 py-2 text-xs text-sky-900">{data.joinUrl}</code>
+                  <button type="button" onClick={copyJoinLink} className="inline-flex items-center gap-2 rounded-lg bg-sky-900 px-4 py-2 text-xs font-semibold text-white shadow-sm">
+                    <Copy className="h-4 w-4" /> {joinLinkCopied ? 'Copied!' : 'Copy employee signup link'}
+                  </button>
+                </div>
+              </section>
+            )}
+
             <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <h2 className="text-sm font-bold uppercase tracking-wide text-slate-700">Sign up a new employee</h2>
@@ -965,6 +999,153 @@ function CompanyPortal({ token }) {
             </section>
           </div>
         ) : null}
+      </main>
+
+      <footer className="bg-stone-900 px-4 py-4 text-center text-xs text-stone-400">
+        <p>© 2026 MY THAI THAI MASSAGE AND WELLNESS INC. All rights reserved.</p>
+      </footer>
+    </div>
+  );
+}
+
+// Restricted employee-facing signup page reached via ?joinToken=... . The primary contact
+// shares this link with their team; unlike the admin ?companyToken=... portal it exposes only
+// the company name and plan benefits, and can do nothing but enroll the person filling it in.
+function CompanyJoinPortal({ token }) {
+  const { businessName, photoUrl } = useBusinessBranding();
+  const [info, setInfo] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [form, setForm] = useState({ name: '', email: '', phone: '' });
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState('');
+  const [enrolled, setEnrolled] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      setError('');
+      try {
+        const response = await fetch(`/api/booking?view=company-join&token=${encodeURIComponent(token)}`);
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.message || 'This signup link is no longer active.');
+        if (!cancelled) setInfo(result);
+      } catch (requestError) {
+        if (!cancelled) setError(requestError.message || 'This signup link is no longer active.');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [token]);
+
+  const submit = async (event) => {
+    event.preventDefault();
+    setSubmitting(true);
+    setSubmitError('');
+    try {
+      const response = await fetch('/api/booking?view=company-join-signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, ...form }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || 'Unable to complete your signup.');
+      setEnrolled({ name: form.name, emailSent: result.emailSent });
+    } catch (requestError) {
+      setSubmitError(requestError.message || 'Unable to complete your signup.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-stone-100 font-sans text-stone-800">
+      <header className="border-b border-slate-200 bg-white px-4 py-4 shadow-sm sm:px-8">
+        <div className="mx-auto flex max-w-2xl items-center gap-3">
+          {photoUrl ? (
+            <img src={photoUrl} alt="" className="h-10 w-10 rounded-xl object-cover" />
+          ) : (
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-950 text-xs font-black tracking-tight text-white">M</span>
+          )}
+          <div>
+            <p className="text-lg font-bold tracking-tight text-slate-950">{businessName || 'MY THAI THAI'}</p>
+            <p className="text-xs font-semibold uppercase tracking-wider text-emerald-800">Employee Platinum signup{info?.organization ? ` · ${info.organization}` : ''}</p>
+          </div>
+        </div>
+      </header>
+
+      <main className="mx-auto max-w-2xl px-4 py-8 sm:px-8">
+        {loading ? (
+          <p className="rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-500">Checking your signup link…</p>
+        ) : error ? (
+          <p className="rounded-xl border border-rose-200 bg-rose-50 p-6 text-sm font-medium text-rose-700">{error}</p>
+        ) : enrolled ? (
+          <div className="rounded-xl border border-emerald-200 bg-white p-6 text-center shadow-sm">
+            <CheckCircle2 className="mx-auto h-10 w-10 text-emerald-700" />
+            <h1 className="mt-3 text-xl font-bold text-slate-950">You're on the Platinum plan, {enrolled.name}!</h1>
+            <p className="mt-2 text-sm text-slate-600">
+              {enrolled.emailSent
+                ? 'A welcome email is on its way with everything you need to book.'
+                : 'Your membership is active. Your welcome email could not be sent — the clinic can resend it.'}
+            </p>
+            <a href="/" className="mt-4 inline-flex rounded-lg bg-emerald-950 px-4 py-2 text-sm font-semibold text-white shadow-sm">Book your first session</a>
+          </div>
+        ) : (
+          <div className="space-y-5">
+            <section className="rounded-xl border border-amber-200 bg-amber-50 p-5 shadow-sm">
+              <h1 className="flex items-center gap-2 text-lg font-bold text-amber-950"><Crown className="h-5 w-5" /> {info?.organization} Platinum membership</h1>
+              {info?.enabled === false ? (
+                <p className="mt-2 text-sm font-medium text-amber-900">The loyalty program is paused right now. Please check back shortly.</p>
+              ) : (
+                <ul className="mt-2 space-y-1 text-sm text-amber-900">
+                  {!!info?.platinum?.discountPercent && <li>• {info.platinum.discountPercent}% off every treatment</li>}
+                  {!!info?.platinum?.hotStoneDiscount && <li>• {info.platinum.hotStoneDiscount}% off the hot stone add-on</li>}
+                  <li>• Draw on your company's shared prepaid hours</li>
+                </ul>
+              )}
+              <p className="mt-3 text-xs text-amber-900/80">Signing up adds you to your company's plan. You will not be able to see or manage your colleagues.</p>
+            </section>
+
+            <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+              <h2 className="text-sm font-bold uppercase tracking-wide text-slate-700">Your details</h2>
+              <form onSubmit={submit} className="mt-3 grid gap-3">
+                <input
+                  type="text"
+                  required
+                  placeholder="Your full name"
+                  value={form.name}
+                  onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                />
+                <input
+                  type="email"
+                  required
+                  placeholder="Your work email"
+                  value={form.email}
+                  onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))}
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                />
+                <input
+                  type="tel"
+                  placeholder="Phone (optional)"
+                  value={form.phone}
+                  onChange={(event) => setForm((current) => ({ ...current, phone: event.target.value }))}
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                />
+                <button
+                  type="submit"
+                  disabled={submitting || info?.enabled === false}
+                  className="rounded-lg bg-emerald-950 px-4 py-2 text-sm font-semibold text-white shadow-sm disabled:opacity-60 sm:w-fit"
+                >
+                  {submitting ? 'Signing up…' : 'Join the Platinum plan'}
+                </button>
+              </form>
+              {submitError && <p className="mt-2 text-sm font-medium text-rose-700">{submitError}</p>}
+            </section>
+          </div>
+        )}
       </main>
 
       <footer className="bg-stone-900 px-4 py-4 text-center text-xs text-stone-400">
@@ -4266,10 +4447,13 @@ function AdminPortal({
     }
   };
 
-  const copyCompanyPortalLink = async (member) => {
+  // `kind` picks between the admin portal link (primary contact only) and the restricted
+  // employee self-signup link that the primary contact can forward to their whole team.
+  const copyCompanyPortalLink = async (member, kind = 'portal') => {
     setLoyaltyError('');
     setLoyaltyNotice('');
-    setCopyingPortalFor(member.organization);
+    setCopyingPortalFor(`${member.organization}:${kind}`);
+    const label = kind === 'join' ? 'Employee signup link' : 'Company portal link';
     try {
       const response = await fetch('/api/booking?view=company-portal-link', {
         method: 'POST',
@@ -4278,10 +4462,12 @@ function AdminPortal({
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || 'Unable to create a company portal link.');
-      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(data.portalUrl);
+      const url = kind === 'join' ? data.joinUrl : data.portalUrl;
+      if (!url) throw new Error('Unable to create a company portal link.');
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(url);
       setLoyaltyNotice(navigator.clipboard?.writeText
-        ? `Company portal link for ${member.organization} copied to clipboard.`
-        : `Company portal link for ${member.organization}: ${data.portalUrl}`);
+        ? `${label} for ${member.organization} copied to clipboard.`
+        : `${label} for ${member.organization}: ${url}`);
     } catch (error) {
       setLoyaltyError(error.message || 'Unable to create a company portal link.');
     } finally {
@@ -6228,7 +6414,8 @@ function AdminPortal({
                                 {member.membershipType === 'platinum' && member.isPrimaryContact && <button type="button" disabled={!loyaltySettings.enabled} onClick={() => setSelectedTopUpMember(member)} className="block ml-auto rounded-lg border border-amber-200 px-3 py-2 text-[11px] font-semibold text-amber-900 hover:bg-amber-50 disabled:opacity-40">Record top-up</button>}
                                 {member.membershipType === 'platinum' && !member.isPrimaryContact && <button type="button" disabled={loyaltyActionId === member.email} onClick={() => makePrimaryContact(member)} className="block ml-auto rounded-lg border border-indigo-200 px-3 py-2 text-[11px] font-semibold text-indigo-800 hover:bg-indigo-50 disabled:opacity-40">Make primary contact</button>}
                                 {['gold', 'silver'].includes(member.membershipType) && <button type="button" onClick={() => { setSelectedMembershipPayment(member); setMembershipPaidThrough(member.paidThrough || ''); }} className="block ml-auto rounded-lg border border-emerald-200 px-3 py-2 text-[11px] font-semibold text-emerald-800 hover:bg-emerald-50">Record payment</button>}
-                                {member.membershipType === 'platinum' && member.organization && member.companyContactEmail && <button type="button" disabled={copyingPortalFor === member.organization} onClick={() => copyCompanyPortalLink(member)} className="block ml-auto rounded-lg border border-sky-200 px-3 py-2 text-[11px] font-semibold text-sky-800 hover:bg-sky-50 disabled:opacity-40">{copyingPortalFor === member.organization ? 'Copying…' : 'Copy portal link'}</button>}
+                                {member.membershipType === 'platinum' && member.organization && member.companyContactEmail && <button type="button" disabled={copyingPortalFor === `${member.organization}:portal`} onClick={() => copyCompanyPortalLink(member, 'portal')} className="block ml-auto rounded-lg border border-sky-200 px-3 py-2 text-[11px] font-semibold text-sky-800 hover:bg-sky-50 disabled:opacity-40">{copyingPortalFor === `${member.organization}:portal` ? 'Copying…' : 'Copy portal link'}</button>}
+                                {member.membershipType === 'platinum' && member.organization && member.companyContactEmail && <button type="button" disabled={copyingPortalFor === `${member.organization}:join`} onClick={() => copyCompanyPortalLink(member, 'join')} className="block ml-auto rounded-lg border border-sky-200 px-3 py-2 text-[11px] font-semibold text-sky-800 hover:bg-sky-50 disabled:opacity-40">{copyingPortalFor === `${member.organization}:join` ? 'Copying…' : 'Copy employee signup link'}</button>}
                                 <button type="button" onClick={() => setMemberPendingRemoval(member)} className="block ml-auto rounded-lg border border-rose-200 px-3 py-2 text-[11px] font-semibold text-rose-700 hover:bg-rose-50">Remove member</button>
                                 {['silver', 'platinum'].includes(member.membershipType) && member.organization && <button type="button" onClick={() => setCompanyPendingRemoval(member.organization)} className="block ml-auto rounded-lg border border-rose-200 px-3 py-2 text-[11px] font-semibold text-rose-700 hover:bg-rose-50">Remove company</button>}
                               </td>
