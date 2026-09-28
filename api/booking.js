@@ -978,9 +978,8 @@ function isCompatibleLoyaltyHeader(title, current, expected) {
   );
 }
 
-async function deleteSheetRows(sheets, title, rowNumbers) {
+async function deleteSheetRows(sheets, title, rowNumbers, spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID) {
   if (!rowNumbers.length) return;
-  const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
   const spreadsheet = await sheets.spreadsheets.get({
     spreadsheetId,
     fields: 'sheets.properties',
@@ -2374,13 +2373,13 @@ export default async function handler(req, res) {
     }
     const ownerOnlyRequest =
       (req.method === 'GET' && ['', 'calendar', 'patient-history', 'business-profile', 'google-ads-report', 'loyalty-dashboard'].includes(view)) ||
-      ['business-profile', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-link'].includes(view) ||
+      ['business-profile', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-link'].includes(view) ||
       (req.method === 'POST' && ['branches', 'services', 'therapists'].includes(view));
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
     if (ownerOnlyRequest && !getOwnerSession(req)) {
       return res.status(401).json({ message: 'Owner sign-in required' });
     }
-    if (['business-profile', 'branches', 'services', 'therapists', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-signup', 'company-portal-bulk-signup', 'company-portal-link', 'square-create-checkout'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
+    if (['business-profile', 'branches', 'services', 'therapists', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-signup', 'company-portal-bulk-signup', 'company-portal-link', 'square-create-checkout'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
       return res.status(403).json({ message: 'Profile update origin is not allowed' });
     }
 
@@ -4890,6 +4889,71 @@ export default async function handler(req, res) {
         emailed: true,
         alreadyIssued: row[20] === 'sent',
       });
+    }
+
+    if (req.method === 'POST' && req.query?.view === 'delete-booking') {
+      const bookingId = String(req.body?.bookingId || '').trim();
+      if (!bookingId || bookingId.length > 100) {
+        return res.status(400).json({ message: 'A valid booking ID is required' });
+      }
+      if (!process.env.GOOGLE_SPREADSHEET_ID) {
+        throw new Error('GOOGLE_SPREADSHEET_ID is not configured');
+      }
+      const result = await sheets.spreadsheets.values.get({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+        range: 'Sheet1!A:X',
+      });
+      const rows = result.data.values || [];
+      const hasHeader = rows[0]?.[0] === 'Booking ID';
+      const startIndex = hasHeader ? 1 : 0;
+      const rowIndex = rows.findIndex((row, index) => index >= startIndex && String(row[0] || '') === bookingId);
+      if (rowIndex < 0) return res.status(404).json({ message: 'Booking was not found in Google Sheets' });
+
+      const row = rows[rowIndex];
+      const calendarId = row[15] || PRIMARY_CALENDAR_ID;
+      const calendarEventId = row[16] || '';
+      let calendarDeleted = false;
+      let calendarError = '';
+      if (calendarEventId) {
+        try {
+          await calendarApi.events.delete({ calendarId, eventId: calendarEventId });
+          calendarDeleted = true;
+        } catch (error) {
+          calendarError = error.message || 'The linked calendar event could not be removed.';
+          console.error('Delete booking calendar cleanup error:', calendarError);
+        }
+      }
+      await deleteSheetRows(sheets, 'Sheet1', [rowIndex + 1]);
+      return res.status(200).json({
+        deleted: true,
+        bookingId,
+        calendarDeleted,
+        calendarError,
+      });
+    }
+
+    if (req.method === 'POST' && req.query?.view === 'delete-patient-history') {
+      const bookingId = String(req.body?.bookingId || '').trim();
+      const createdAt = String(req.body?.createdAt || '').trim();
+      if (!bookingId || bookingId.length > 100) {
+        return res.status(400).json({ message: 'A valid booking ID is required' });
+      }
+      const result = await sheets.spreadsheets.values.get({
+        spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+        range: 'PatientHistory!A:AH',
+      });
+      const rows = result.data.values || [];
+      const hasHeader = rows[0]?.[0] === 'Booking ID';
+      const startIndex = hasHeader ? 1 : 0;
+      const rowIndex = rows.findIndex((row, index) =>
+        index >= startIndex &&
+        String(row[0] || '') === bookingId &&
+        (!createdAt || String(row[1] || '') === createdAt),
+      );
+      if (rowIndex < 0) return res.status(404).json({ message: 'Patient history record was not found' });
+
+      await deleteSheetRows(sheets, 'PatientHistory', [rowIndex + 1], PATIENT_HISTORY_SPREADSHEET_ID);
+      return res.status(200).json({ deleted: true, bookingId });
     }
 
     if (req.method === 'POST' && req.query?.view === 'business-profile') {

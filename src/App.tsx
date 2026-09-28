@@ -594,6 +594,7 @@ export default function App() {
               setSelectedBranchId={setSelectedBranchId}
               lang={adminLang}
               setLang={setAdminLang}
+              onNavigateToBookingPortal={() => setViewMode('customer')}
             />
           </AdminGate>
         ) : (
@@ -3127,7 +3128,8 @@ function AdminPortal({
   selectedBranchId, 
   setSelectedBranchId,
   lang,
-  setLang
+  setLang,
+  onNavigateToBookingPortal
 }) {
   const [activeTab, setActiveTab] = useState('schedule');
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -3799,6 +3801,29 @@ function AdminPortal({
     }
   };
 
+  const [deletingBookingId, setDeletingBookingId] = useState('');
+  const [deleteBookingError, setDeleteBookingError] = useState('');
+
+  const deleteBooking = async (bookingId) => {
+    if (!confirm(`Permanently remove booking ${bookingId} and its calendar event? This cannot be undone.`)) return;
+    setDeletingBookingId(bookingId);
+    setDeleteBookingError('');
+    try {
+      const response = await fetch('/api/booking?view=delete-booking', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bookingId }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+      setBookings((prev) => prev.filter((b) => b.id !== bookingId));
+    } catch (error) {
+      setDeleteBookingError(error.message || 'Unable to delete booking');
+    } finally {
+      setDeletingBookingId('');
+    }
+  };
+
   useEffect(() => {
     if (['schedule', 'reports'].includes(activeTab)) loadBookingsFromBackend();
   }, [activeTab]);
@@ -4103,6 +4128,31 @@ function AdminPortal({
     if (activeTab === 'patient-history') loadPatientHistory();
   }, [activeTab]);
 
+  const [deletingPatientHistoryKey, setDeletingPatientHistoryKey] = useState('');
+  const [deletePatientHistoryError, setDeletePatientHistoryError] = useState('');
+
+  const deletePatientHistoryRecord = async (profile) => {
+    if (!confirm(`Permanently clear the medical history on file for ${profile.patientName || profile.bookingId}? This cannot be undone.`)) return;
+    const key = `${profile.bookingId}-${profile.createdAt}`;
+    setDeletingPatientHistoryKey(key);
+    setDeletePatientHistoryError('');
+    try {
+      const response = await fetch('/api/booking?view=delete-patient-history', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bookingId: profile.bookingId, createdAt: profile.createdAt }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+      setPatientHistory((prev) => prev.filter((item) => !(item.bookingId === profile.bookingId && item.createdAt === profile.createdAt)));
+      setSelectedPatientHistory((current) => (current === profile ? null : current));
+    } catch (error) {
+      setDeletePatientHistoryError(error.message || 'Unable to clear patient history record');
+    } finally {
+      setDeletingPatientHistoryKey('');
+    }
+  };
+
   const filteredPatientHistory = patientHistory.filter((profile) => {
     const query = patientHistorySearch.trim().toLowerCase();
     return !query || [profile.patientName, profile.bookingId, profile.email, profile.phone]
@@ -4294,28 +4344,7 @@ function AdminPortal({
                 {isLoadingBookings ? 'Loading...' : 'Refresh from Google Sheets'}
               </button>
               <button
-              onClick={() => {
-                const customerName = prompt(lang === 'th' ? "ชื่อลูกค้า (Walk-in / Phone):" : "Customer Name:");
-                if (!customerName) return;
-                const newB = {
-                  id: 'MTT-' + Math.floor(100000 + Math.random() * 900000),
-                  customerName,
-                  phone: 'Walk-in',
-                  email: 'N/A',
-                  serviceId: services[0].id,
-                  serviceName: services[0].name,
-                  branchId: selectedBranchId === 'all' ? 1 : selectedBranchId,
-                  therapistId: 1,
-                  therapistName: 'Kanya S.',
-                  date: new Date().toISOString().split('T')[0],
-                  time: '02:00 PM',
-                  status: 'Confirmed',
-                  paidAmount: services[0].price,
-                  total: services[0].price * 1.13,
-                  syncedToSheets: false
-                };
-                setBookings(prev => [newB, ...prev]);
-              }}
+              onClick={onNavigateToBookingPortal}
               className="px-4 py-2 bg-emerald-800 text-white rounded-xl text-xs font-bold hover:bg-emerald-900 transition flex items-center"
               >
                 <Plus className="w-4 h-4 mr-1" /> {t.addBooking}
@@ -4325,6 +4354,11 @@ function AdminPortal({
           {bookingLoadError && (
             <div className="p-3 bg-red-50 border border-red-200 text-red-800 rounded-xl text-xs">
               {bookingLoadError}
+            </div>
+          )}
+          {deleteBookingError && (
+            <div className="p-3 bg-red-50 border border-red-200 text-red-800 rounded-xl text-xs">
+              {deleteBookingError}
             </div>
           )}
 
@@ -4339,6 +4373,7 @@ function AdminPortal({
                   <th className="p-3">Time</th>
                   <th className="p-3">Google Sheet</th>
                   <th className="p-3">Total</th>
+                  <th className="p-3">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-stone-100">
@@ -4364,6 +4399,15 @@ function AdminPortal({
                       )}
                     </td>
                     <td className="p-3 font-bold text-stone-900">${b.total.toFixed(2)}</td>
+                    <td className="p-3">
+                      <button
+                        onClick={() => deleteBooking(b.id)}
+                        disabled={deletingBookingId === b.id}
+                        className="px-2 py-1 border border-red-300 text-red-700 rounded-lg text-[11px] font-bold hover:bg-red-50 disabled:opacity-50"
+                      >
+                        {deletingBookingId === b.id ? 'Removing...' : 'Clear'}
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -5530,6 +5574,7 @@ function AdminPortal({
             </div>
           </div>
           {patientHistoryLoadError && <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-800 text-xs">{patientHistoryLoadError}</div>}
+          {deletePatientHistoryError && <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-800 text-xs">{deletePatientHistoryError}</div>}
           {!patientHistoryLoadError && patientHistory.length === 0 && !isLoadingPatientHistory && (
             <div className="p-8 text-center rounded-xl bg-stone-50 text-stone-500 text-sm">No patient history profiles found.</div>
           )}
@@ -5557,6 +5602,13 @@ function AdminPortal({
                       <p className="text-xs text-stone-500">{selectedPatientHistory.bookingId} · {selectedPatientHistory.dateOfBirth || 'DOB not provided'} · {selectedPatientHistory.gender || 'Gender not provided'}</p>
                     </div>
                     <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold"><ShieldCheck className="w-3.5 h-3.5" /> Consent: {selectedPatientHistory.consent || 'Not recorded'}</span>
+                    <button
+                      onClick={() => deletePatientHistoryRecord(selectedPatientHistory)}
+                      disabled={deletingPatientHistoryKey === `${selectedPatientHistory.bookingId}-${selectedPatientHistory.createdAt}`}
+                      className="px-3 py-2 border border-red-300 text-red-700 rounded-xl text-xs font-bold hover:bg-red-50 disabled:opacity-50 whitespace-nowrap"
+                    >
+                      {deletingPatientHistoryKey === `${selectedPatientHistory.bookingId}-${selectedPatientHistory.createdAt}` ? 'Clearing...' : 'Clear this record'}
+                    </button>
                   </div>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     {[
