@@ -58,6 +58,29 @@ const DEFAULT_BRANCHES = [
   { id: 3, name: 'Toronto West', address: '456 Bloor St W', city: 'Toronto, ON', phone: '+1 437 898 7424', active: true },
   { id: 4, name: 'Yorkville Flagship', address: '88 Yorkville Ave', city: 'Toronto, ON', phone: '+1 437 898 7424', active: true },
 ];
+const SERVICE_FIELDS = ['ID', 'Name', 'Category', 'Duration', 'Price', 'Deposit', 'Is RMT', 'Tax Rate', 'Description', 'Active', 'Updated At'];
+const DEFAULT_SERVICES = [
+  { id: 1, name: "Thai Traditional Massage (30 min)", category: "Thai Traditional", duration: 30, price: 60, deposit: 15, isRmt: false, taxRate: 0.13, description: "Deep Tissue Massage (No oil)", active: true },
+  { id: 2, name: "Thai Traditional Massage (60 min)", category: "Thai Traditional", duration: 60, price: 95, deposit: 20, isRmt: false, taxRate: 0.13, description: "Deep Tissue Massage (No oil)", active: true },
+  { id: 3, name: "Thai Traditional Massage (90 min)", category: "Thai Traditional", duration: 90, price: 140, deposit: 30, isRmt: false, taxRate: 0.13, description: "Deep Tissue Massage (No oil)", active: true },
+  { id: 4, name: "Thai Traditional Massage - Couple (60 min)", category: "Thai Traditional", duration: 60, price: 185, deposit: 40, isRmt: false, taxRate: 0.13, description: "Deep Tissue Massage (No oil) for 2 people", active: true },
+  { id: 5, name: "Thai Traditional Massage - Couple (90 min)", category: "Thai Traditional", duration: 90, price: 275, deposit: 50, isRmt: false, taxRate: 0.13, description: "Deep Tissue Massage (No oil) for 2 people", active: true },
+  { id: 6, name: "Thai Combination Swedish (30 min)", category: "Thai Combo Swedish", duration: 30, price: 60, deposit: 15, isRmt: false, taxRate: 0.13, description: "Thai Massage + Swedish Massage", active: true },
+  { id: 7, name: "Thai Combination Swedish (60 min)", category: "Thai Combo Swedish", duration: 60, price: 95, deposit: 20, isRmt: false, taxRate: 0.13, description: "Thai Massage + Swedish Massage", active: true },
+  { id: 8, name: "Thai Combination Swedish (90 min)", category: "Thai Combo Swedish", duration: 90, price: 140, deposit: 30, isRmt: false, taxRate: 0.13, description: "Thai Massage + Swedish Massage", active: true },
+  { id: 9, name: "Thai Combination Swedish - Couple (60 min)", category: "Thai Combo Swedish", duration: 60, price: 185, deposit: 40, isRmt: false, taxRate: 0.13, description: "Thai Massage + Swedish Massage for 2 people", active: true },
+  { id: 10, name: "Thai Combination Swedish - Couple (90 min)", category: "Thai Combo Swedish", duration: 90, price: 275, deposit: 50, isRmt: false, taxRate: 0.13, description: "Thai Massage + Swedish Massage for 2 people", active: true },
+  { id: 11, name: "Thai Combo Swedish + Hot Stone (60 min)", category: "Hot Stone Combo", duration: 60, price: 105, deposit: 25, isRmt: false, taxRate: 0.13, description: "Thai + Swedish + Hot Stone Massage", active: true },
+  { id: 12, name: "Thai Combo Swedish + Hot Stone (90 min)", category: "Hot Stone Combo", duration: 90, price: 150, deposit: 35, isRmt: false, taxRate: 0.13, description: "Thai + Swedish + Hot Stone Massage", active: true },
+  { id: 13, name: "Thai Combo Swedish + Hot Stone - Couple (60 min)", category: "Hot Stone Combo", duration: 60, price: 205, deposit: 45, isRmt: false, taxRate: 0.13, description: "Hot Stone Combo for 2 people", active: true },
+  { id: 14, name: "Thai Combo Swedish + Hot Stone - Couple (90 min)", category: "Hot Stone Combo", duration: 90, price: 295, deposit: 60, isRmt: false, taxRate: 0.13, description: "Hot Stone Combo for 2 people", active: true },
+  { id: 15, name: "Hot Stone Add-On", category: "Add-On & Packages", duration: 15, price: 15, deposit: 0, isRmt: false, taxRate: 0.13, description: "Add warm volcanic stones to any treatment", active: true },
+  { id: 16, name: "Package: 60 min x 4 Sessions", category: "Add-On & Packages", duration: 60, price: 360, deposit: 50, isRmt: false, taxRate: 0.13, description: "Bundled 4 sessions of 60 min massage", active: true },
+  { id: 17, name: "Package: 90 min x 4 Sessions", category: "Add-On & Packages", duration: 90, price: 540, deposit: 100, isRmt: false, taxRate: 0.13, description: "Bundled 4 sessions of 90 min massage", active: true },
+  { id: 18, name: "Registered Massage Therapy (RMT 60 min)", category: "RMT Healthcare", duration: 60, price: 120, deposit: 30, isRmt: true, taxRate: 0.00, description: "Regulated Healthcare with Insurance Receipt", active: true },
+  { id: 19, name: "Registered Massage Therapy (RMT 90 min)", category: "RMT Healthcare", duration: 90, price: 170, deposit: 40, isRmt: true, taxRate: 0.00, description: "Regulated Healthcare with Insurance Receipt", active: true },
+  { id: 20, name: "Traditional Thai Acupuncture (60 min)", category: "RMT Healthcare", duration: 60, price: 110, deposit: 25, isRmt: true, taxRate: 0.00, description: "Certified Medical Acupuncture", active: true },
+];
 const DEFAULT_LOYALTY_SETTINGS = {
   enabled: true,
   pointsPerDollar: 10,
@@ -599,6 +622,127 @@ async function saveBranches(sheets, branches) {
   await sheets.spreadsheets.values.update({
     spreadsheetId,
     range: `Branches!A2:G${rows.length + 1}`,
+    valueInputOption: 'RAW',
+    requestBody: { values: rows },
+  });
+  return validated;
+}
+
+async function ensureServicesSheet(sheets) {
+  const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
+  if (!spreadsheetId) throw new Error('GOOGLE_SPREADSHEET_ID is not configured');
+  const spreadsheet = await sheets.spreadsheets.get({
+    spreadsheetId,
+    fields: 'sheets.properties',
+  });
+  const exists = (spreadsheet.data.sheets || [])
+    .some((sheet) => sheet.properties?.title === 'Services');
+  if (!exists) {
+    try {
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId,
+        requestBody: { requests: [{ addSheet: { properties: { title: 'Services' } } }] },
+      });
+    } catch (error) {
+      const refreshed = await sheets.spreadsheets.get({
+        spreadsheetId,
+        fields: 'sheets.properties',
+      });
+      const createdByConcurrentRequest = (refreshed.data.sheets || [])
+        .some((sheet) => sheet.properties?.title === 'Services');
+      if (!createdByConcurrentRequest) throw error;
+    }
+    const seedRows = DEFAULT_SERVICES.map((service) => [
+      service.id, service.name, service.category, service.duration, service.price, service.deposit,
+      service.isRmt ? 'TRUE' : 'FALSE', service.taxRate, service.description, service.active ? 'TRUE' : 'FALSE', new Date().toISOString(),
+    ]);
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: 'Services!A1:K1',
+      valueInputOption: 'RAW',
+      requestBody: { values: [SERVICE_FIELDS] },
+    });
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `Services!A2:K${seedRows.length + 1}`,
+      valueInputOption: 'RAW',
+      requestBody: { values: seedRows },
+    });
+  }
+}
+
+function validateServices(input) {
+  if (!Array.isArray(input) || input.length === 0) {
+    throw new Error('At least one service is required');
+  }
+  const seenIds = new Set();
+  return input.map((service) => {
+    const name = String(service?.name || '').trim();
+    if (!name) throw new Error('Every service requires a name');
+    const price = Number(service?.price);
+    if (!Number.isFinite(price) || price < 0) throw new Error(`Service "${name}" requires a valid price`);
+    const duration = Number(service?.duration);
+    if (!Number.isFinite(duration) || duration <= 0) throw new Error(`Service "${name}" requires a valid duration in minutes`);
+    const deposit = Number(service?.deposit);
+    const taxRate = Number(service?.taxRate);
+    let id = Number(service?.id);
+    if (!Number.isFinite(id) || id <= 0) id = Date.now() + Math.floor(Math.random() * 1000);
+    if (seenIds.has(id)) id = Date.now() + Math.floor(Math.random() * 1000) + seenIds.size;
+    seenIds.add(id);
+    return {
+      id,
+      name,
+      category: String(service?.category || '').trim() || 'Uncategorized',
+      duration,
+      price,
+      deposit: Number.isFinite(deposit) && deposit >= 0 ? deposit : 0,
+      isRmt: service?.isRmt === true,
+      taxRate: Number.isFinite(taxRate) && taxRate >= 0 && taxRate <= 1 ? taxRate : 0.13,
+      description: String(service?.description || '').trim(),
+      active: service?.active !== false,
+    };
+  });
+}
+
+async function getServices(sheets) {
+  await ensureServicesSheet(sheets);
+  const result = await sheets.spreadsheets.values.get({
+    spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+    range: 'Services!A2:K',
+  });
+  const rows = result.data.values || [];
+  if (rows.length === 0) return DEFAULT_SERVICES;
+  return rows
+    .filter((row) => row[0] !== undefined && row[0] !== '')
+    .map((row) => ({
+      id: Number(row[0]) || row[0],
+      name: row[1] || '',
+      category: row[2] || '',
+      duration: Number(row[3]) || 0,
+      price: Number(row[4]) || 0,
+      deposit: Number(row[5]) || 0,
+      isRmt: String(row[6] || 'FALSE').toUpperCase() === 'TRUE',
+      taxRate: Number(row[7]) || 0,
+      description: row[8] || '',
+      active: String(row[9] || 'TRUE').toUpperCase() !== 'FALSE',
+    }));
+}
+
+async function saveServices(sheets, services) {
+  const validated = validateServices(services);
+  await ensureServicesSheet(sheets);
+  const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
+  const rows = validated.map((service) => [
+    service.id, service.name, service.category, service.duration, service.price, service.deposit,
+    service.isRmt ? 'TRUE' : 'FALSE', service.taxRate, service.description, service.active ? 'TRUE' : 'FALSE', new Date().toISOString(),
+  ]);
+  await sheets.spreadsheets.values.clear({
+    spreadsheetId,
+    range: 'Services!A2:K',
+  });
+  await sheets.spreadsheets.values.update({
+    spreadsheetId,
+    range: `Services!A2:K${rows.length + 1}`,
     valueInputOption: 'RAW',
     requestBody: { values: rows },
   });
@@ -2058,19 +2202,19 @@ export default async function handler(req, res) {
     }
 
     const view = String(req.query?.view || '');
-    const validGetViews = ['', 'calendar', 'patient-history', 'business-profile', 'business-name', 'square-config', 'branches', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal'];
+    const validGetViews = ['', 'calendar', 'patient-history', 'business-profile', 'business-name', 'square-config', 'branches', 'services', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal'];
     if (req.method === 'GET' && !validGetViews.includes(view)) {
       return res.status(404).json({ message: 'Unknown booking view' });
     }
     const ownerOnlyRequest =
       (req.method === 'GET' && ['', 'calendar', 'patient-history', 'business-profile', 'google-ads-report', 'loyalty-dashboard'].includes(view)) ||
       ['business-profile', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-link'].includes(view) ||
-      (req.method === 'POST' && view === 'branches');
+      (req.method === 'POST' && ['branches', 'services'].includes(view));
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
     if (ownerOnlyRequest && !getOwnerSession(req)) {
       return res.status(401).json({ message: 'Owner sign-in required' });
     }
-    if (['business-profile', 'branches', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-signup', 'company-portal-bulk-signup', 'company-portal-link', 'square-create-checkout'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
+    if (['business-profile', 'branches', 'services', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-signup', 'company-portal-bulk-signup', 'company-portal-link', 'square-create-checkout'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
       return res.status(403).json({ message: 'Profile update origin is not allowed' });
     }
 
@@ -2114,6 +2258,21 @@ export default async function handler(req, res) {
         return res.status(200).json({ branches });
       } catch (validationError) {
         return res.status(400).json({ message: validationError.message || 'Unable to save branches' });
+      }
+    }
+
+    if (req.method === 'GET' && view === 'services') {
+      res.setHeader('Cache-Control', 'no-store');
+      const services = await getServices(sheets);
+      return res.status(200).json({ services });
+    }
+
+    if (req.method === 'POST' && view === 'services') {
+      try {
+        const services = await saveServices(sheets, req.body?.services);
+        return res.status(200).json({ services });
+      } catch (validationError) {
+        return res.status(400).json({ message: validationError.message || 'Unable to save services' });
       }
     }
 

@@ -401,6 +401,7 @@ export default function App() {
   const [viewMode, setViewMode] = useState('customer'); // 'customer' or 'admin'
   const [adminLang, setAdminLang] = useState('en'); // 'en' or 'th'
   const [servicesList, setServicesList] = useState(INITIAL_SERVICES);
+  const [servicesError, setServicesError] = useState('');
   const [therapistsList, setTherapistsList] = useState(MOCK_THERAPISTS);
   const [branchesList, setBranchesList] = useState(MOCK_BRANCHES);
   const [branchesError, setBranchesError] = useState('');
@@ -420,13 +421,33 @@ export default function App() {
     }
   };
 
+  const loadServices = async () => {
+    try {
+      const response = await fetch('/api/booking?view=services', { cache: 'no-store' });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+      if (Array.isArray(data.services) && data.services.length > 0) {
+        setServicesList(data.services);
+        setServicesError('');
+      }
+    } catch (error) {
+      setServicesError(error.message || 'Unable to load services; showing defaults.');
+    }
+  };
+
   useEffect(() => {
     loadBranches();
+    loadServices();
   }, []);
 
   const activeBranches = useMemo(
     () => branchesList.filter((branch) => branch.active !== false),
     [branchesList]
+  );
+
+  const activeServices = useMemo(
+    () => servicesList.filter((service) => service.active !== false),
+    [servicesList]
   );
   
   // Google Sheets API Webhook URL state
@@ -501,7 +522,7 @@ export default function App() {
         {viewMode === 'customer' ? (
           <CustomerPortal 
             branches={activeBranches} 
-            services={servicesList} 
+            services={activeServices} 
             therapists={therapistsList}
             sheetsWebhookUrl={sheetsWebhookUrl}
             onNewBooking={(newBkg) => setExistingBookings(prev => [newBkg, ...prev])}
@@ -513,7 +534,8 @@ export default function App() {
               onBranchesChange={setBranchesList}
               branchesError={branchesError}
               services={servicesList}
-              setServices={setServicesList}
+              onServicesChange={setServicesList}
+              servicesError={servicesError}
               therapists={therapistsList}
               setTherapists={setTherapistsList}
               bookings={existingBookings}
@@ -2986,7 +3008,8 @@ function AdminPortal({
   onBranchesChange,
   branchesError,
   services, 
-  setServices, 
+  onServicesChange,
+  servicesError,
   therapists, 
   setTherapists,
   bookings, 
@@ -3041,6 +3064,59 @@ function AdminPortal({
       setBranchSaveError(error.message || 'Unable to save branches');
     } finally {
       setIsSavingBranches(false);
+    }
+  };
+
+  const [serviceForm, setServiceForm] = useState(() => services.map((service) => ({ ...service })));
+  const [isSavingServices, setIsSavingServices] = useState(false);
+  const [serviceSaveError, setServiceSaveError] = useState('');
+  const [serviceSaveMessage, setServiceSaveMessage] = useState('');
+
+  useEffect(() => {
+    setServiceForm(services.map((service) => ({ ...service })));
+  }, [services]);
+
+  const updateServiceField = (id, field, value) => {
+    setServiceForm((prev) => prev.map((service) => (service.id === id ? { ...service, [field]: value } : service)));
+  };
+
+  const addServiceRow = () => {
+    setServiceForm((prev) => [
+      { id: -Date.now(), name: '', category: 'Thai Traditional', duration: 60, price: 100, deposit: 20, isRmt: false, taxRate: 0.13, description: '', active: true },
+      ...prev,
+    ]);
+  };
+
+  const removeServiceRow = (id) => {
+    setServiceForm((prev) => prev.filter((service) => service.id !== id));
+  };
+
+  const saveServiceForm = async () => {
+    setIsSavingServices(true);
+    setServiceSaveError('');
+    setServiceSaveMessage('');
+    try {
+      const payload = serviceForm.map((service) => ({
+        ...service,
+        id: service.id > 0 ? service.id : undefined,
+        duration: Number(service.duration),
+        price: Number(service.price),
+        deposit: Number(service.deposit),
+        taxRate: Number(service.taxRate),
+      }));
+      const response = await fetch('/api/booking?view=services', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ services: payload }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+      onServicesChange(data.services);
+      setServiceSaveMessage('Services saved. The booking portal will reflect these changes immediately.');
+    } catch (error) {
+      setServiceSaveError(error.message || 'Unable to save services');
+    } finally {
+      setIsSavingServices(false);
     }
   };
 
@@ -4276,77 +4352,148 @@ function AdminPortal({
           <div className="flex justify-between items-center">
             <div>
               <h2 className="text-lg font-bold text-stone-900">{t.services}</h2>
-              <p className="text-xs text-stone-500">Configure prices, deposits, HST rules, and RMT statuses</p>
+              <p className="text-xs text-stone-500">Add, edit, deactivate, or remove services. Changes appear on the booking portal immediately after saving.</p>
             </div>
             <button
-              onClick={() => {
-                const name = prompt("Service Name:");
-                if (!name) return;
-                const price = parseFloat(prompt("Price ($):") || "100");
-                const newS = {
-                  id: Date.now(),
-                  name,
-                  category: "Thai Traditional",
-                  duration: 60,
-                  price,
-                  deposit: 20,
-                  isRmt: false,
-                  taxRate: 0.13,
-                  description: "Custom Spa Treatment"
-                };
-                setServices(prev => [newS, ...prev]);
-              }}
+              onClick={addServiceRow}
               className="px-4 py-2 bg-amber-700 text-white rounded-xl text-xs font-bold hover:bg-amber-800 transition flex items-center"
             >
               <Plus className="w-4 h-4 mr-1" /> {t.addService}
             </button>
           </div>
 
+          {servicesError && (
+            <p role="alert" className="text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">{servicesError}</p>
+          )}
+          {serviceSaveError && (
+            <p role="alert" className="text-xs font-semibold text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{serviceSaveError}</p>
+          )}
+          {serviceSaveMessage && (
+            <p role="status" className="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">{serviceSaveMessage}</p>
+          )}
+
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs sm:text-sm">
               <thead className="bg-stone-50 text-stone-600 font-bold border-b">
                 <tr>
-                  <th className="p-3">{t.name}</th>
-                  <th className="p-3">{t.category}</th>
-                  <th className="p-3">{t.duration}</th>
-                  <th className="p-3">{t.price}</th>
-                  <th className="p-3">{t.deposit}</th>
-                  <th className="p-3">{t.isRmt}</th>
-                  <th className="p-3">{t.actions}</th>
+                  <th className="p-2">{t.name}</th>
+                  <th className="p-2">{t.category}</th>
+                  <th className="p-2">{t.duration}</th>
+                  <th className="p-2">{t.price}</th>
+                  <th className="p-2">{t.deposit}</th>
+                  <th className="p-2">Tax rate</th>
+                  <th className="p-2">{t.isRmt}</th>
+                  <th className="p-2">Active</th>
+                  <th className="p-2">{t.actions}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-stone-100">
-                {services.map(s => (
-                  <tr key={s.id} className="hover:bg-stone-50 transition">
-                    <td className="p-3 font-bold text-stone-900">{s.name}</td>
-                    <td className="p-3 text-stone-500">{s.category}</td>
-                    <td className="p-3">{s.duration} mins</td>
-                    <td className="p-3 font-bold text-emerald-800">${s.price}</td>
-                    <td className="p-3 text-stone-600">${s.deposit}</td>
-                    <td className="p-3">
-                      {s.isRmt ? (
-                        <span className="bg-blue-100 text-blue-800 font-bold px-2 py-0.5 rounded text-[10px]">RMT Exempt</span>
-                      ) : (
-                        <span className="text-stone-400 text-[10px]">13% HST</span>
-                      )}
+                {serviceForm.map((s) => (
+                  <tr key={s.id} className="hover:bg-stone-50 transition align-top">
+                    <td className="p-2 w-56">
+                      <input
+                        type="text"
+                        value={s.name}
+                        onChange={(e) => updateServiceField(s.id, 'name', e.target.value)}
+                        className="w-full p-1.5 text-xs rounded-lg border border-stone-300 focus:ring-2 focus:ring-emerald-600 focus:outline-none font-bold"
+                      />
+                      <input
+                        type="text"
+                        placeholder="Description"
+                        value={s.description}
+                        onChange={(e) => updateServiceField(s.id, 'description', e.target.value)}
+                        className="mt-1 w-full p-1.5 text-[11px] rounded-lg border border-stone-200 focus:ring-2 focus:ring-emerald-600 focus:outline-none text-stone-500"
+                      />
                     </td>
-                    <td className="p-3">
-                      <button
-                        onClick={() => {
-                          const newP = prompt("New Price ($):", s.price);
-                          if (newP !== null) {
-                            setServices(prev => prev.map(item => item.id === s.id ? { ...item, price: parseFloat(newP) } : item));
-                          }
-                        }}
-                        className="text-amber-700 hover:text-amber-900 font-bold text-xs"
+                    <td className="p-2 w-36">
+                      <select
+                        value={s.category}
+                        onChange={(e) => updateServiceField(s.id, 'category', e.target.value)}
+                        className="w-full p-1.5 text-xs rounded-lg border border-stone-300 focus:ring-2 focus:ring-emerald-600 focus:outline-none"
                       >
-                        {t.edit}
+                        {['Thai Traditional', 'Thai Combo Swedish', 'Hot Stone Combo', 'Add-On & Packages', 'RMT Healthcare'].map((cat) => (
+                          <option key={cat} value={cat}>{cat}</option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="p-2 w-20">
+                      <input
+                        type="number"
+                        min="1"
+                        value={s.duration}
+                        onChange={(e) => updateServiceField(s.id, 'duration', e.target.value)}
+                        className="w-full p-1.5 text-xs rounded-lg border border-stone-300 focus:ring-2 focus:ring-emerald-600 focus:outline-none"
+                      />
+                    </td>
+                    <td className="p-2 w-24">
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={s.price}
+                        onChange={(e) => updateServiceField(s.id, 'price', e.target.value)}
+                        className="w-full p-1.5 text-xs rounded-lg border border-stone-300 focus:ring-2 focus:ring-emerald-600 focus:outline-none font-bold text-emerald-800"
+                      />
+                    </td>
+                    <td className="p-2 w-24">
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={s.deposit}
+                        onChange={(e) => updateServiceField(s.id, 'deposit', e.target.value)}
+                        className="w-full p-1.5 text-xs rounded-lg border border-stone-300 focus:ring-2 focus:ring-emerald-600 focus:outline-none"
+                      />
+                    </td>
+                    <td className="p-2 w-20">
+                      <input
+                        type="number"
+                        min="0"
+                        max="1"
+                        step="0.01"
+                        value={s.taxRate}
+                        onChange={(e) => updateServiceField(s.id, 'taxRate', e.target.value)}
+                        className="w-full p-1.5 text-xs rounded-lg border border-stone-300 focus:ring-2 focus:ring-emerald-600 focus:outline-none"
+                      />
+                    </td>
+                    <td className="p-2 w-16 text-center">
+                      <input
+                        type="checkbox"
+                        checked={s.isRmt}
+                        onChange={(e) => updateServiceField(s.id, 'isRmt', e.target.checked)}
+                      />
+                    </td>
+                    <td className="p-2 w-16 text-center">
+                      <input
+                        type="checkbox"
+                        checked={s.active !== false}
+                        onChange={(e) => updateServiceField(s.id, 'active', e.target.checked)}
+                      />
+                    </td>
+                    <td className="p-2">
+                      <button
+                        type="button"
+                        onClick={() => removeServiceRow(s.id)}
+                        className="inline-flex items-center justify-center text-red-600 hover:text-red-800"
+                        aria-label={`Remove ${s.name || 'service'}`}
+                      >
+                        <Trash2 className="w-4 h-4" />
                       </button>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
+          </div>
+
+          <div className="flex justify-end pt-2">
+            <button
+              onClick={saveServiceForm}
+              disabled={isSavingServices}
+              className="px-5 py-2.5 bg-emerald-800 text-white font-semibold rounded-xl hover:bg-emerald-900 disabled:opacity-50 transition text-sm"
+            >
+              {isSavingServices ? 'Saving…' : 'Save services'}
+            </button>
           </div>
         </div>
       )}
