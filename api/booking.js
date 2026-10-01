@@ -3310,7 +3310,12 @@ async function generateCampaignCopy(goal, audienceDescription, audienceCount) {
   if (!response.ok) {
     const providerMessage = data.error?.message || `Gemini returned status ${response.status}`;
     console.error('Campaign copy generation failed:', providerMessage);
-    throw new Error('The campaign writing assistant could not generate copy. Check the Gemini API key and quota, then try again.');
+    const hint = response.status === 429
+      ? 'The Gemini quota or rate limit has been reached. Wait a minute, or check the quota and billing for this API key in Google AI Studio.'
+      : [400, 401, 403].includes(response.status)
+        ? 'Check that GEMINI_API_KEY in Vercel is a valid Gemini API key with the Generative Language API enabled.'
+        : 'Gemini is temporarily unavailable. Please try again shortly.';
+    throw new Error(`The campaign writing assistant could not generate copy (Gemini ${response.status}: ${String(providerMessage).slice(0, 200)}). ${hint}`);
   }
   const text = data.steps
     ?.filter((step) => step.type === 'model_output')
