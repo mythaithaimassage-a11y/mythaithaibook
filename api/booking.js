@@ -337,6 +337,230 @@ async function bqDeleteBookingRow(bigquery, bookingId) {
     params: { booking_id: bookingId },
   });
 }
+
+const BIGQUERY_PATIENT_HISTORY_TABLE = process.env.BIGQUERY_PATIENT_HISTORY_TABLE || 'patient_history';
+const BIGQUERY_PATIENT_HISTORY_MIGRATIONS_TABLE = `${BIGQUERY_PATIENT_HISTORY_TABLE}_migrations`;
+const PATIENT_HISTORY_TABLE_FIELDS = [
+  { name: 'booking_id', type: 'STRING' },
+  { name: 'created_at', type: 'STRING' },
+  { name: 'patient_name', type: 'STRING' },
+  { name: 'date_of_birth', type: 'STRING' },
+  { name: 'gender', type: 'STRING' },
+  { name: 'phone', type: 'STRING' },
+  { name: 'email', type: 'STRING' },
+  { name: 'address', type: 'STRING' },
+  { name: 'city', type: 'STRING' },
+  { name: 'postal_code', type: 'STRING' },
+  { name: 'heard_about', type: 'STRING' },
+  { name: 'condition_heart', type: 'STRING' },
+  { name: 'condition_blood_pressure', type: 'STRING' },
+  { name: 'condition_diabetes', type: 'STRING' },
+  { name: 'condition_cancer', type: 'STRING' },
+  { name: 'condition_headaches', type: 'STRING' },
+  { name: 'condition_bone_joint', type: 'STRING' },
+  { name: 'condition_broken_bones', type: 'STRING' },
+  { name: 'condition_osteoporosis', type: 'STRING' },
+  { name: 'condition_allergies', type: 'STRING' },
+  { name: 'condition_surgeries', type: 'STRING' },
+  { name: 'condition_numbness', type: 'STRING' },
+  { name: 'condition_skin_sensitivity', type: 'STRING' },
+  { name: 'condition_pregnant', type: 'STRING' },
+  { name: 'condition_medications', type: 'STRING' },
+  { name: 'details', type: 'STRING' },
+  { name: 'pain_areas', type: 'STRING' },
+  { name: 'body_areas', type: 'STRING' },
+  { name: 'pressure', type: 'STRING' },
+  { name: 'consent', type: 'STRING' },
+  { name: 'signature', type: 'STRING' },
+  { name: 'signature_date', type: 'STRING' },
+  { name: 'pre_collection_consent', type: 'STRING' },
+  { name: 'consent_timestamp', type: 'STRING' },
+];
+const PATIENT_HISTORY_TABLE_COLUMNS = ['record_id', ...PATIENT_HISTORY_TABLE_FIELDS.map(({ name }) => name)];
+const PATIENT_HISTORY_SHEET_HEADERS = [
+  'Booking ID', 'Created At', 'Patient Name', 'Date of Birth', 'Gender', 'Phone', 'Email',
+  'Address', 'City', 'Postal Code', 'How Heard About Us', 'Heart Condition', 'Blood Pressure',
+  'Diabetes', 'Cancer', 'Headaches or Migraines', 'Bone or Joint Disorder',
+  'Broken Bones or Implants', 'Osteoporosis or Arthritis', 'Allergies to Oil', 'Surgeries',
+  'Numbness or Loss of Sensation', 'Skin Sensitivity or Easy Bruising',
+  'Pregnant or Recently Gave Birth', 'Medications or Supplements', 'Additional Health Details',
+  'Pain or Discomfort Areas', 'Body Areas', 'Preferred Pressure', 'Consent', 'Typed Signature',
+  'Signature Date', 'Pre-collection Consent', 'Consent Timestamp',
+];
+
+function patientHistoryTableRef() {
+  return `\`${BIGQUERY_PROJECT_ID}.${BIGQUERY_DATASET_ID}.${BIGQUERY_PATIENT_HISTORY_TABLE}\``;
+}
+
+let ensurePatientHistoryTablePromise = null;
+async function ensurePatientHistoryTable(bigquery) {
+  if (!ensurePatientHistoryTablePromise) {
+    ensurePatientHistoryTablePromise = (async () => {
+      const dataset = bigquery.dataset(BIGQUERY_DATASET_ID);
+      const [datasetExists] = await dataset.exists();
+      if (!datasetExists) {
+        try {
+          await bigquery.createDataset(BIGQUERY_DATASET_ID, { location: process.env.BIGQUERY_LOCATION || 'US' });
+        } catch (error) {
+          const [existsNow] = await dataset.exists();
+          if (!existsNow) throw error;
+        }
+      }
+      const table = dataset.table(BIGQUERY_PATIENT_HISTORY_TABLE);
+      const [tableExists] = await table.exists();
+      if (!tableExists) {
+        const schema = [
+          { name: 'record_id', type: 'STRING', mode: 'REQUIRED' },
+          ...PATIENT_HISTORY_TABLE_FIELDS.map(({ name, type }) => ({ name, type, mode: 'NULLABLE' })),
+        ];
+        try {
+          await dataset.createTable(BIGQUERY_PATIENT_HISTORY_TABLE, { schema });
+        } catch (error) {
+          const [existsNow] = await table.exists();
+          if (!existsNow) throw error;
+        }
+      }
+      const migrationsTable = dataset.table(BIGQUERY_PATIENT_HISTORY_MIGRATIONS_TABLE);
+      const [migrationsTableExists] = await migrationsTable.exists();
+      if (!migrationsTableExists) {
+        try {
+          await dataset.createTable(BIGQUERY_PATIENT_HISTORY_MIGRATIONS_TABLE, {
+            schema: [
+              { name: 'migration_id', type: 'STRING', mode: 'REQUIRED' },
+              { name: 'completed_at', type: 'STRING', mode: 'REQUIRED' },
+              { name: 'imported_rows', type: 'INT64', mode: 'REQUIRED' },
+            ],
+          });
+        } catch (error) {
+          const [existsNow] = await migrationsTable.exists();
+          if (!existsNow) throw error;
+        }
+      }
+    })().catch((error) => {
+      ensurePatientHistoryTablePromise = null;
+      throw error;
+    });
+  }
+  return ensurePatientHistoryTablePromise;
+}
+
+function patientHistoryValuesFromSheetRow(row) {
+  return PATIENT_HISTORY_TABLE_FIELDS.map((_, index) =>
+    row[index] === null || row[index] === undefined ? '' : String(row[index]),
+  );
+}
+
+function patientHistoryRecordId(row, suffix) {
+  return `legacy:${String(row[0] || '')}:${String(row[1] || '')}:${suffix}`;
+}
+
+async function migratePatientHistorySpreadsheet(bigquery, sheets) {
+  const [migrationRows] = await bigquery.query({
+    query: `SELECT migration_id FROM \`${BIGQUERY_PROJECT_ID}.${BIGQUERY_DATASET_ID}.${BIGQUERY_PATIENT_HISTORY_MIGRATIONS_TABLE}\` WHERE migration_id = @migration_id LIMIT 1`,
+    params: { migration_id: 'legacy_patient_history_spreadsheet_v1' },
+  });
+  if (migrationRows.length) return 0;
+  let rows = [];
+  try {
+    const result = await sheets.spreadsheets.values.get({
+      spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+      range: 'PatientHistory!A:AH',
+    });
+    rows = result.data.values || [];
+  } catch (error) {
+    // A missing legacy tab means there is nothing to migrate.
+    if (!/Unable to parse range/i.test(String(error?.message || ''))) throw error;
+  }
+  const dataRows = rows[0]?.[0] === 'Booking ID' ? rows.slice(1) : rows;
+  const legacyRows = dataRows
+    .map((row, index) => ({ row, index }))
+    .filter(({ row }) => row[0])
+    .map(({ row, index }) => ({
+      record_id: patientHistoryRecordId(row, index),
+      values: patientHistoryValuesFromSheetRow(row),
+    }));
+  const insertColumns = PATIENT_HISTORY_TABLE_COLUMNS.join(', ');
+  const insertValues = PATIENT_HISTORY_TABLE_COLUMNS.map((column) => `source.${column}`).join(', ');
+  for (let offset = 0; offset < legacyRows.length; offset += 100) {
+    const batch = legacyRows.slice(offset, offset + 100);
+    const params = {};
+    const valuesSql = batch.map(({ record_id, values }, batchIndex) => {
+      params[`record_id_${batchIndex}`] = record_id;
+      PATIENT_HISTORY_TABLE_FIELDS.forEach(({ name }, fieldIndex) => {
+        params[`${name}_${batchIndex}`] = values[fieldIndex];
+      });
+      return `SELECT @record_id_${batchIndex} AS record_id, ${PATIENT_HISTORY_TABLE_FIELDS.map(({ name }) => `@${name}_${batchIndex} AS ${name}`).join(', ')}`;
+    }).join(', ');
+    await bigquery.query({
+      query: `MERGE ${patientHistoryTableRef()} AS target USING (${valuesSql}) AS source ON target.record_id = source.record_id WHEN NOT MATCHED THEN INSERT (${insertColumns}) VALUES (${insertValues})`,
+      params,
+    });
+  }
+  await bigquery.query({
+    query: `MERGE \`${BIGQUERY_PROJECT_ID}.${BIGQUERY_DATASET_ID}.${BIGQUERY_PATIENT_HISTORY_MIGRATIONS_TABLE}\` AS target USING (SELECT @migration_id AS migration_id, @completed_at AS completed_at, @imported_rows AS imported_rows) AS source ON target.migration_id = source.migration_id WHEN NOT MATCHED THEN INSERT (migration_id, completed_at, imported_rows) VALUES (source.migration_id, source.completed_at, source.imported_rows)`,
+    params: {
+      migration_id: 'legacy_patient_history_spreadsheet_v1',
+      completed_at: new Date().toISOString(),
+      imported_rows: legacyRows.length,
+    },
+  });
+  return legacyRows.length;
+}
+
+let patientHistoryMigrationPromise = null;
+async function ensurePatientHistoryStorage(bigquery, sheets) {
+  await ensurePatientHistoryTable(bigquery);
+  if (!patientHistoryMigrationPromise) {
+    patientHistoryMigrationPromise = migratePatientHistorySpreadsheet(bigquery, sheets)
+      .catch((error) => {
+        patientHistoryMigrationPromise = null;
+        throw error;
+      });
+  }
+  await patientHistoryMigrationPromise;
+}
+
+async function bqPatientHistoryValuesGet(bigquery, sheets) {
+  await ensurePatientHistoryStorage(bigquery, sheets);
+  const [records] = await bigquery.query({
+    query: `SELECT ${PATIENT_HISTORY_TABLE_COLUMNS.join(', ')} FROM ${patientHistoryTableRef()} ORDER BY created_at ASC, record_id ASC`,
+  });
+  return {
+    data: {
+      values: [
+        PATIENT_HISTORY_SHEET_HEADERS,
+        ...records.map((record) => PATIENT_HISTORY_TABLE_FIELDS.map(({ name }) => record[name] ?? '')),
+      ],
+    },
+  };
+}
+
+async function bqAppendPatientHistory(bigquery, sheets, values) {
+  await ensurePatientHistoryStorage(bigquery, sheets);
+  const params = { record_id: crypto.randomUUID() };
+  PATIENT_HISTORY_TABLE_FIELDS.forEach(({ name }, index) => {
+    params[name] = values[index] === null || values[index] === undefined ? '' : String(values[index]);
+  });
+  await bigquery.query({
+    query: `INSERT INTO ${patientHistoryTableRef()} (${PATIENT_HISTORY_TABLE_COLUMNS.join(', ')}) VALUES (@record_id, ${PATIENT_HISTORY_TABLE_FIELDS.map(({ name }) => `@${name}`).join(', ')})`,
+    params,
+  });
+}
+
+async function bqDeletePatientHistory(bigquery, sheets, bookingId, createdAt) {
+  await ensurePatientHistoryStorage(bigquery, sheets);
+  const [records] = await bigquery.query({
+    query: `SELECT record_id FROM ${patientHistoryTableRef()} WHERE booking_id = @booking_id AND (@created_at = '' OR created_at = @created_at) ORDER BY created_at ASC, record_id ASC`,
+    params: { booking_id: bookingId, created_at: createdAt },
+  });
+  const recordIds = records.slice(0, 1).map((record) => record.record_id);
+  if (!recordIds.length) return 0;
+  await bigquery.query({
+    query: `DELETE FROM ${patientHistoryTableRef()} WHERE record_id IN UNNEST(@record_ids)`,
+    params: { record_ids: recordIds },
+  });
+  return recordIds.length;
+}
 // --- end BigQuery-backed booking records ----------------------------------
 
 // --- BigQuery-backed Square payment records ---------------------------------
@@ -1120,11 +1344,8 @@ function hasTimeOverlap(startA, endA, startB, endB) {
     new Date(endA).getTime() > new Date(startB).getTime();
 }
 
-async function findExistingPatientHistory(sheets, payload) {
-  const result = await sheets.spreadsheets.values.get({
-    spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
-    range: 'PatientHistory!A:AH',
-  });
+async function findExistingPatientHistory(bigquery, sheets, payload) {
+  const result = await bqPatientHistoryValuesGet(bigquery, sheets);
   const rows = result.data.values || [];
   const email = String(payload.email || '').trim().toLowerCase();
   const phone = String(payload.phone || '').replace(/\D/g, '');
@@ -3783,19 +4004,19 @@ export default async function handler(req, res) {
     }
 
     const view = String(req.query?.view || '');
-    const validGetViews = ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'business-name', 'square-config', 'google-reviews', 'branches', 'services', 'therapists', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal', 'company-join', 'find-booking', 'availability', 'unavailability', 'campaign-log', 'campaign-audience-options', 'review-request-audience'];
+    const validGetViews = ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'business-name', 'square-config', 'google-reviews', 'branches', 'services', 'therapists', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal', 'company-join', 'find-booking', 'availability', 'unavailability', 'campaign-log', 'campaign-audience-options', 'review-request-audience', 'therapist-accounts'];
     if (req.method === 'GET' && !validGetViews.includes(view)) {
       return res.status(404).json({ message: 'Unknown booking view' });
     }
     const ownerOnlyRequest =
-      (req.method === 'GET' && ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'google-ads-report', 'loyalty-dashboard', 'google-reviews', 'unavailability', 'campaign-log', 'campaign-audience-options', 'review-request-audience'].includes(view)) ||
-      ['business-profile', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-clear-ledger', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-link', 'unavailability-delete', 'review-request-send', 'reassign-therapist'].includes(view) ||
+      (req.method === 'GET' && ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'google-ads-report', 'loyalty-dashboard', 'google-reviews', 'unavailability', 'campaign-log', 'campaign-audience-options', 'review-request-audience', 'therapist-accounts'].includes(view)) ||
+      ['business-profile', 'mark-paid', 'therapist-account-status', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-clear-ledger', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-link', 'unavailability-delete', 'review-request-send', 'reassign-therapist'].includes(view) ||
       (req.method === 'POST' && ['branches', 'services', 'therapists', 'unavailability'].includes(view));
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
     if (ownerOnlyRequest && !getOwnerSession(req)) {
       return res.status(401).json({ message: 'Owner sign-in required' });
     }
-    if (['business-profile', 'branches', 'services', 'therapists', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-clear-ledger', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-signup', 'company-portal-bulk-signup', 'company-join-signup', 'company-portal-link', 'square-create-checkout', 'cancel-booking', 'reschedule-booking', 'unavailability', 'unavailability-delete', 'review-request-send', 'reassign-therapist'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
+    if (['business-profile', 'branches', 'services', 'therapists', 'therapist-account-status', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-clear-ledger', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-signup', 'company-portal-bulk-signup', 'company-join-signup', 'company-portal-link', 'square-create-checkout', 'cancel-booking', 'reschedule-booking', 'unavailability', 'unavailability-delete', 'review-request-send', 'reassign-therapist'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
       return res.status(403).json({ message: 'Profile update origin is not allowed' });
     }
 
@@ -5586,6 +5807,55 @@ export default async function handler(req, res) {
       if (req.query.view === 'therapist-session') return res.status(200).json({ therapist: { id: account.id, name: account.name } });
     }
 
+    if (req.method === 'GET' && view === 'therapist-accounts') {
+      const accountsResult = await sheets.spreadsheets.values.get({
+        spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+        range: 'TherapistAccounts!A:F',
+      }).catch((error) => {
+        if (error.code === 400) return { data: { values: [] } };
+        throw error;
+      });
+      const accounts = (accountsResult.data.values || [])
+        .filter((row) => row[0] && row[0] !== 'Therapist ID')
+        .map((row) => ({
+          id: row[0],
+          username: row[1] || '',
+          name: row[2] || '',
+          status: String(row[4] || 'pending').toLowerCase(),
+          createdAt: row[5] || '',
+        }))
+        .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+      return res.status(200).json({ accounts });
+    }
+
+    if (req.method === 'POST' && view === 'therapist-account-status') {
+      const id = String(req.body?.id || '').trim();
+      const status = String(req.body?.status || '').trim().toLowerCase();
+      if (!id || id.length > 100 || !['approved', 'rejected', 'pending'].includes(status)) {
+        return res.status(400).json({ message: 'A therapist account and a valid status are required.' });
+      }
+      const accountsResult = await sheets.spreadsheets.values.get({
+        spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+        range: 'TherapistAccounts!A:F',
+      }).catch((error) => {
+        if (error.code === 400) return { data: { values: [] } };
+        throw error;
+      });
+      const rows = accountsResult.data.values || [];
+      const rowIndex = rows.findIndex((row) => row[0] === id && row[0] !== 'Therapist ID');
+      if (rowIndex < 0) return res.status(404).json({ message: 'Therapist account was not found.' });
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
+        range: `TherapistAccounts!E${rowIndex + 1}`,
+        valueInputOption: 'RAW',
+        requestBody: { values: [[status]] },
+      });
+      const row = rows[rowIndex];
+      return res.status(200).json({
+        account: { id: row[0], username: row[1] || '', name: row[2] || '', status, createdAt: row[5] || '' },
+      });
+    }
+
     if (req.method === 'POST' && req.query?.view === 'therapist-signup') {
       if (!THERAPIST_SESSION_SECRET) return res.status(503).json({ message: 'Therapist authentication is not configured' });
       const name = String(req.body?.name || '').trim();
@@ -5637,7 +5907,7 @@ export default async function handler(req, res) {
         .find((item) => item.username === username);
       const account = sheetAccount || getTherapistAccounts().find((item) => item.username === username);
       if (sheetAccount && sheetAccount.status !== 'approved') {
-        return res.status(403).json({ message: sheetAccount ? 'Your account is awaiting administrator approval.' : 'Invalid therapist username or password' });
+        return res.status(403).json({ message: sheetAccount.status === 'rejected' ? 'Your account request was not approved. Please contact the owner.' : 'Your account is awaiting administrator approval.' });
       }
       if (!account || !verifyPassword(req.body?.password, account.passwordHash)) {
         return res.status(401).json({ message: 'Invalid therapist username or password' });
@@ -5650,7 +5920,7 @@ export default async function handler(req, res) {
       const bigquery = getBigQueryClient();
       const [bookingResult, historyResult, roster, allBranches] = await Promise.all([
         bqFetchBookingRows(bigquery),
-        sheets.spreadsheets.values.get({ spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID, range: 'PatientHistory!A:AH' }),
+        bqPatientHistoryValuesGet(bigquery, sheets),
         getTherapists(sheets),
         getBranches(sheets),
       ]);
@@ -5846,10 +6116,7 @@ export default async function handler(req, res) {
       }
 
       if (req.query?.view === 'patient-history') {
-        const result = await sheets.spreadsheets.values.get({
-          spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
-          range: 'PatientHistory!A:AH',
-        });
+        const result = await bqPatientHistoryValuesGet(getBigQueryClient(), sheets);
         const rows = result.data.values || [];
         const dataRows = rows[0]?.[0] === 'Booking ID' ? rows.slice(1) : rows;
         return res.status(200).json({
@@ -6638,22 +6905,11 @@ export default async function handler(req, res) {
       if (!bookingId || bookingId.length > 100) {
         return res.status(400).json({ message: 'A valid booking ID is required' });
       }
-      const result = await sheets.spreadsheets.values.get({
-        spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
-        range: 'PatientHistory!A:AH',
-      });
-      const rows = result.data.values || [];
-      const hasHeader = rows[0]?.[0] === 'Booking ID';
-      const startIndex = hasHeader ? 1 : 0;
-      const rowIndex = rows.findIndex((row, index) =>
-        index >= startIndex &&
-        String(row[0] || '') === bookingId &&
-        (!createdAt || String(row[1] || '') === createdAt),
-      );
-      if (rowIndex < 0) return res.status(404).json({ message: 'Patient history record was not found' });
+      const bigquery = getBigQueryClient();
+      const deletedCount = await bqDeletePatientHistory(bigquery, sheets, bookingId, createdAt);
+      if (!deletedCount) return res.status(404).json({ message: 'Patient history record was not found' });
 
-      await deleteSheetRows(sheets, 'PatientHistory', [rowIndex + 1], PATIENT_HISTORY_SPREADSHEET_ID);
-      const removedContacts = await syncMarketingContactsWithDatabase(sheets, getBigQueryClient());
+      const removedContacts = await syncMarketingContactsWithDatabase(sheets, bigquery);
       return res.status(200).json({ deleted: true, bookingId, removedContacts });
     }
 
@@ -7029,7 +7285,7 @@ export default async function handler(req, res) {
     if (payload.paymentOption === 'full') payload.paidAmount = finalTotal.toFixed(2);
     let patientHistory = payload.patientHistory || {};
     if (patientHistory.reuseExisting) {
-      patientHistory = await findExistingPatientHistory(sheets, payload);
+      patientHistory = await findExistingPatientHistory(getBigQueryClient(), sheets, payload);
       if (!patientHistory) {
         return res.status(409).json({
           message: 'No existing patient history was found for this email or phone number. Please complete the health history form.',
@@ -7216,55 +7472,47 @@ export default async function handler(req, res) {
     let patientHistorySaved = false;
     let patientHistoryError = '';
     try {
-      await ensurePatientHistorySheet(sheets);
       const history = patientHistory;
-      await sheets.spreadsheets.values.append({
-        spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID,
-        range: 'PatientHistory!A:AH',
-        valueInputOption: 'USER_ENTERED',
-        requestBody: {
-          values: [[
-            payload.id,
-            new Date().toISOString(),
-            payload.customerName,
-            history.dateOfBirth || '',
-            history.gender || '',
-            payload.phone,
-            payload.email,
-            history.address || '',
-            history.city || '',
-            history.postalCode || '',
-            history.heardAbout || '',
-            history.conditions?.heart || '',
-            history.conditions?.bloodPressure || '',
-            history.conditions?.diabetes || '',
-            history.conditions?.cancer || '',
-            history.conditions?.headaches || '',
-            history.conditions?.boneJoint || '',
-            history.conditions?.brokenBones || '',
-            history.conditions?.osteoporosis || '',
-            history.conditions?.allergies || '',
-            history.conditions?.surgeries || '',
-            history.conditions?.numbness || '',
-            history.conditions?.skinSensitivity || '',
-            history.conditions?.pregnant || '',
-            history.conditions?.medications || '',
-            history.details || '',
-            history.painAreas || '',
-            history.bodyAreas || '',
-            history.pressure || '',
-            history.consent ? 'Yes' : 'No',
-            history.signature || '',
-            history.signatureDate || '',
-            history.preCollectionConsent ? 'Yes' : 'No',
-            history.consentTimestamp || '',
-          ]],
-        },
-      });
+      await bqAppendPatientHistory(getBigQueryClient(), sheets, [
+        payload.id,
+        new Date().toISOString(),
+        payload.customerName,
+        history.dateOfBirth || '',
+        history.gender || '',
+        payload.phone,
+        payload.email,
+        history.address || '',
+        history.city || '',
+        history.postalCode || '',
+        history.heardAbout || '',
+        history.conditions?.heart || '',
+        history.conditions?.bloodPressure || '',
+        history.conditions?.diabetes || '',
+        history.conditions?.cancer || '',
+        history.conditions?.headaches || '',
+        history.conditions?.boneJoint || '',
+        history.conditions?.brokenBones || '',
+        history.conditions?.osteoporosis || '',
+        history.conditions?.allergies || '',
+        history.conditions?.surgeries || '',
+        history.conditions?.numbness || '',
+        history.conditions?.skinSensitivity || '',
+        history.conditions?.pregnant || '',
+        history.conditions?.medications || '',
+        history.details || '',
+        history.painAreas || '',
+        history.bodyAreas || '',
+        history.pressure || '',
+        history.consent ? 'Yes' : 'No',
+        history.signature || '',
+        history.signatureDate || '',
+        history.preCollectionConsent ? 'Yes' : 'No',
+        history.consentTimestamp || '',
+      ]);
       patientHistorySaved = true;
     } catch (error) {
       patientHistoryError = error.message || 'Patient history could not be saved';
-      console.error('Patient history spreadsheet error:', error);
+      console.error('Patient history BigQuery error:', error);
     }
 
     let emailSent = false;

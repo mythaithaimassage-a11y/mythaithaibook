@@ -8,7 +8,7 @@ import {
   TrendingUp, ChevronRight, AlertCircle, Sparkles, ShieldCheck, Check, X,
   DollarSign, Users, Award, Briefcase, RefreshCw, Layers, CheckSquare, Stethoscope, Database,
   Menu, Home, CalendarDays, UserRound, BarChart3, ChevronRight as ChevronRightIcon,
-  Megaphone, ReceiptText, Download, Eye, MousePointerClick, Upload, Crown, Star, CalendarX, CalendarOff, Ban, Copy
+  Megaphone, ReceiptText, Download, Eye, MousePointerClick, Upload, Crown, Star, CalendarX, CalendarOff, Ban, Copy, UserCheck
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
@@ -325,68 +325,258 @@ const BODY_AREA_OPTIONS = [
   ['Arms / hands', 'Arms'], ['Hips / glutes', 'Hips'], ['Legs / knees', 'Legs'], ['Feet', 'Feet'],
 ];
 
-function BodyAreaMap({ value = '', onChange, readOnly = false }) {
+const BODY_TYPE_OPTIONS = [['female', 'Female'], ['male', 'Male'], ['neutral', 'Neutral']];
+
+function bodyTypeFromGender(gender) {
+  const value = String(gender || '').trim().toLowerCase();
+  if (value === 'female') return 'female';
+  if (value === 'male') return 'male';
+  return 'neutral';
+}
+
+// Each part is an ellipsoid (centre x/y/z, radii rx/ry/rz). x runs to the patient's left,
+// y runs downwards and z points out of the front of the body.
+function buildBodyParts(bodyType) {
+  const female = bodyType === 'female';
+  const male = bodyType === 'male';
+  const pick = (f, m, n) => (female ? f : male ? m : n);
+  const shoulderX = pick(31, 39, 35);
+  const armX = pick(40, 48, 44);
+  const legX = pick(16, 15, 15);
+  const parts = [
+    { id: 'head', areas: ['Head / face'], x: 0, y: 30, z: 0, rx: pick(17, 19, 18), ry: pick(22, 23, 22), rz: pick(19, 20, 19) },
+    { id: 'neck', areas: ['Neck'], x: 0, y: 59, z: -1, rx: pick(7, 10, 8), ry: 11, rz: pick(7, 9, 8) },
+    { id: 'upper-torso', areas: ['Upper back', 'Chest / abdomen'], x: 0, y: 103, z: 0, rx: pick(29, 36, 32), ry: pick(33, 36, 34), rz: pick(18, 21, 19) },
+    { id: 'lower-torso', areas: ['Lower back', 'Chest / abdomen'], x: 0, y: 148, z: 0, rx: pick(25, 30, 27), ry: 28, rz: pick(16, 18, 17) },
+    { id: 'pelvis', areas: ['Hips / glutes'], x: 0, y: 184, z: -1, rx: pick(38, 32, 34), ry: pick(25, 22, 23), rz: pick(21, 19, 20) },
+    ...[-1, 1].flatMap((side) => [
+      { id: `shoulder-${side}`, areas: ['Shoulders'], x: side * shoulderX, y: 78, z: 0, rx: pick(12, 15, 13), ry: pick(11, 13, 12), rz: pick(11, 13, 12) },
+      { id: `upper-arm-${side}`, areas: ['Arms / hands'], x: side * armX, y: 114, z: 0, rx: pick(7, 9, 8), ry: 30, rz: pick(7, 9, 8) },
+      { id: `forearm-${side}`, areas: ['Arms / hands'], x: side * (armX + 3), y: 169, z: 3, rx: pick(6, 7.5, 7), ry: 28, rz: pick(6, 7.5, 7) },
+      { id: `hand-${side}`, areas: ['Arms / hands'], x: side * (armX + 5), y: 205, z: 5, rx: pick(5, 6, 5.5), ry: 11, rz: 4 },
+      { id: `thigh-${side}`, areas: ['Legs / knees'], x: side * legX, y: 240, z: 0, rx: pick(15, 14, 14), ry: 42, rz: pick(15, 14, 14) },
+      { id: `knee-${side}`, areas: ['Legs / knees'], x: side * legX, y: 280, z: 2, rx: 9, ry: 9, rz: 9 },
+      { id: `shin-${side}`, areas: ['Legs / knees'], x: side * (legX - 1), y: 315, z: -1, rx: pick(9, 10, 9.5), ry: 34, rz: pick(9, 10, 9.5) },
+      { id: `foot-${side}`, areas: ['Feet'], x: side * (legX - 1), y: 354, z: 7, rx: 7, ry: 6, rz: 15 },
+    ]),
+  ];
+  if (female) {
+    parts.push(...[-1, 1].map((side) => ({ id: `bust-${side}`, areas: ['Chest / abdomen'], x: side * 12, y: 108, z: 13, rx: 11, ry: 10, rz: 9 })));
+  }
+  return parts;
+}
+
+// Marker anchors. facing limits a marker to when that side of the body is towards the viewer;
+// candidates lets paired limbs show their marker on whichever limb is nearer.
+function buildAreaAnchors(bodyType) {
+  const parts = buildBodyParts(bodyType);
+  const part = (id) => parts.find((item) => item.id === id);
+  const pair = (prefix, dz = 0) => [-1, 1].map((side) => { const p = part(`${prefix}-${side}`); return { x: p.x, y: p.y, z: p.z + dz }; });
+  return {
+    'Head / face': { candidates: [{ x: 0, y: 28, z: 0 }] },
+    Neck: { candidates: [{ x: 0, y: 59, z: 0 }] },
+    Shoulders: { candidates: pair('shoulder') },
+    'Upper back': { facing: 'back', candidates: [{ x: 0, y: 100, z: -20 }] },
+    'Lower back': { facing: 'back', candidates: [{ x: 0, y: 148, z: -17 }] },
+    'Chest / abdomen': { facing: 'front', candidates: [{ x: 0, y: 128, z: 20 }] },
+    'Arms / hands': { candidates: pair('forearm') },
+    'Hips / glutes': { candidates: [{ x: 0, y: 184, z: 0 }] },
+    'Legs / knees': { candidates: pair('knee') },
+    Feet: { candidates: pair('foot', 6) },
+  };
+}
+
+function rotatePoint(point, angle) {
+  const radians = (angle * Math.PI) / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  return { x: point.x * cos + point.z * sin, depth: -point.x * sin + point.z * cos };
+}
+
+function describeBodyAngle(angle) {
+  const normalized = ((angle % 360) + 360) % 360;
+  if (normalized < 45 || normalized >= 315) return 'Front';
+  if (normalized < 135) return "Patient's right side";
+  if (normalized < 225) return 'Back';
+  return "Patient's left side";
+}
+
+function BodyAreaMap({ value = '', onChange, readOnly = false, gender = '' }) {
   const selected = Array.isArray(value)
     ? value
     : String(value || '').split(',').map((area) => area.trim()).filter(Boolean);
+  const [bodyType, setBodyType] = useState(() => bodyTypeFromGender(gender));
+  const [angle, setAngle] = useState(0);
+  const dragRef = React.useRef(null);
+  const gradientId = React.useId().replace(/[^a-zA-Z0-9_-]/g, '');
+
+  useEffect(() => {
+    setBodyType(bodyTypeFromGender(gender));
+  }, [gender]);
+
   const toggle = (area) => {
     if (readOnly || !onChange) return;
     onChange(selected.includes(area) ? selected.filter((item) => item !== area) : [...selected, area]);
   };
 
-  const views = [
-    { id: 'left', label: 'Left side', areas: ['Head / face', 'Neck', 'Shoulders', 'Arms / hands', 'Hips / glutes', 'Legs / knees'] },
-    { id: 'back', label: 'Back', areas: ['Head / face', 'Neck', 'Shoulders', 'Upper back', 'Lower back', 'Arms / hands', 'Hips / glutes', 'Legs / knees'] },
-    { id: 'front', label: 'Front', areas: ['Head / face', 'Neck', 'Shoulders', 'Chest / abdomen', 'Arms / hands', 'Hips / glutes', 'Legs / knees', 'Feet'] },
-    { id: 'right', label: 'Right side', areas: ['Head / face', 'Neck', 'Shoulders', 'Arms / hands', 'Hips / glutes', 'Legs / knees'] },
-  ];
-  const positions = {
-    'Head / face': 'left-1/2 top-3 -translate-x-1/2',
-    Neck: 'left-1/2 top-11 -translate-x-1/2',
-    Shoulders: 'left-1/2 top-[4.5rem] -translate-x-1/2',
-    'Upper back': 'left-1/2 top-20 -translate-x-1/2',
-    'Lower back': 'left-1/2 top-28 -translate-x-1/2',
-    'Chest / abdomen': 'left-1/2 top-24 -translate-x-1/2',
-    'Arms / hands': 'left-2 top-24',
-    'Hips / glutes': 'left-1/2 top-36 -translate-x-1/2',
-    'Legs / knees': 'left-1/2 bottom-8 -translate-x-1/2',
-    Feet: 'left-1/2 bottom-0 -translate-x-1/2',
+  const radians = (angle * Math.PI) / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  const parts = useMemo(() => buildBodyParts(bodyType), [bodyType]);
+  const anchors = useMemo(() => buildAreaAnchors(bodyType), [bodyType]);
+
+  const isPartMarked = (part) => part.areas.some((area) => {
+    if (!selected.includes(area)) return false;
+    // Torso areas belong to one side of the body, so only tint the torso when that side is visible.
+    if (area === 'Upper back' || area === 'Lower back') return cos < 0.35;
+    if (area === 'Chest / abdomen' && part.id !== 'lower-torso' && part.id !== 'upper-torso') return true;
+    if (area === 'Chest / abdomen') return cos > -0.35;
+    return true;
+  });
+
+  const projectedParts = parts
+    .map((part) => {
+      const centre = rotatePoint(part, angle);
+      return {
+        ...part,
+        px: centre.x,
+        depth: centre.depth,
+        prx: Math.sqrt((part.rx * cos) ** 2 + (part.rz * sin) ** 2),
+        marked: isPartMarked(part),
+      };
+    })
+    .sort((a, b) => a.depth - b.depth);
+
+  const markers = BODY_AREA_OPTIONS.map(([area]) => {
+    const anchor = anchors[area];
+    if (anchor.facing === 'front' && cos < 0.2) return null;
+    if (anchor.facing === 'back' && cos > -0.2) return null;
+    const best = anchor.candidates
+      .map((point) => ({ ...rotatePoint(point, angle), y: point.y }))
+      .sort((a, b) => b.depth - a.depth)[0];
+    return { area, x: best.x, y: best.y, marked: selected.includes(area) };
+  }).filter(Boolean);
+
+  const leftLabel = cos > 0.5 ? 'R' : cos < -0.5 ? 'L' : '';
+  const rightLabel = cos > 0.5 ? 'L' : cos < -0.5 ? 'R' : '';
+
+  const onPointerDown = (event) => {
+    if (event.button !== undefined && event.button !== 0) return;
+    dragRef.current = { startX: event.clientX, startAngle: angle };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
   };
+  const onPointerMove = (event) => {
+    if (!dragRef.current) return;
+    const next = dragRef.current.startAngle + (event.clientX - dragRef.current.startX) * 0.9;
+    setAngle(((Math.round(next) % 360) + 360) % 360);
+  };
+  const endDrag = () => { dragRef.current = null; };
+
+  const bodyTypeLabel = BODY_TYPE_OPTIONS.find(([id]) => id === bodyType)?.[1] || 'Neutral';
 
   return (
     <div className="rounded-2xl border border-cyan-100 bg-gradient-to-br from-slate-50 via-white to-cyan-50 p-4">
-      <div className="flex items-center justify-between mb-3">
-        <div><div className="text-sm font-black text-slate-800">Body map</div><div className="text-[11px] text-slate-500">{readOnly ? 'Highlighted areas were reported by the patient' : 'Select every affected area'}</div></div>
-        <span className="rounded-full bg-cyan-100 px-2.5 py-1 text-[10px] font-bold text-cyan-800">{selected.length} marked</span>
-      </div>
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 max-w-4xl mx-auto">
-        {views.map((view) => (
-          <div key={view.id} className="rounded-xl border border-slate-200 bg-white p-3">
-            <div className="text-center text-[10px] font-bold uppercase tracking-wide text-slate-400 mb-2">{view.label}</div>
-            <div className={`relative mx-auto h-52 w-24 ${view.id === 'left' || view.id === 'right' ? 'scale-x-75' : ''}`}>
-              <div className="absolute left-1/2 top-1 h-8 w-8 -translate-x-1/2 rounded-full border-2 border-slate-400 bg-slate-50" />
-              <div className="absolute left-1/2 top-8 h-28 w-16 -translate-x-1/2 rounded-[42%] border-2 border-slate-400 bg-slate-50" />
-              <div className="absolute left-1/2 top-10 h-24 w-1 -translate-x-1/2 bg-slate-300/70" />
-              <div className="absolute left-1/2 bottom-3 h-20 w-5 -translate-x-[13px] rounded-b-full border-2 border-t-0 border-slate-400 bg-slate-50" />
-              <div className="absolute left-1/2 bottom-3 h-20 w-5 translate-x-[3px] rounded-b-full border-2 border-t-0 border-slate-400 bg-slate-50" />
-              <div className="absolute left-1 top-14 h-24 w-3 -rotate-6 rounded-full border-2 border-slate-400 bg-slate-50" />
-              <div className="absolute right-1 top-14 h-24 w-3 rotate-6 rounded-full border-2 border-slate-400 bg-slate-50" />
-              {view.areas.map((area) => {
-                const marked = selected.includes(area);
-                return (
-                <button key={`${view.id}-${area}`} type="button" title={area} aria-label={`${area}${marked ? ' (selected)' : ''}`} onClick={() => toggle(area)} disabled={readOnly} className={`absolute ${positions[area]} z-10 flex h-7 w-7 items-center justify-center rounded-full border-2 border-white text-[11px] font-black shadow transition ${marked ? 'bg-cyan-500 text-white ring-2 ring-cyan-200' : 'bg-slate-200/80 text-slate-500 hover:bg-cyan-200'} ${readOnly ? 'cursor-default' : ''}`}>
-                  {marked ? selected.indexOf(area) + 1 : ''}
-                </button>
-                );
-              })}
-            </div>
+      <div className="flex flex-wrap items-start justify-between gap-3 mb-3">
+        <div>
+          <div className="text-sm font-black text-slate-800">3D body map</div>
+          <div className="text-[11px] text-slate-500">{readOnly ? 'Highlighted areas were reported by the patient. Drag the body or use the slider to turn it.' : 'Tap every affected area. Drag the body or use the slider to turn it.'}</div>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="flex rounded-lg border border-slate-200 bg-white p-0.5" role="group" aria-label="Body type">
+            {BODY_TYPE_OPTIONS.map(([id, label]) => (
+              <button key={id} type="button" onClick={() => setBodyType(id)} aria-pressed={bodyType === id} className={`rounded-md px-2 py-1 text-[10px] font-bold ${bodyType === id ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-50'}`}>{label}</button>
+            ))}
           </div>
-        ))}
+          <span className="rounded-full bg-cyan-100 px-2.5 py-1 text-[10px] font-bold text-cyan-800">{selected.length} marked</span>
+        </div>
       </div>
-      <div className="mt-3 flex flex-wrap gap-1.5">
-        {BODY_AREA_OPTIONS.map(([area]) => (
-          <button key={area} type="button" onClick={() => toggle(area)} disabled={readOnly} className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${selected.includes(area) ? 'border-cyan-400 bg-cyan-100 text-cyan-900' : 'border-slate-200 bg-white text-slate-500'} ${readOnly ? 'cursor-default' : ''}`}>{area}</button>
-        ))}
+      <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] md:items-center">
+        <div className="mx-auto w-full max-w-[260px]">
+          <div className="relative rounded-xl border border-slate-200 bg-gradient-to-b from-white to-slate-100">
+            <div className="absolute left-3 top-2 text-[10px] font-bold uppercase tracking-wide text-slate-400">{describeBodyAngle(angle)}</div>
+            <div className="absolute right-3 top-2 text-[10px] font-semibold text-slate-400">{bodyTypeLabel} body</div>
+            <svg
+              viewBox="-95 -5 190 385"
+              className="h-80 w-full cursor-grab touch-none select-none active:cursor-grabbing"
+              role="img"
+              aria-label={`${bodyTypeLabel} body diagram, ${describeBodyAngle(angle).toLowerCase()} view, ${selected.length ? `marked areas: ${selected.join(', ')}` : 'no areas marked'}`}
+              onPointerDown={onPointerDown}
+              onPointerMove={onPointerMove}
+              onPointerUp={endDrag}
+              onPointerCancel={endDrag}
+            >
+              <defs>
+                <radialGradient id={`${gradientId}-skin`} cx="38%" cy="32%" r="75%">
+                  <stop offset="0%" stopColor="#ffffff" />
+                  <stop offset="55%" stopColor="#e2e8f0" />
+                  <stop offset="100%" stopColor="#94a3b8" />
+                </radialGradient>
+                <radialGradient id={`${gradientId}-marked`} cx="38%" cy="32%" r="75%">
+                  <stop offset="0%" stopColor="#cffafe" />
+                  <stop offset="50%" stopColor="#22d3ee" />
+                  <stop offset="100%" stopColor="#0e7490" />
+                </radialGradient>
+              </defs>
+              <ellipse cx="0" cy="366" rx="48" ry="8" fill="#0f172a" opacity="0.1" />
+              {projectedParts.map((part) => (
+                <ellipse
+                  key={part.id}
+                  cx={part.px}
+                  cy={part.y}
+                  rx={Math.max(part.prx, 2)}
+                  ry={part.ry}
+                  fill={`url(#${gradientId}-${part.marked ? 'marked' : 'skin'})`}
+                  stroke={part.marked ? '#0e7490' : '#94a3b8'}
+                  strokeOpacity="0.45"
+                  strokeWidth="0.8"
+                />
+              ))}
+              {leftLabel && <text x="-88" y="200" fontSize="11" fontWeight="700" fill="#94a3b8">{leftLabel}</text>}
+              {rightLabel && <text x="80" y="200" fontSize="11" fontWeight="700" fill="#94a3b8">{rightLabel}</text>}
+              {markers.map((marker) => (
+                <g
+                  key={marker.area}
+                  role="button"
+                  tabIndex={readOnly ? -1 : 0}
+                  aria-label={`${marker.area}${marker.marked ? ' (selected)' : ''}`}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={() => toggle(marker.area)}
+                  onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggle(marker.area); } }}
+                  className={readOnly ? 'cursor-default' : 'cursor-pointer'}
+                >
+                  <title>{marker.area}</title>
+                  {marker.marked && <circle cx={marker.x} cy={marker.y} r="12" fill="#22d3ee" opacity="0.25" />}
+                  <circle cx={marker.x} cy={marker.y} r="8" fill={marker.marked ? '#0891b2' : '#ffffff'} fillOpacity={marker.marked ? 1 : 0.85} stroke={marker.marked ? '#ffffff' : '#64748b'} strokeWidth="1.5" />
+                  {marker.marked && <text x={marker.x} y={marker.y + 3.5} textAnchor="middle" fontSize="9" fontWeight="800" fill="#ffffff">{selected.indexOf(marker.area) + 1}</text>}
+                </g>
+              ))}
+            </svg>
+          </div>
+          <div className="mt-2 flex items-center gap-2">
+            <input type="range" min="0" max="359" value={angle} onChange={(event) => setAngle(Number(event.target.value))} aria-label="Rotate body" className="flex-1 accent-cyan-600" />
+            <span className="w-9 text-right text-[10px] font-semibold text-slate-500">{angle}°</span>
+          </div>
+          <div className="mt-2 grid grid-cols-4 gap-1">
+            {[['Front', 0], ['Right', 90], ['Back', 180], ['Left', 270]].map(([label, target]) => (
+              <button key={label} type="button" onClick={() => setAngle(target)} className={`rounded-md border px-1 py-1 text-[10px] font-bold ${angle === target ? 'border-cyan-400 bg-cyan-50 text-cyan-800' : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50'}`}>{label}</button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <div className="text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-2">{readOnly ? 'Reported areas' : 'Affected areas'}</div>
+          <div className="flex flex-wrap gap-1.5">
+            {BODY_AREA_OPTIONS.map(([area]) => {
+              const marked = selected.includes(area);
+              return (
+                <button key={area} type="button" onClick={() => toggle(area)} disabled={readOnly} className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-semibold ${marked ? 'border-cyan-400 bg-cyan-100 text-cyan-900' : 'border-slate-200 bg-white text-slate-500'} ${readOnly ? 'cursor-default' : ''}`}>
+                  {marked && <span className="flex h-4 w-4 items-center justify-center rounded-full bg-cyan-600 text-[9px] font-black text-white">{selected.indexOf(area) + 1}</span>}
+                  {area}
+                </button>
+              );
+            })}
+          </div>
+          {readOnly && selected.length === 0 && <p className="mt-3 text-[11px] text-slate-500">No body areas were reported.</p>}
+        </div>
       </div>
     </div>
   );
@@ -2018,7 +2208,7 @@ function TherapistPortal() {
                   </div>
                   <div className="mt-5">
                     <h3 className="text-sm font-bold text-stone-800 mb-2">Affected body areas</h3>
-                    <BodyAreaMap value={selectedAppointment.bodyAreas} readOnly />
+                    <BodyAreaMap value={selectedAppointment.bodyAreas} gender={selectedAppointment.gender} readOnly />
                   </div>
                   <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div className="rounded-xl bg-stone-50 p-4 text-xs"><div className="font-bold text-stone-700 mb-1">Pain / discomfort notes</div><p className="leading-5 text-stone-600">{selectedAppointment.painAreas || 'No pain or discomfort notes recorded.'}</p></div>
@@ -3158,7 +3348,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                   <textarea rows="2" value={bookingData.intake.painAreas} onChange={(e) => updateIntake('painAreas', e.target.value)} placeholder="Please describe the area(s)" className="w-full p-2.5 rounded-xl border border-stone-300 text-xs" />
                 </div>
                 <div>
-                  <BodyAreaMap value={bookingData.intake.bodyAreas} onChange={(areas) => updateIntake('bodyAreas', areas)} />
+                  <BodyAreaMap value={bookingData.intake.bodyAreas} gender={bookingData.intake.gender} onChange={(areas) => updateIntake('bodyAreas', areas)} />
                 </div>
                 <div className="border-t border-stone-200 pt-4">
                   <label className="block text-xs font-bold text-stone-700 mb-2">Preferred Pressure Level</label>
@@ -5302,6 +5492,57 @@ function AdminPortal({
     ? Object.entries(selectedPatientHistory.conditions).filter(([, value]) => value.toLowerCase() === 'yes')
     : [];
 
+  const [therapistAccounts, setTherapistAccounts] = useState([]);
+  const [isLoadingTherapistAccounts, setIsLoadingTherapistAccounts] = useState(false);
+  const [therapistAccountsError, setTherapistAccountsError] = useState('');
+  const [updatingTherapistAccountId, setUpdatingTherapistAccountId] = useState('');
+
+  const loadTherapistAccounts = async () => {
+    setIsLoadingTherapistAccounts(true);
+    setTherapistAccountsError('');
+    try {
+      const response = await fetch('/api/booking?view=therapist-accounts');
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+      setTherapistAccounts(data.accounts || []);
+    } catch (error) {
+      setTherapistAccountsError(error.message || 'Unable to load therapist accounts');
+    } finally {
+      setIsLoadingTherapistAccounts(false);
+    }
+  };
+
+  useEffect(() => {
+    loadTherapistAccounts();
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === 'therapist-approvals') loadTherapistAccounts();
+  }, [activeTab]);
+
+  const updateTherapistAccountStatus = async (account, status) => {
+    if (status === 'rejected' && !confirm(`Reject the therapist account request from ${account.name || account.username}?`)) return;
+    if (status === 'pending' && !confirm(`Revoke access for ${account.name || account.username}? They will not be able to sign in until approved again.`)) return;
+    setUpdatingTherapistAccountId(account.id);
+    setTherapistAccountsError('');
+    try {
+      const response = await fetch('/api/booking?view=therapist-account-status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: account.id, status }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+      setTherapistAccounts((current) => current.map((item) => (item.id === account.id ? { ...item, status } : item)));
+    } catch (error) {
+      setTherapistAccountsError(error.message || 'Unable to update therapist account');
+    } finally {
+      setUpdatingTherapistAccountId('');
+    }
+  };
+
+  const pendingTherapistAccounts = therapistAccounts.filter((account) => account.status === 'pending');
+
   const adminNavigation = [
     { id: 'schedule', label: 'Home', icon: Home, section: 'Workspace' },
     { id: 'calendar', label: 'Booking Calendar', icon: CalendarDays, section: 'Workspace' },
@@ -5312,6 +5553,7 @@ function AdminPortal({
     { id: 'branches', label: 'Branches', icon: MapPin, section: 'Manage' },
     { id: 'availability', label: 'Availability', icon: CalendarX, section: 'Manage' },
     { id: 'patient-history', label: 'Patients', icon: UserRound, section: 'Manage' },
+    { id: 'therapist-approvals', label: 'Therapist approvals', icon: UserCheck, section: 'Manage', badge: pendingTherapistAccounts.length },
     { id: 'business-profile', label: 'Business profile', icon: Building, section: 'Manage' },
     { id: 'loyalty', label: 'Loyalty program', icon: Award, section: 'Grow' },
     { id: 'marketing', label: 'Email marketing', icon: Megaphone, section: 'Grow' },
@@ -5332,6 +5574,7 @@ function AdminPortal({
     branches: 'Branches',
     availability: 'Availability',
     'patient-history': 'Patient Summary',
+    'therapist-approvals': 'Therapist approvals',
     'business-profile': 'Business profile',
   }[activeTab] || 'Owner dashboard';
 
@@ -5365,6 +5608,7 @@ function AdminPortal({
                     >
                       <Icon className={`h-4 w-4 shrink-0 ${selected ? 'text-emerald-300' : 'text-slate-500 group-hover:text-slate-300'}`} />
                       <span className="flex-1">{item.label}</span>
+                      {item.badge > 0 && <span className="rounded-full bg-amber-400 px-1.5 py-0.5 text-[10px] font-bold text-slate-950">{item.badge}</span>}
                       {selected && <span className="h-1.5 w-1.5 rounded-full bg-emerald-300" />}
                     </button>
                   );
@@ -5405,7 +5649,7 @@ function AdminPortal({
             <nav aria-label="Mobile owner dashboard navigation" className="mt-3 grid grid-cols-2 gap-1 border-t border-slate-100 pt-3 sm:grid-cols-3">
               {adminNavigation.map((item, index) => {
                 const Icon = item.icon;
-                return <button key={`${item.label}-${index}`} onClick={() => { setActiveTab(item.id); setMobileNavOpen(false); }} className={`flex items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-semibold ${activeTab === item.id ? 'bg-emerald-950 text-white' : 'text-slate-600 hover:bg-slate-100'}`}><Icon className="h-4 w-4" />{item.label}</button>;
+                return <button key={`${item.label}-${index}`} onClick={() => { setActiveTab(item.id); setMobileNavOpen(false); }} className={`flex items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-semibold ${activeTab === item.id ? 'bg-emerald-950 text-white' : 'text-slate-600 hover:bg-slate-100'}`}><Icon className="h-4 w-4" />{item.label}{item.badge > 0 && <span className="ml-auto rounded-full bg-amber-400 px-1.5 text-[10px] font-bold text-slate-950">{item.badge}</span>}</button>;
               })}
             </nav>
           )}
@@ -7120,6 +7364,55 @@ function AdminPortal({
         </section>
       )}
 
+      {activeTab === 'therapist-approvals' && (
+        <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-bold text-slate-900">Therapist account approvals</h2>
+              <p className="text-xs text-slate-500 mt-1">New therapist sign-ups appear here. Approved therapists can sign in to the therapist view.</p>
+            </div>
+            <button onClick={loadTherapistAccounts} disabled={isLoadingTherapistAccounts} className="px-3 py-2 rounded-xl bg-emerald-800 text-white text-xs font-bold disabled:opacity-50">
+              {isLoadingTherapistAccounts ? 'Loading...' : 'Refresh'}
+            </button>
+          </div>
+          {therapistAccountsError && <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-800 text-xs">{therapistAccountsError}</div>}
+          {[
+            { title: 'Pending approval', accounts: pendingTherapistAccounts, empty: 'No therapist sign-ups are waiting for approval.' },
+            { title: 'Approved', accounts: therapistAccounts.filter((account) => account.status === 'approved'), empty: 'No approved therapist accounts yet.' },
+            { title: 'Rejected', accounts: therapistAccounts.filter((account) => account.status === 'rejected'), empty: '' },
+          ].filter((group) => group.empty || group.accounts.length).map((group) => (
+            <section key={group.title} className="space-y-2">
+              <h3 className="text-xs font-bold uppercase tracking-[0.14em] text-slate-500">{group.title} ({group.accounts.length})</h3>
+              {group.accounts.length === 0 ? (
+                <div className="p-6 text-center rounded-xl bg-slate-50 text-slate-500 text-sm">{isLoadingTherapistAccounts ? 'Loading...' : group.empty}</div>
+              ) : (
+                <div className="divide-y divide-slate-100 rounded-xl border border-slate-200">
+                  {group.accounts.map((account) => (
+                    <div key={account.id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="min-w-0">
+                        <div className="font-bold text-sm text-slate-900">{account.name || account.username}</div>
+                        <div className="text-[11px] text-slate-500 mt-1">@{account.username} · Signed up {account.createdAt ? new Date(account.createdAt).toLocaleString() : 'date unknown'}</div>
+                      </div>
+                      <div className="flex gap-2">
+                        {account.status !== 'approved' && (
+                          <button onClick={() => updateTherapistAccountStatus(account, 'approved')} disabled={updatingTherapistAccountId === account.id} className="inline-flex items-center gap-1 px-3 py-2 rounded-xl bg-emerald-700 text-white text-xs font-bold disabled:opacity-50"><Check className="w-3.5 h-3.5" /> Approve</button>
+                        )}
+                        {account.status === 'pending' && (
+                          <button onClick={() => updateTherapistAccountStatus(account, 'rejected')} disabled={updatingTherapistAccountId === account.id} className="inline-flex items-center gap-1 px-3 py-2 rounded-xl border border-red-200 text-red-700 text-xs font-bold hover:bg-red-50 disabled:opacity-50"><X className="w-3.5 h-3.5" /> Reject</button>
+                        )}
+                        {account.status === 'approved' && (
+                          <button onClick={() => updateTherapistAccountStatus(account, 'pending')} disabled={updatingTherapistAccountId === account.id} className="inline-flex items-center gap-1 px-3 py-2 rounded-xl border border-slate-200 text-slate-700 text-xs font-bold hover:bg-slate-50 disabled:opacity-50"><Ban className="w-3.5 h-3.5" /> Revoke access</button>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          ))}
+        </div>
+      )}
+
       {/* TAB CONTENT: FINANCIAL REPORTS */}
       {activeTab === 'patient-history' && (
         <div className="bg-white rounded-2xl p-6 border border-stone-200 shadow-sm space-y-5">
@@ -7191,7 +7484,7 @@ function AdminPortal({
                       <div className="flex flex-wrap gap-2">{selectedConditionFlags.map(([key]) => <span key={key} className="px-2 py-1 rounded-lg bg-white border border-red-200 text-[11px] text-red-800">{key}</span>)}</div>
                     </div>
                   )}
-                  <BodyAreaMap value={selectedPatientHistory.bodyAreas} readOnly />
+                  <BodyAreaMap value={selectedPatientHistory.bodyAreas} gender={selectedPatientHistory.gender} readOnly />
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
                     <div className="p-4 rounded-xl bg-stone-50 space-y-2">
                       <h4 className="font-bold text-stone-800">Contact</h4>

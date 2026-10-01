@@ -71,10 +71,10 @@ Booking records (customer name, service, therapist, date/time, payment,
 receipt, cancellation status, etc.), Square payment link/checkout records, and
 targeted email campaign logs are stored in typed **BigQuery** tables rather
 than Google Sheets tabs. The **loyalty program** (settings, members, ledger,
-and companies) is stored in BigQuery as well — see "Loyalty program tables in
-BigQuery" below. Every other data set used by this app (branches, services,
-therapists, patient history, marketing contacts, availability blocks) remains
-in Google Sheets and is unaffected by this section.
+and companies) and **patient history** are stored in BigQuery as well — see
+"Loyalty program tables in BigQuery" and "Patient history" below. Other data
+sets used by this app (branches, services, therapists, marketing contacts, and
+availability blocks) remain in Google Sheets.
 
 Enable the **BigQuery API** in the same Google Cloud project used for Sheets
 and Calendar, and grant the existing service account
@@ -90,7 +90,9 @@ the Google Cloud project ID, e.g. `my-thai-thai-booking-system`. The dataset
 default `square_payments`; `BIGQUERY_CAMPAIGN_LOG_TABLE`/`BIGQUERY_CAMPAIGN_RECIPIENTS_TABLE`,
 default `campaign_log`/`campaign_recipients`; and the four
 `BIGQUERY_LOYALTY_*_TABLE` loyalty tables) are **created automatically** on
-first use — no manual DDL is required. If your project is on **BigQuery
+first use — no manual DDL is required. Patient history uses
+`BIGQUERY_PATIENT_HISTORY_TABLE` (default `patient_history`). If your project
+is on **BigQuery
 Sandbox** (no billing account linked), link a billing account first: Sandbox
 datasets/tables auto-expire after 60 days of inactivity and have tighter
 query/DML quotas.
@@ -699,20 +701,26 @@ commit the JSON key or paste its private key into source control.
 ### Patient history
 
 The booking form includes the health-history fields from the clinic's paper
-form. Each completed form is appended to the `PatientHistory` tab in
-`PATIENT_HISTORY_SPREADSHEET_ID` and is linked to the booking ID. The API
-creates the `PatientHistory` tab automatically if it is missing. The service
-account must have Editor access to this spreadsheet.
+form. Each completed form is linked to its booking and stored in the
+`patient_history` BigQuery table (configurable with
+`BIGQUERY_PATIENT_HISTORY_TABLE`). The table is created automatically. On
+first use, existing rows in the legacy `PatientHistory` tab in
+`PATIENT_HISTORY_SPREADSHEET_ID` are copied into BigQuery without deleting the
+spreadsheet data; repeated migration attempts do not duplicate records. The
+service account needs access to the legacy spreadsheet for this initial copy,
+as well as the BigQuery roles described above. The spreadsheet remains a
+backup after migration; new submissions and all application reads and deletes
+use BigQuery.
 
-Create this header row in `PatientHistory`:
+The legacy spreadsheet tab uses this header row:
 
 ```text
 Booking ID,Created At,Patient Name,Date of Birth,Gender,Phone,Email,Address,City,Postal Code,How Heard About Us,Heart Condition,Blood Pressure,Diabetes,Cancer,Headaches or Migraines,Bone or Joint Disorder,Broken Bones or Implants,Osteoporosis or Arthritis,Allergies to Oil,Surgeries,Numbness or Loss of Sensation,Skin Sensitivity or Easy Bruising,Pregnant or Recently Gave Birth,Medications or Supplements,Additional Health Details,Pain or Discomfort Areas,Body Areas,Preferred Pressure,Consent,Typed Signature,Signature Date,Pre-collection Consent,Consent Timestamp
 ```
 
-Patient health information is sensitive. Restrict spreadsheet access to
-authorized clinic staff, enable strong account security, and follow applicable
-privacy and health-information retention requirements.
+Patient health information is sensitive. Restrict BigQuery and legacy
+spreadsheet access to authorized clinic staff, enable strong account security,
+and follow applicable privacy and health-information retention requirements.
 
 ### Therapist access
 
@@ -741,7 +749,10 @@ Environment Variables, and redeploy after changing them.
 
 Therapist self-registration is available from the **Therapist Login** screen.
 New registrations are written to the `TherapistAccounts` tab with status
-`pending` and cannot sign in until an administrator changes that row's status
-to `approved`. The API creates this tab automatically. After approval, the
+`pending` and cannot sign in until the owner approves them from the
+**Therapist approvals** tab in the owner dashboard (the sidebar shows a badge
+with the number of pending sign-ups). From that tab the owner can approve or
+reject pending requests and revoke access for approved therapists. The API
+creates the tab in the spreadsheet automatically. After approval, the
 therapist can sign in with the username and password chosen during
 registration. Only authorized administrators should approve accounts.
