@@ -557,7 +557,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-stone-100 font-sans text-stone-800 flex flex-col justify-between">
+    <div className={`min-h-screen font-sans flex flex-col justify-between ${viewMode === 'customer' ? 'bg-[#f1f3f7] text-slate-800' : 'bg-stone-100 text-stone-800'}`}>
       {squarePaymentComplete && (
         <div role="status" className="sticky top-0 z-50 flex items-center justify-between gap-3 bg-emerald-700 px-4 py-2.5 text-xs sm:text-sm font-semibold text-white">
           <span>Payment received for booking {squarePaymentComplete}. A receipt confirmation email is on its way.</span>
@@ -606,7 +606,7 @@ export default function App() {
       </header>
 
       {/* Main View Switcher */}
-      <main className={`flex-1 w-full ${viewMode === 'admin' || viewMode === 'therapist' ? 'p-0' : 'p-3 sm:p-6 max-w-7xl mx-auto'}`}>
+      <main className={`flex-1 w-full ${viewMode === 'admin' || viewMode === 'therapist' ? 'p-0' : 'mx-auto max-w-[1600px] p-4 sm:p-6 xl:p-8'}`}>
         {viewMode === 'customer' ? (
           <CustomerPortal 
             branches={activeBranches} 
@@ -643,7 +643,7 @@ export default function App() {
       </main>
 
       {/* Footer */}
-      <footer className="bg-stone-900 text-stone-400 text-xs py-4 px-6 text-center border-t border-stone-800">
+      <footer className={`${viewMode === 'customer' ? 'border-slate-800 bg-slate-950 text-slate-400' : 'border-stone-800 bg-stone-900 text-stone-400'} border-t px-6 py-4 text-center text-xs`}>
         <p>© 2026 MY THAI THAI MASSAGE AND WELLNESS INC. All rights reserved. • Toronto & Mississauga, Ontario</p>
       </footer>
     </div>
@@ -2533,34 +2533,34 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
   };
 
   return (
-    <div className="bg-white rounded-2xl shadow-xl border border-stone-200 overflow-hidden max-w-6xl mx-auto my-2 sm:my-6">
+    <div className="mx-auto my-2 max-w-6xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm sm:my-6">
       {/* Clinic Header Banner */}
-      <div className="bg-slate-950 text-white p-6 sm:p-8 text-center relative overflow-hidden">
-        <div className="absolute top-0 right-0 transform translate-x-8 -translate-y-8 w-40 h-40 bg-slate-700 rounded-full opacity-30 pointer-events-none"></div>
-        <div className="relative z-10">
-          <div className="flex items-center justify-center gap-3">
-            <BusinessPhoto businessName={businessName} photoUrl={photoUrl} className="h-12 w-12 rounded-xl object-cover shadow-md" />
-            <h1 className="text-3xl sm:text-4xl font-serif tracking-tight font-bold text-amber-200">{businessName}</h1>
+      <div className="relative overflow-hidden bg-gradient-to-br from-slate-950 via-emerald-950 to-emerald-800 px-5 py-6 text-white sm:px-8 sm:py-8">
+        <div aria-hidden="true" className="absolute -right-16 -top-28 h-72 w-72 rounded-full border border-white/10" />
+        <div aria-hidden="true" className="absolute -right-2 -top-14 h-48 w-48 rounded-full border border-white/10" />
+        <div className="relative z-10 flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <div className="flex items-center gap-3">
+              <BusinessPhoto businessName={businessName} photoUrl={photoUrl} className="h-11 w-11 shrink-0 rounded-xl object-cover shadow-md" />
+              <h1 className="text-xl font-bold tracking-tight sm:text-2xl">{businessName}</h1>
+            </div>
+            <p className="mt-2 text-sm text-emerald-50/75">Thai Massage & Wellness · Ontario, Canada</p>
+            {brandingError && <p role="status" className="mt-2 text-xs text-amber-200">{brandingError}</p>}
           </div>
-          <p className="text-slate-300 font-medium text-sm sm:text-base mt-1">Thai Massage & Wellness • Ontario, Canada</p>
-          {brandingError && <p role="status" className="mt-2 text-xs text-amber-200">{brandingError}</p>}
-          
-          <div className="mt-4 inline-flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-xs sm:text-sm bg-white/5 backdrop-blur px-5 py-2 rounded-full border border-white/10">
-            <a href="tel:+14378987424" className="flex items-center text-slate-200 hover:text-white transition">
-              <Phone className="w-3.5 h-3.5 mr-1.5 text-amber-300" />
+
+          <div className="flex flex-wrap items-center gap-2 text-xs sm:justify-end">
+            <a href="tel:+14378987424" className="inline-flex items-center rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-emerald-50 transition hover:bg-white/15">
+              <Phone className="mr-1.5 h-3.5 w-3.5 text-emerald-200" />
               +1 437 898 7424
             </a>
-            <span className="text-slate-600 hidden sm:inline">•</span>
-            <a href="https://Mythaithaimassage.com" target="_blank" rel="noreferrer" className="flex items-center text-slate-200 hover:text-white transition">
-              <Globe className="w-3.5 h-3.5 mr-1.5 text-amber-300" />
+            <a href="https://Mythaithaimassage.com" target="_blank" rel="noreferrer" className="inline-flex items-center rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-emerald-50 transition hover:bg-white/15">
+              <Globe className="mr-1.5 h-3.5 w-3.5 text-emerald-200" />
               Mythaithaimassage.com
             </a>
-          </div>
-          <div className="mt-3">
             <button
               type="button"
               onClick={() => setPortalMode(portalMode === 'manage' ? 'book' : 'manage')}
-              className="text-xs font-semibold text-amber-200 underline underline-offset-2 hover:text-amber-100 transition"
+              className="rounded-xl bg-white px-3 py-2 font-bold text-emerald-950 shadow-sm transition hover:bg-emerald-50"
             >
               {portalMode === 'manage' ? '← Back to booking' : 'Manage an existing booking (reschedule or cancel)'}
             </button>
@@ -2573,7 +2573,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
       ) : (
       <>
       {/* 5-Step Progress Stepper */}
-      <div className="bg-white border-b border-stone-200 px-4 py-4 sm:px-8">
+      <div className="border-b border-slate-200 bg-white px-4 py-4 sm:px-8">
         <div className="flex items-center justify-between text-xs sm:text-sm font-medium">
           {[
             { num: 1, label: "Branch & Service" },
@@ -2582,13 +2582,13 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
             { num: 4, label: "Payment & Review" },
             { num: 5, label: "Confirmed" }
           ].map((s) => (
-            <div key={s.num} className={`flex items-center space-x-1.5 ${step === s.num ? 'text-slate-950 font-bold' : step > s.num ? 'text-stone-700' : 'text-stone-400'}`}>
+            <div key={s.num} className={`flex items-center space-x-1.5 ${step === s.num ? 'font-bold text-slate-950' : step > s.num ? 'text-emerald-800' : 'text-slate-400'}`}>
               <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ${
                 step === s.num 
-                  ? 'bg-slate-950 text-white ring-2 ring-slate-200'
+                  ? 'bg-emerald-950 text-white ring-2 ring-emerald-100'
                   : step > s.num 
-                  ? 'bg-stone-800 text-white' 
-                  : 'bg-stone-200 text-stone-500'
+                  ? 'bg-emerald-700 text-white'
+                  : 'bg-slate-100 text-slate-500'
               }`}>
                 {step > s.num ? <Check className="w-3.5 h-3.5" /> : s.num}
               </span>
@@ -2598,7 +2598,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
         </div>
       </div>
 
-      <div className="bg-stone-50/70 p-4 sm:p-8">
+      <div className="bg-[#f1f3f7] p-4 sm:p-8">
         {/* STEP 1: Branch & Service */}
         {step === 1 && (
           <div className="space-y-6">
