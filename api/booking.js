@@ -4268,25 +4268,23 @@ export default async function handler(req, res) {
         const member = membersByEmail.get(email);
         const bookingKey = `${email}:${String(row[0] || '')}`;
         const durationMinutes = Number(row[12]) || 60;
-        const coveredByTopUp = member?.membershipType === 'platinum' &&
-          !String(row[5] || '').toLowerCase().includes('hot stone add-on') &&
-          member.prepaidHoursBalance + 0.0001 >= durationMinutes / 60;
+        const hasPlatinumHours = member?.membershipType === 'platinum' &&
+          member.prepaidHoursBalance > 0;
         const freeHotStone = member?.membershipType === 'gold' &&
           member.freeHotStoneAvailable &&
           String(row[5] || '').toLowerCase().includes('hot stone add-on');
         const fullyPaid = total > 0 && paidAmount + 0.005 >= total;
         return email && member && isAppointmentCompleteByTime(row[7], row[8], durationMinutes) &&
           !earnedBookingIds.has(bookingKey) && !usedBookingIds.has(bookingKey) && !hotStoneBookingIds.has(bookingKey) &&
-          (coveredByTopUp || freeHotStone || (fullyPaid && paidAmount > 0));
+          (hasPlatinumHours || freeHotStone || (fullyPaid && paidAmount > 0));
       }).map((row) => {
         const email = normalizeLoyaltyEmail(row[3]);
         const member = membersByEmail.get(email);
         const bookingId = String(row[0] || '');
         const durationMinutes = Number(row[12]) || 60;
         const hoursToUse = member.membershipType === 'platinum' &&
-          !String(row[5] || '').toLowerCase().includes('hot stone add-on') &&
-          member.prepaidHoursBalance + 0.0001 >= durationMinutes / 60
-          ? durationMinutes / 60
+          member.prepaidHoursBalance > 0
+          ? Math.min(member.prepaidHoursBalance, durationMinutes / 60)
           : 0;
         const freeHotStone = member.membershipType === 'gold' &&
           member.freeHotStoneAvailable &&
@@ -4784,9 +4782,8 @@ export default async function handler(req, res) {
       const durationMinutes = Number(booking[12]) || 60;
       const isPlatinum = String(member[5] || '').toLowerCase() === 'platinum';
       const availableHours = isPlatinum ? loyaltyPlatinumHoursBalance(memberRows, ledgerRows, member[6], email) : 0;
-      const isHotStoneAddon = String(booking[5] || '').toLowerCase().includes('hot stone add-on');
-      const hoursUsed = isPlatinum && !isHotStoneAddon && availableHours + 0.0001 >= durationMinutes / 60
-        ? durationMinutes / 60
+      const hoursUsed = isPlatinum && availableHours > 0
+        ? Math.min(availableHours, durationMinutes / 60)
         : 0;
       const freeHotStone = String(member[5] || '').toLowerCase() === 'gold' &&
         isMembershipActive(member) &&
@@ -6531,7 +6528,11 @@ export default async function handler(req, res) {
         total: Math.round((receiptSubtotal + tax) * 100) / 100,
         membershipDiscountAmount,
         membershipDiscountPercent,
-        membershipDiscountLabel: ['silver', 'platinum'].includes(membershipType) ? 'Group benefit discount' : 'Membership discount',
+        membershipDiscountLabel: membershipType === 'platinum'
+          ? 'Platinum membership discount'
+          : membershipType === 'silver'
+            ? 'Silver corporate discount'
+            : 'Membership discount',
         loyaltyDiscount,
         pointsRedeemed,
         pointsBalance,
@@ -6981,19 +6982,40 @@ export default async function handler(req, res) {
     }
     const loyaltySettings = await getLoyaltySettings();
     const memberBenefit = loyaltySettings.enabled ? await getMemberBenefit(sheets, payload.email, loyaltySettings) : null;
+    const serviceSubtotal = payload.serviceSubtotalAmount === undefined ? null : Number(payload.serviceSubtotalAmount);
+    const hotStoneSubtotal = payload.hotStoneSubtotalAmount === undefined ? null : Number(payload.hotStoneSubtotalAmount);
+    const platinumSurcharge = payload.platinumSurchargeAmount === undefined ? null : Number(payload.platinumSurchargeAmount);
+    const hasPriceBreakdown = serviceSubtotal !== null || hotStoneSubtotal !== null || platinumSurcharge !== null;
+    if (hasPriceBreakdown && (
+      !Number.isFinite(serviceSubtotal) || serviceSubtotal < 0 ||
+      !Number.isFinite(hotStoneSubtotal) || hotStoneSubtotal < 0 ||
+      !Number.isFinite(platinumSurcharge) || platinumSurcharge < 0 ||
+      Math.abs(serviceSubtotal + hotStoneSubtotal + platinumSurcharge - subtotal) > 0.01
+    )) {
+      return res.status(400).json({ message: 'The service and add-on price breakdown is invalid.' });
+    }
     const isHotStoneAddon = String(payload.serviceName || '').toLowerCase().includes('hot stone add-on');
-    const prepaidServiceHours = Math.max(0, Number(payload.durationMinutes) || 60) / 60;
-    const isPlatinumPrepaidSession = memberBenefit?.type === 'platinum' &&
-      !isHotStoneAddon &&
-      memberBenefit.hoursBalance + 0.0001 >= prepaidServiceHours;
-    const discountAmount = isHotStoneAddon && memberBenefit?.type === 'gold' && memberBenefit.freeHotStoneAvailable
-      ? subtotal
-      : isPlatinumPrepaidSession
+    let discountAmount;
+    let discountBase = subtotal;
+    if (hasPriceBreakdown) {
+      const serviceDiscount = Math.round(serviceSubtotal * (memberBenefit?.discountPercent || 0)) / 100;
+      const hotStoneDiscount = hotStoneSubtotal > 0
+        ? memberBenefit?.type === 'gold' && memberBenefit.freeHotStoneAvailable
+          ? hotStoneSubtotal
+          : memberBenefit?.type === 'platinum'
+            ? Math.min(hotStoneSubtotal, Number(memberBenefit.hotStoneDiscount) || 0)
+            : Math.round(hotStoneSubtotal * (memberBenefit?.discountPercent || 0)) / 100
+        : 0;
+      discountAmount = serviceDiscount + hotStoneDiscount;
+      discountBase = serviceSubtotal + hotStoneSubtotal;
+    } else {
+      discountAmount = isHotStoneAddon && memberBenefit?.type === 'gold' && memberBenefit.freeHotStoneAvailable
         ? subtotal
         : isHotStoneAddon && memberBenefit?.type === 'platinum'
           ? Math.min(subtotal, Number(memberBenefit.hotStoneDiscount) || 0)
           : Math.round(subtotal * (memberBenefit?.discountPercent || 0)) / 100;
-    const discountPercent = subtotal > 0 ? discountAmount * 100 / subtotal : 0;
+    }
+    const discountPercent = discountBase > 0 ? discountAmount * 100 / discountBase : 0;
     if (payload.expectedDiscountPercent !== undefined && Number(payload.expectedDiscountPercent) !== discountPercent) {
       return res.status(409).json({ message: 'Membership eligibility changed. Please check your email again before submitting the booking.' });
     }

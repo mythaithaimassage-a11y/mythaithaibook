@@ -2392,11 +2392,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
     const base = bookingData.service.price;
     const hotStoneBase = bookingData.hotStoneAddOn && hotStoneAddOnService ? hotStoneAddOnService.price : 0;
 
-    const isPlatinumPrepaidSession = plan === 'platinum' &&
-      Number(membershipBenefit.hoursBalance) >= Number(bookingData.service.duration) / 60;
-    const serviceDiscount = isPlatinumPrepaidSession
-      ? base
-      : Math.round(base * (membershipBenefit?.discountPercent || 0)) / 100;
+    const serviceDiscount = Math.round(base * (membershipBenefit?.discountPercent || 0)) / 100;
 
     let hotStoneDiscountAmount = 0;
     if (hotStoneBase > 0) {
@@ -2463,6 +2459,9 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
       companyName: bookingData.companyName,
       companyId: bookingData.companyId,
       subtotalAmount: (financials.base + financials.hotStoneBase + financials.platinumSurcharge).toFixed(2),
+      serviceSubtotalAmount: financials.base.toFixed(2),
+      hotStoneSubtotalAmount: financials.hotStoneBase.toFixed(2),
+      platinumSurchargeAmount: financials.platinumSurcharge.toFixed(2),
       taxRate: bookingData.service.taxRate || 0,
       expectedDiscountPercent: financials.discountPercent,
       branchName: bookingData.branch.name,

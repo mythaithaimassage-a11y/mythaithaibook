@@ -332,12 +332,12 @@ points on the first single-session purchase, and 10,000 points for $10 off.
 Gold defaults to $39/month, 10% off services, 1.5x points, and one free Hot
 Stone add-on per month. Platinum defaults to a $1,500 top-up for 50 prepaid
 hours, 30% off services, and $10 off a Hot Stone add-on. Gold and Platinum
-discounts are checked during online booking. Platinum bookings covered by
-available prepaid hours are no-charge at booking and consume their duration
-after the completed visit is confirmed; sessions beyond the available balance
-receive the configured service discount. Customers can separately opt into
-Standard Rewards while booking; this consent is independent of marketing email
-consent.
+discounts are checked during online booking. Platinum members receive the
+configured service discount while they have prepaid hours remaining; completed
+visits deduct their duration from the company's shared balance, including the
+remaining fraction of an hour on a final visit. Platinum hours do not make a
+booking free. Customers can separately opt into Standard Rewards while booking;
+this consent is independent of marketing email consent.
 
 Settings, members, and the transaction ledger are stored in the BigQuery
 `loyalty_settings`, `loyalty_members`, and `loyalty_ledger` tables, which the
@@ -371,7 +371,8 @@ one exists.
 After a member's appointment treatment time has passed, staff can confirm an
 eligible visit from the dashboard. Standard/Gold point awards are based on the
 amount actually paid, and Platinum visits covered by prepaid hours deduct the
-session duration from the company's shared balance. A completed, fully paid single
+session duration from the company's shared balance, while paying the Platinum
+service discount rate. A completed, fully paid single
 session receives the first-session multiplier when it is the customer's first
 qualifying visit. Gold free Hot Stone add-ons and visit records are limited by
 the configured monthly allowance. Booking IDs are recorded so point awards,
@@ -627,8 +628,8 @@ calendar event.
 
 Membership pricing is applied to the service and the add-on separately:
 
-- **Platinum** — the plan discount (or full prepaid-hours coverage) on the
-  service, `hotStoneDiscount` off the add-on, plus a **Platinum Hot Stone
+- **Platinum** — the plan discount on the service, `hotStoneDiscount` off the
+  add-on, plus a **Platinum Hot Stone
   surcharge** added only when the add-on is selected. The surcharge amount is
   configured in **Loyalty settings → Platinum Hot Stone surcharge ($)** and
   defaults to `$5`.
