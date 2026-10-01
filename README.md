@@ -376,11 +376,12 @@ session receives the first-session multiplier when it is the customer's first
 qualifying visit. Gold free Hot Stone add-ons and visit records are limited by
 the configured monthly allowance. Booking IDs are recorded so point awards,
 prepaid-hour use, or a free add-on cannot be recorded twice. Staff can redeem
-points against a fully paid booking before its receipt is issued. The redemption
-is applied to the receipt total, tax is recalculated on the discounted amount,
-and the receipt number is saved on the loyalty ledger entry. The customer gets
-a redemption email with the points balance and a receipt email with the receipt
-number, discount, points redeemed, and updated points balance. Loyalty receipt
+points against a fully paid booking before its receipt is issued. Receipts show
+any membership or group-benefit discount already applied at booking, then any
+points redemption; tax is calculated on the discounted amount, and the receipt
+number is saved on the loyalty ledger entry. The customer gets a redemption
+email with the points balance and a receipt email with the receipt number,
+discounts, points redeemed, and updated points balance. Loyalty receipt
 discounts cannot be attached after a receipt has already been issued. Branded
 loyalty emails share the same responsive format and include membership details,
 points or prepaid-hour balances, and redemption or top-up confirmations.
@@ -649,8 +650,8 @@ table; see the loyalty program section above.
 
 ### Medical history select-all
 
-The medical conditions grid on step 3 has **Select all → Yes / No / Clear**
-buttons so customers with no history can answer the whole list in one click.
+The medical conditions grid on step 3 has **Select all → No / Clear** controls;
+customers answer **Yes** individually for each applicable condition.
 
 ### Reassigning an appointment to a different therapist
 

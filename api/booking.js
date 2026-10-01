@@ -3335,6 +3335,9 @@ async function sendReceiptEmail(gmail, booking, receipt, businessProfile) {
     `Service date: ${booking.date}`,
     `Payment method: ${booking.paymentOption}`,
     `Subtotal: $${receipt.subtotal.toFixed(2)}`,
+    ...(receipt.membershipDiscountAmount > 0
+      ? [`${receipt.membershipDiscountLabel} (${receipt.membershipDiscountPercent}%): -$${receipt.membershipDiscountAmount.toFixed(2)}`]
+      : []),
     ...(receipt.loyaltyDiscount > 0 ? [`Loyalty discount: -$${receipt.loyaltyDiscount.toFixed(2)}`, `Points redeemed: ${receipt.pointsRedeemed.toLocaleString()}`] : []),
     `${receipt.taxLabel}: $${receipt.tax.toFixed(2)}`,
     `Total paid: $${receipt.total.toFixed(2)}`,
@@ -3345,10 +3348,13 @@ async function sendReceiptEmail(gmail, booking, receipt, businessProfile) {
   const loyaltyRows = receipt.loyaltyDiscount > 0
     ? `<tr><td style="padding:8px 0;color:#64716b">Loyalty discount · ${receipt.pointsRedeemed.toLocaleString()} points</td><td align="right" style="padding:8px 0">-$${receipt.loyaltyDiscount.toFixed(2)}</td></tr>`
     : '';
+  const membershipDiscountRow = receipt.membershipDiscountAmount > 0
+    ? `<tr><td style="padding:8px 0;color:#64716b">${escapeHtml(receipt.membershipDiscountLabel)} (${receipt.membershipDiscountPercent}%)</td><td align="right" style="padding:8px 0">-$${receipt.membershipDiscountAmount.toFixed(2)}</td></tr>`
+    : '';
   const loyaltyBalance = receipt.loyaltyMember
     ? `<p style="margin:18px 0 0;padding:12px;background:#eff6f3;border-radius:8px;font-size:13px"><strong>Loyalty balance:</strong> ${receipt.pointsBalance.toLocaleString()} points</p>`
     : '';
-  const html = `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Receipt ${escapeHtml(receipt.number)}</title></head><body style="margin:0;background:#f3f5f4;padding:28px 12px;font-family:Arial,Helvetica,sans-serif;color:#18251f"><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td align="center"><table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width:600px;width:100%;background:#fff;border:1px solid #e2e9e5;border-radius:14px;overflow:hidden"><tr><td style="padding:28px 32px;background:#073d32;color:#fff"><p style="margin:0 0 8px;font-size:12px;letter-spacing:2px">${escapeHtml(businessProfile.businessName).toUpperCase()}</p><h1 style="margin:0;font-size:25px">Payment receipt</h1></td></tr><tr><td style="padding:26px 32px"><p style="margin:0 0 6px;font-weight:bold">${escapeHtml(businessProfile.legalName || businessProfile.businessName)}</p><p style="margin:0 0 4px;color:#66736d">${escapeHtml(businessProfile.address)}</p><p style="margin:0 0 4px;color:#66736d">${escapeHtml(businessProfile.phone)} · ${escapeHtml(businessProfile.email)}</p>${businessProfile.taxRegistrationNumber ? `<p style="margin:0 0 20px;color:#66736d">GST/HST No.: ${escapeHtml(businessProfile.taxRegistrationNumber)}</p>` : '<div style="height:20px"></div>'}<p style="margin:0 0 6px"><strong>Receipt No.</strong> ${escapeHtml(receipt.number)}</p><p style="margin:0 0 22px;color:#66736d">Issued ${escapeHtml(receipt.issuedAt.slice(0, 10))}</p><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse"><tr><td style="padding:10px 0;border-bottom:1px solid #e6ebe8;color:#64716b">Client</td><td align="right" style="padding:10px 0;border-bottom:1px solid #e6ebe8;font-weight:bold">${escapeHtml(booking.customerName)}</td></tr><tr><td style="padding:10px 0;border-bottom:1px solid #e6ebe8;color:#64716b">Email</td><td align="right" style="padding:10px 0;border-bottom:1px solid #e6ebe8">${escapeHtml(booking.email)}</td></tr><tr><td style="padding:10px 0;border-bottom:1px solid #e6ebe8;color:#64716b">Service</td><td align="right" style="padding:10px 0;border-bottom:1px solid #e6ebe8">${escapeHtml(booking.serviceName)}</td></tr><tr><td style="padding:10px 0;border-bottom:1px solid #e6ebe8;color:#64716b">Service date</td><td align="right" style="padding:10px 0;border-bottom:1px solid #e6ebe8">${escapeHtml(booking.date)}</td></tr><tr><td style="padding:10px 0;color:#64716b">Payment method</td><td align="right" style="padding:10px 0">${escapeHtml(booking.paymentOption)}</td></tr></table><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-top:24px;border-top:2px solid #087765"><tr><td style="padding:10px 0;color:#64716b">Subtotal</td><td align="right" style="padding:10px 0">$${receipt.subtotal.toFixed(2)}</td></tr>${loyaltyRows}<tr><td style="padding:8px 0;color:#64716b">${escapeHtml(receipt.taxLabel)}</td><td align="right" style="padding:8px 0">$${receipt.tax.toFixed(2)}</td></tr><tr><td style="padding:14px 0;border-top:1px solid #d8e2dc;font-size:18px;font-weight:bold">Total paid</td><td align="right" style="padding:14px 0;border-top:1px solid #d8e2dc;font-size:18px;font-weight:bold">$${receipt.total.toFixed(2)}</td></tr></table>${loyaltyBalance}<p style="margin:24px 0 0;text-align:center;color:#64716b">Thank you for choosing ${escapeHtml(businessProfile.businessName)}.</p></td></tr></table></td></tr></table></body></html>`;
+  const html = `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Receipt ${escapeHtml(receipt.number)}</title></head><body style="margin:0;background:#f3f5f4;padding:28px 12px;font-family:Arial,Helvetica,sans-serif;color:#18251f"><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td align="center"><table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width:600px;width:100%;background:#fff;border:1px solid #e2e9e5;border-radius:14px;overflow:hidden"><tr><td style="padding:28px 32px;background:#073d32;color:#fff"><p style="margin:0 0 8px;font-size:12px;letter-spacing:2px">${escapeHtml(businessProfile.businessName).toUpperCase()}</p><h1 style="margin:0;font-size:25px">Payment receipt</h1></td></tr><tr><td style="padding:26px 32px"><p style="margin:0 0 6px;font-weight:bold">${escapeHtml(businessProfile.legalName || businessProfile.businessName)}</p><p style="margin:0 0 4px;color:#66736d">${escapeHtml(businessProfile.address)}</p><p style="margin:0 0 4px;color:#66736d">${escapeHtml(businessProfile.phone)} · ${escapeHtml(businessProfile.email)}</p>${businessProfile.taxRegistrationNumber ? `<p style="margin:0 0 20px;color:#66736d">GST/HST No.: ${escapeHtml(businessProfile.taxRegistrationNumber)}</p>` : '<div style="height:20px"></div>'}<p style="margin:0 0 6px"><strong>Receipt No.</strong> ${escapeHtml(receipt.number)}</p><p style="margin:0 0 22px;color:#66736d">Issued ${escapeHtml(receipt.issuedAt.slice(0, 10))}</p><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse"><tr><td style="padding:10px 0;border-bottom:1px solid #e6ebe8;color:#64716b">Client</td><td align="right" style="padding:10px 0;border-bottom:1px solid #e6ebe8;font-weight:bold">${escapeHtml(booking.customerName)}</td></tr><tr><td style="padding:10px 0;border-bottom:1px solid #e6ebe8;color:#64716b">Email</td><td align="right" style="padding:10px 0;border-bottom:1px solid #e6ebe8">${escapeHtml(booking.email)}</td></tr><tr><td style="padding:10px 0;border-bottom:1px solid #e6ebe8;color:#64716b">Service</td><td align="right" style="padding:10px 0;border-bottom:1px solid #e6ebe8">${escapeHtml(booking.serviceName)}</td></tr><tr><td style="padding:10px 0;border-bottom:1px solid #e6ebe8;color:#64716b">Service date</td><td align="right" style="padding:10px 0;border-bottom:1px solid #e6ebe8">${escapeHtml(booking.date)}</td></tr><tr><td style="padding:10px 0;color:#64716b">Payment method</td><td align="right" style="padding:10px 0">${escapeHtml(booking.paymentOption)}</td></tr></table><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-top:24px;border-top:2px solid #087765"><tr><td style="padding:10px 0;color:#64716b">Subtotal</td><td align="right" style="padding:10px 0">$${receipt.subtotal.toFixed(2)}</td></tr>${membershipDiscountRow}${loyaltyRows}<tr><td style="padding:8px 0;color:#64716b">${escapeHtml(receipt.taxLabel)}</td><td align="right" style="padding:8px 0">$${receipt.tax.toFixed(2)}</td></tr><tr><td style="padding:14px 0;border-top:1px solid #d8e2dc;font-size:18px;font-weight:bold">Total paid</td><td align="right" style="padding:14px 0;border-top:1px solid #d8e2dc;font-size:18px;font-weight:bold">$${receipt.total.toFixed(2)}</td></tr></table>${loyaltyBalance}<p style="margin:24px 0 0;text-align:center;color:#64716b">Thank you for choosing ${escapeHtml(businessProfile.businessName)}.</p></td></tr></table></td></tr></table></body></html>`;
   const boundary = `receipt_${crypto.randomBytes(12).toString('hex')}`;
   const encode = (value) => Buffer.from(value).toString('base64').match(/.{1,76}/g).join('\r\n');
   const message = [
@@ -6499,25 +6505,33 @@ export default async function handler(req, res) {
       const redemption = linkedRedemptions[0]?.row;
       const loyaltyDiscount = Number(redemption?.[5]) || 0;
       const pointsRedeemed = Math.abs(Number(redemption?.[4]) || 0);
+      const membershipType = String(row[21] || '').toLowerCase();
+      const savedMembershipDiscountPercent = Number(row[22]);
+      const membershipDiscountPercent = Number.isFinite(savedMembershipDiscountPercent) ? savedMembershipDiscountPercent : 0;
+      const savedMembershipDiscountAmount = Number(row[23]);
+      const membershipDiscountAmount = Number.isFinite(savedMembershipDiscountAmount) ? Math.max(0, savedMembershipDiscountAmount) : 0;
       const pointsBalance = loyaltyRows
         .filter((loyaltyRow) => normalizeLoyaltyEmail(loyaltyRow[1]) === normalizeLoyaltyEmail(booking.email))
         .reduce((sum, loyaltyRow) => sum + (Number(loyaltyRow[4]) || 0), 0);
       const businessProfile = await getBusinessProfile(sheets);
       const isTaxExempt = /registered massage therapy|\brmt\b|acupuncture/i.test(booking.serviceName);
-      const originalSubtotal = isTaxExempt ? booking.total : booking.total / 1.13;
-      if (loyaltyDiscount > originalSubtotal + 0.005) {
+      const discountedSubtotal = Math.round((isTaxExempt ? booking.total : booking.total / 1.13) * 100) / 100;
+      if (loyaltyDiscount > discountedSubtotal + 0.005) {
         return res.status(409).json({ message: 'The loyalty redemption exceeds this receipt subtotal. Adjust the redemption before issuing this receipt.' });
       }
-      const subtotal = Math.round(originalSubtotal * 100) / 100;
-      const discountedSubtotal = Math.round((originalSubtotal - loyaltyDiscount) * 100) / 100;
-      const tax = isTaxExempt ? 0 : Math.round(discountedSubtotal * 0.13 * 100) / 100;
+      const subtotal = Math.round((discountedSubtotal + membershipDiscountAmount) * 100) / 100;
+      const receiptSubtotal = Math.round((discountedSubtotal - loyaltyDiscount) * 100) / 100;
+      const tax = isTaxExempt ? 0 : Math.round(receiptSubtotal * 0.13 * 100) / 100;
       const receipt = {
         number: row[18] || `MTT-${new Date().getFullYear()}-${String(Math.floor(100000 + Math.random() * 900000))}`,
         issuedAt: row[19] || new Date().toISOString(),
         subtotal,
         tax,
         taxLabel: isTaxExempt ? 'HST exempt' : 'HST (13%)',
-        total: Math.round((discountedSubtotal + tax) * 100) / 100,
+        total: Math.round((receiptSubtotal + tax) * 100) / 100,
+        membershipDiscountAmount,
+        membershipDiscountPercent,
+        membershipDiscountLabel: ['silver', 'platinum'].includes(membershipType) ? 'Group benefit discount' : 'Membership discount',
         loyaltyDiscount,
         pointsRedeemed,
         pointsBalance,
