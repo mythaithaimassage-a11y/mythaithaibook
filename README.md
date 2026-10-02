@@ -110,6 +110,35 @@ records are looked up and updated by `order_id` (the identifier Square's
 webhook payload provides) and are separately queried by `booking_id` for the
 refund lookup used during self-service cancellation.
 
+## Clearing past booking history
+
+In the owner dashboard, open **Schedule & Bookings → Clear past bookings**.
+Preview the database counts, then type **CLEAR PAST BOOKINGS** to permanently
+delete appointments whose scheduled end time is at or before the preview cutoff
+in `GOOGLE_CALENDAR_TIME_ZONE` (default `America/Toronto`). This applies across
+all branches, including historical Wix imports. Future and ongoing appointments,
+and rows with invalid dates/times or nonpositive/missing durations, are kept.
+
+This explicitly deletes paid and package-linked booking rows too, including
+their stored payment details and issued receipt metadata. **No archive or new
+permanent table is created**, and the existing bookings schema is unchanged.
+Deleted receipts cannot be viewed or reissued from the dashboard. Separate
+Square payment records, package balances/usage history, loyalty ledgers, contacts,
+patient history, and Google Calendar events are left untouched. Package usage
+and loyalty history can therefore retain references to deleted booking IDs.
+Booking-based revenue and visit reports no longer include cleared rows.
+Reimporting a Wix CSV can recreate deleted bookings, so reconcile existing
+package/loyalty usage before doing so.
+
+Both endpoints are owner-only, same-origin POST requests:
+`view=booking-history-preview` returns counts and a signed, ten-minute preview
+token; `view=clear-booking-history` requires that token and
+`confirmation: "CLEAR PAST BOOKINGS"`. A transaction verifies the complete
+candidate-row fingerprint before deleting. Changes to candidates require a new
+preview, and appointments that end after the preview are not silently added to
+the deletion. Database errors are reported; no live deletion happens merely by
+opening or previewing this control.
+
 ## Historical Wix contact import
 
 Sign in to the owner dashboard and open **Manage → Wix contacts import**.

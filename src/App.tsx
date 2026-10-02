@@ -14,6 +14,7 @@ import * as XLSX from 'xlsx';
 import WixContacts from './WixContacts';
 import WixBookings from './WixBookings';
 import PackageTracking from './PackageTracking';
+import ClearBookingHistory from './ClearBookingHistory';
 
 const MOCK_BRANCHES = [
   { id: 1, name: "Mississauga Central", address: "4310 Sherwoodtowne Blvd", city: "Mississauga, ON", phone: "+1 437 898 7424" },
@@ -5764,6 +5765,7 @@ function AdminPortal({
               {deleteBookingError}
             </div>
           )}
+          <ClearBookingHistory onCleared={loadBookingsFromBackend} />
 
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs sm:text-sm">

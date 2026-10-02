@@ -5,6 +5,7 @@ import { createWixContactStore, prepareWixContacts } from '../lib/wix-contacts.j
 import { applyWixCataloguePrices, applyWixTherapistMappings, importWixBookings, prepareWixBookings } from '../lib/wix-bookings.js';
 import { BOOKING_TABLE_FIELDS } from '../lib/booking-schema.js';
 import { createPackageStore, historicalPackageVisit, readPackageUsage, packageReceiptDetails } from '../lib/packages.js';
+import { createBookingHistoryStore } from '../lib/booking-history.js';
 
 // Body parsing is done manually (see readRawBody/parseRequestBody below) so the Square
 // webhook handler can verify its HMAC signature against the exact raw request bytes;
@@ -4013,18 +4014,28 @@ export default async function handler(req, res) {
 
     const view = String(req.query?.view || '');
     const packageViews = ['packages', 'package-register', 'package-redeem'];
+    const historyViews = ['booking-history-preview', 'clear-booking-history'];
     const validGetViews = ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'business-name', 'square-config', 'google-reviews', 'branches', 'services', 'therapists', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal', 'company-join', 'find-booking', 'availability', 'unavailability', 'campaign-log', 'campaign-audience-options', 'review-request-audience', 'therapist-accounts', 'wix-contacts'];
-    if (req.method === 'GET' && !validGetViews.includes(view) && !['wix-contacts-import', 'wix-bookings-import', ...packageViews].includes(view)) {
+    if (req.method === 'GET' && !validGetViews.includes(view) && !['wix-contacts-import', 'wix-bookings-import', ...packageViews, ...historyViews].includes(view)) {
       return res.status(404).json({ message: 'Unknown booking view' });
     }
     const ownerOnlyRequest =
-      ['wix-contacts', 'wix-contacts-import', 'wix-bookings-import', ...packageViews].includes(view) ||
+      ['wix-contacts', 'wix-contacts-import', 'wix-bookings-import', ...packageViews, ...historyViews].includes(view) ||
       (req.method === 'GET' && ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'google-ads-report', 'loyalty-dashboard', 'google-reviews', 'unavailability', 'campaign-log', 'campaign-audience-options', 'review-request-audience', 'therapist-accounts'].includes(view)) ||
       ['business-profile', 'mark-paid', 'therapist-account-status', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-clear-ledger', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-link', 'unavailability-delete', 'review-request-send', 'reassign-therapist'].includes(view) ||
       (req.method === 'POST' && ['branches', 'services', 'therapists', 'unavailability'].includes(view));
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
     if (ownerOnlyRequest && !getOwnerSession(req)) {
       return res.status(401).json({ message: 'Owner sign-in required' });
+    }
+    if (historyViews.includes(view)) {
+      if (req.method !== 'POST') return res.status(405).json({ message: 'Method Not Allowed' });
+      if (!isSameOriginRequest(req)) return res.status(403).json({ message: 'Booking history request origin is not allowed' });
+      const store = createBookingHistoryStore(getBigQueryClient(), {
+        projectId: BIGQUERY_PROJECT_ID, datasetId: BIGQUERY_DATASET_ID, tableId: BIGQUERY_BOOKINGS_TABLE,
+        timeZone: CALENDAR_TIME_ZONE, secret: OWNER_ADMIN_SESSION_SECRET,
+      });
+      return res.status(200).json(view === 'booking-history-preview' ? await store.preview() : await store.clear(req.body));
     }
     if (req.method === 'POST' && ['wix-contacts-import', 'wix-bookings-import', ...packageViews].includes(view) && !isSameOriginRequest(req)) {
       return res.status(403).json({ message: 'Wix import origin is not allowed' });
