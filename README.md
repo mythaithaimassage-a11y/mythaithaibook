@@ -329,6 +329,11 @@ The import starts a batch of up to ten pending bookings, and the owner UI
 continues batches via owner-only, same-origin POST `view=wix-calendar-sync`.
 Keep the page open until complete. **Sync existing Wix bookings to Calendar**
 backfills older imports or resumes interrupted/failed syncs without a new CSV.
+The owner **Live Google Calendar** tab also provides **Sync Wix bookings**,
+using the same resumable flow. It shows progress and refreshes the dashboard's
+calendar and booking list after completion or partial failure. Sync applies to
+all pending Wix dates/branches, not just the selected calendar filters. Select
+the historical appointment date to see its events in the day view.
 Progress and errors are explicit; an import can save database rows even when
 Calendar permissions or quotas prevent syncing. Fix the reported error and retry.
 Stable Calendar event IDs and ownership checks recover an event created before

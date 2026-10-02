@@ -15,6 +15,7 @@ import WixContacts from './WixContacts';
 import WixBookings from './WixBookings';
 import PackageTracking from './PackageTracking';
 import ClearBookingHistory from './ClearBookingHistory';
+import WixCalendarSync from './WixCalendarSync';
 
 const MOCK_BRANCHES = [
   { id: 1, name: "Mississauga Central", address: "4310 Sherwoodtowne Blvd", city: "Mississauga, ON", phone: "+1 437 898 7424" },
@@ -5853,6 +5854,9 @@ function AdminPortal({
             </div>
           </div>
           {calendarLoadError && <div className="p-3 bg-red-50 border border-red-200 text-red-800 rounded-xl text-xs">{calendarLoadError}</div>}
+          <WixCalendarSync onSynced={async () => {
+            await Promise.all([loadCalendar(), loadBookingsFromBackend()]);
+          }} />
           {calendarWarnings.length > 0 && (
             <div className="p-3 bg-amber-50 border border-amber-200 text-amber-900 rounded-xl text-xs">
               Calendar access warning: {calendarWarnings.join(' · ')}

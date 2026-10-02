@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Upload } from 'lucide-react';
 import { readWixResponse } from './wixImportApi';
 import { wixImportServices, packageSessionCount } from '../lib/wix-pricing.js';
+import { runWixCalendarSync, type CalendarSync } from './runWixCalendarSync';
 
 type Booking = {
   booking_id: string;
@@ -22,7 +23,6 @@ type PriceGroup = { key: string; serviceName: string; durationMinutes: number; c
 type PriceMapping = { key: string; serviceId: number | string; serviceName: string; price: number; taxRate: number };
 type Therapist = { id: number | string; name: string; active: boolean };
 type TherapistMapping = { sourceName: string; therapistId: number | string; therapistName: string };
-type CalendarSync = { synced: number; pending: number | null; errors: { bookingId: string; message: string }[] };
 type Summary = {
   totalRows: number;
   validBookings: number;
@@ -73,18 +73,9 @@ export default function WixBookings({ onViewBookings }: { onViewBookings: () => 
   };
 
   const continueCalendarSync = async (initial?: CalendarSync) => {
-    let current: CalendarSync = initial ?? await requestCalendarSync();
-    let synced = 0;
-    do {
-      synced += current.synced;
-      setCalendarMessage(`Calendar: ${synced} bookings synced in this run; ${current.pending ?? 'unknown'} remaining.`);
-      if (current.errors.length) {
-        throw new Error(`Bookings are saved, but Calendar sync stopped: ${current.errors.map((issue) => `${issue.bookingId}: ${issue.message}`).join('; ')} Use "Sync existing Wix bookings to Calendar" to retry.`);
-      }
-      if (current.pending === 0) break;
-      if (current.synced === 0) throw new Error('Calendar sync made no progress. Refresh and retry the backfill.');
-      current = await requestCalendarSync();
-    } while (true);
+    await runWixCalendarSync(requestCalendarSync, ({ synced, pending }) => {
+      setCalendarMessage(`Calendar: ${synced} bookings synced in this run; ${pending ?? 'unknown'} remaining.`);
+    }, initial);
   };
 
   const backfillCalendar = async () => {
