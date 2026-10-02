@@ -184,7 +184,8 @@ Local regression tests: `node --test tests/wix-contacts.test.js`.
 
 Open **Manage → Wix bookings import** in the owner dashboard, select the Wix
 **bookings** CSV, map each Wix service/duration to a current catalogue service,
-select **Preview mapped prices**, and confirm historical payment and the
+optionally map Wix staff names to current therapists, select
+**Preview mapped prices & therapists**, and confirm historical payment and the
 reviewed prices. Then select **Import paid bookings**.
 These exports are assigned to **Mississauga Central**, as requested. The
 destination is the **existing** `BIGQUERY_BOOKINGS_TABLE` (default `bookings`)
@@ -205,6 +206,21 @@ tables cause an explicit error before any bookings are written.
 | Reviewed current catalogue price | Tax-inclusive `total` and equal `paid_amount` (fully paid) |
 | Client address, spots, service type, all form questions/answers, and original columns | JSON in `intake_notes` |
 | Branch | `branch_name` = `Mississauga Central`; `branch_address` blank (client address is not the clinic's address) |
+
+**Therapist mapping:** the preview lists each distinct Wix staff name with its
+booking count (including a blank-name group). Choose an active current therapist
+or **Keep original Wix name**, useful for former staff. Multiple Wix aliases may
+map to one therapist. The mapped name is stored in the existing `therapist_name`
+column; the original Wix `Staff name` and mapping provenance stay in
+`intake_notes`. Changing a mapping invalidates the reviewed preview and payment
+confirmation. The backend rejects missing/inactive targets, duplicate/unknown
+source names and renamed therapists rather than silently falling back.
+Booking IDs and duplicate detection still use the original Wix staff name, so
+mapping two aliases to one person cannot merge distinct exported bookings.
+Mappings apply to newly inserted records only; re-import does not reassign
+existing bookings (including zero-amount records). Use existing booking
+reassignment controls for records already imported. Mapping does not create
+staff accounts, notifications or Calendar events.
 
 Sessions are sorted by date and 24-hour start time. Generated IDs use
 `WIX-YYYYMMDD-HHMM-<appointment hash>`, not row numbers, so reordering or splitting
@@ -287,6 +303,10 @@ For a priced preview, add `priceMappings`, an array of
 from the initial preview. To import, omit `preview: true` and supply all
 `priceMappings` plus `confirmPaid: true`. Both require owner authentication;
 POSTs require the same origin. No additional environment variables are required.
+Optionally include `therapistMappings` in both reviewed preview and import:
+`[{ "sourceName": "<Wix staff name>", "therapistId": 7, "therapistName": "<current name>" }]`.
+Unmapped names are kept unchanged. `therapistGroups` and
+`mappedTherapistBookings` in the response describe the mapping coverage.
 
 Regression tests:
 `node --test tests/wix-contacts.test.js tests/wix-bookings.test.js tests/wix-paid-receipts.test.js tests/packages.test.js`.

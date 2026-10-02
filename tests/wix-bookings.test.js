@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Readable } from 'node:stream';
 import { BigQuery } from '@google-cloud/bigquery';
-import { applyWixCataloguePrices, prepareWixBookings, importWixBookings } from '../lib/wix-bookings.js';
+import { applyWixCataloguePrices, applyWixTherapistMappings, prepareWixBookings, importWixBookings } from '../lib/wix-bookings.js';
 import { BOOKING_TABLE_FIELDS } from '../lib/booking-schema.js';
 import { MAX_WIX_QUERY_BYTES } from '../lib/wix-import.js';
 
@@ -25,6 +25,29 @@ const csv = (records) => [headers, ...records.map((record) => headers.map((heade
   .map((row) => row.map((value) => `"${value.replace(/"/g, '""')}"`).join(',')).join('\r\n');
 const prepare = (records) => prepareWixBookings(csv(records), { today: '2026-10-02' });
 const config = { projectId: 'test-project', datasetId: 'booking_system', tableId: 'existing_bookings', fields: BOOKING_TABLE_FIELDS };
+
+test('therapist mappings preserve Wix source and IDs, combine aliases without losing distinct appointments, and keep unmapped names', () => {
+  const prepared = prepare([{}, { 'Staff name': 'TaTa' }, { 'Staff name': 'Former Staff' }, { 'Staff name': 'Unknown' }]);
+  const therapists = [{ id: 1, name: 'Tata', active: true }, { id: 2, name: 'Inactive', active: false }];
+  const mappings = ['Staff 7 TaTa', 'TaTa', ''].map((sourceName) => ({ sourceName, therapistId: 1, therapistName: 'Tata' }));
+  const mapped = applyWixTherapistMappings(prepared, therapists, mappings);
+  assert.equal(mapped.summary.therapistGroups.length, 4);
+  assert.equal(mapped.summary.mappedTherapistBookings, 3);
+  assert.equal(mapped.bookings.length, 4);
+  assert.equal(new Set(mapped.bookings.map((record) => record.booking_id)).size, 4);
+  assert.deepEqual(mapped.bookings.map((record) => record.booking_id), prepared.bookings.map((record) => record.booking_id));
+  assert.equal(mapped.bookings.filter((record) => record.therapist_name === 'Tata').length, 3);
+  assert.equal(mapped.bookings.filter((record) => record.therapist_name === 'Former Staff').length, 1);
+  const changed = mapped.bookings.find((record) => JSON.parse(record.intake_notes).sourceFields['Staff name'] === 'Staff 7 TaTa');
+  assert.equal(JSON.parse(changed.intake_notes).therapistMapping.sourceName, 'Staff 7 TaTa');
+  assert.equal(JSON.parse(changed.intake_notes).therapistMapping.therapistId, 1);
+  assert.deepEqual(applyWixTherapistMappings(prepared, []).bookings, prepared.bookings);
+  for (const invalid of [
+    {}, [mappings[0], mappings[0]], [{ sourceName: 'Not in CSV', therapistId: 1, therapistName: 'Tata' }],
+    [{ ...mappings[0], therapistId: 2, therapistName: 'Inactive' }], [{ ...mappings[0], therapistName: 'Stale name' }],
+    [{ ...mappings[0], therapistId: 999 }],
+  ]) assert.throws(() => applyWixTherapistMappings(prepared, therapists, invalid), { statusCode: 400 });
+});
 
 function mockBigQuery({ exists = true, fields = BOOKING_TABLE_FIELDS.map(({ name, type, mode }) => ({ name, type, mode })) } = {}) {
   const stored = new Map();

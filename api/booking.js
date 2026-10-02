@@ -2,7 +2,7 @@ import { google } from 'googleapis';
 import { BigQuery } from '@google-cloud/bigquery';
 import crypto from 'node:crypto';
 import { createWixContactStore, prepareWixContacts } from '../lib/wix-contacts.js';
-import { applyWixCataloguePrices, importWixBookings, prepareWixBookings } from '../lib/wix-bookings.js';
+import { applyWixCataloguePrices, applyWixTherapistMappings, importWixBookings, prepareWixBookings } from '../lib/wix-bookings.js';
 import { BOOKING_TABLE_FIELDS } from '../lib/booking-schema.js';
 import { createPackageStore, historicalPackageVisit, readPackageUsage, packageReceiptDetails } from '../lib/packages.js';
 
@@ -4059,6 +4059,16 @@ export default async function handler(req, res) {
         prepared = applyWixCataloguePrices(prepared, catalogue, req.body?.priceMappings, req.body?.preview !== true);
       } else {
         prepared = applyWixCataloguePrices(prepared, [], []);
+      }
+      if (req.body?.therapistMappings !== undefined && (!Array.isArray(req.body.therapistMappings) || req.body.therapistMappings.length)) {
+        const therapistAuth = new google.auth.GoogleAuth({
+          credentials: { client_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL, private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n') },
+          scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+        });
+        const therapists = await getTherapists(google.sheets({ version: 'v4', auth: therapistAuth }));
+        prepared = applyWixTherapistMappings(prepared, therapists, req.body.therapistMappings);
+      } else {
+        prepared = applyWixTherapistMappings(prepared, []);
       }
       if (req.body?.preview === true) {
         return res.status(200).json({ ...prepared.summary, sample: prepared.bookings.slice(0, 5) });

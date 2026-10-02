@@ -20,6 +20,8 @@ type Booking = {
 type Service = { id: number | string; name: string; duration: number; price: number; taxRate: number; active: boolean };
 type PriceGroup = { key: string; serviceName: string; durationMinutes: number; count: number };
 type PriceMapping = { key: string; serviceId: number | string; serviceName: string; price: number; taxRate: number };
+type Therapist = { id: number | string; name: string; active: boolean };
+type TherapistMapping = { sourceName: string; therapistId: number | string; therapistName: string };
 type Summary = {
   totalRows: number;
   validBookings: number;
@@ -40,6 +42,8 @@ type Summary = {
   priceGroups: PriceGroup[];
   pricedBookings: number;
   approvedTotal: number;
+  therapistGroups: { sourceName: string; count: number }[];
+  mappedTherapistBookings: number;
 };
 
 export default function WixBookings({ onViewBookings }: { onViewBookings: () => void }) {
@@ -54,6 +58,9 @@ export default function WixBookings({ onViewBookings }: { onViewBookings: () => 
   const [mappings, setMappings] = useState<PriceMapping[]>([]);
   const [confirmed, setConfirmed] = useState(false);
   const [pricesReviewed, setPricesReviewed] = useState(false);
+  const [therapists, setTherapists] = useState<Therapist[]>([]);
+  const [therapistError, setTherapistError] = useState('');
+  const [therapistMappings, setTherapistMappings] = useState<TherapistMapping[]>([]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -64,9 +71,18 @@ export default function WixBookings({ onViewBookings }: { onViewBookings: () => 
     return () => controller.abort();
   }, []);
 
-  const request = (content: string, previewOnly: boolean, priceMappings?: PriceMapping[]) => fetch('/api/booking?view=wix-bookings-import', {
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch('/api/booking?view=therapists', { signal: controller.signal })
+      .then((response) => readWixResponse<{ therapists: Therapist[] }>(response))
+      .then((data) => setTherapists(data.therapists))
+      .catch((failure: unknown) => { if (!controller.signal.aborted) setTherapistError(failure instanceof Error ? failure.message : 'Unable to load current therapists.'); });
+    return () => controller.abort();
+  }, []);
+
+  const request = (content: string, previewOnly: boolean, priceMappings?: PriceMapping[], staffMappings: TherapistMapping[] = []) => fetch('/api/booking?view=wix-bookings-import', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ csv: content, preview: previewOnly, priceMappings, confirmPaid: !previewOnly && confirmed }),
+    body: JSON.stringify({ csv: content, preview: previewOnly, priceMappings, therapistMappings: staffMappings, confirmPaid: !previewOnly && confirmed }),
   }).then((response) => readWixResponse<Summary>(response));
 
   const selectFile = async (file: File | undefined) => {
@@ -76,6 +92,7 @@ export default function WixBookings({ onViewBookings }: { onViewBookings: () => 
     setResult(null);
     setError('');
     setMappings([]);
+    setTherapistMappings([]);
     setConfirmed(false);
     setPricesReviewed(false);
     if (!file) return;
@@ -99,7 +116,7 @@ export default function WixBookings({ onViewBookings }: { onViewBookings: () => 
     setBusy(true);
     setError('');
     try {
-      setResult(await request(csv, false, mappings));
+      setResult(await request(csv, false, mappings, therapistMappings));
       setPreview(null);
       setCsv('');
     } catch (failure) {
@@ -114,7 +131,7 @@ export default function WixBookings({ onViewBookings }: { onViewBookings: () => 
     setPricesReviewed(false);
     setConfirmed(false);
     try {
-      const data = await request(csv, true, mappings);
+      const data = await request(csv, true, mappings, therapistMappings);
       setPreview(data);
       setPricesReviewed(data.pricedBookings === data.validBookings);
     } catch (failure) {
@@ -152,6 +169,24 @@ export default function WixBookings({ onViewBookings }: { onViewBookings: () => 
           <tbody>{preview.sample.map((booking) => <tr key={booking.booking_id}><td className="p-2">{booking.customer_name || booking.email || booking.phone}<span className="block font-mono text-[10px] text-slate-500">{booking.booking_id}</span></td><td className="p-2">{booking.date} {booking.time}</td><td className="p-2">{booking.service_name}</td><td className="p-2">{booking.therapist_name}</td><td className="p-2">{booking.duration_minutes} min</td><td className="p-2">{booking.status}</td><td className="p-2">${booking.total.toFixed(2)} / ${booking.paid_amount.toFixed(2)}</td></tr>)}</tbody>
         </table></div>}
         {preview && <div className="space-y-3">
+          <h3 className="font-semibold">Map Wix therapist names</h3>
+          <p className="text-xs text-slate-600">Choose the current therapist for each Wix staff name, or keep the original name for former/unknown staff. Original Wix names and booking IDs are preserved. Mapping applies to newly imported bookings; re-import does not reassign existing bookings.</p>
+          {therapistError && <p role="alert" className="text-xs text-red-700">{therapistError} Reload to retry; you can still keep the original Wix names.</p>}
+          {preview.therapistGroups.map((group) => {
+            const selected = therapistMappings.find((mapping) => mapping.sourceName === group.sourceName);
+            return <label key={group.sourceName} className="block space-y-1 text-xs">
+              <span>{group.sourceName || 'No Wix staff name'} | {group.count} bookings</span>
+              <select disabled={busy} value={selected?.therapistId ?? ''} className="block w-full rounded-lg border border-slate-300 p-2" onChange={(event) => {
+                const therapist = therapists.find((item) => String(item.id) === event.target.value);
+                setTherapistMappings((current) => [...current.filter((mapping) => mapping.sourceName !== group.sourceName), ...(therapist ? [{ sourceName: group.sourceName, therapistId: therapist.id, therapistName: therapist.name }] : [])]);
+                setPricesReviewed(false);
+                setConfirmed(false);
+              }}>
+                <option value="">Keep original Wix name{group.sourceName ? `: ${group.sourceName}` : ' (blank)'}</option>
+                {therapists.filter((therapist) => therapist.active !== false).map((therapist) => <option key={therapist.id} value={therapist.id}>{therapist.name}</option>)}
+              </select>
+            </label>;
+          })}
           <h3 className="font-semibold">Review current catalogue prices</h3>
           {preview.priceGroups.map((group) => {
             const selected = mappings.find((mapping) => mapping.key === group.key);
@@ -168,9 +203,10 @@ export default function WixBookings({ onViewBookings }: { onViewBookings: () => 
               </select>
             </label>;
           })}
-          <button type="button" disabled={busy || !!catalogueError || mappings.length !== preview.priceGroups.length} onClick={() => void reviewPrices()} className="rounded-lg border border-slate-300 px-4 py-2 font-semibold disabled:opacity-50">Preview mapped prices</button>
+          <button type="button" disabled={busy || !!catalogueError || mappings.length !== preview.priceGroups.length} onClick={() => void reviewPrices()} className="rounded-lg border border-slate-300 px-4 py-2 font-semibold disabled:opacity-50">Preview mapped prices & therapists</button>
           {pricesReviewed && <div className="space-y-2">
             <p className="font-semibold">Tax-inclusive total for this CSV: ${preview.approvedTotal.toFixed(2)}. Each mapped booking will be marked paid in full.</p>
+            <p className="text-xs text-slate-600">{preview.mappedTherapistBookings} bookings mapped to current therapists; other staff names kept as exported.</p>
             <label className="flex items-start gap-2"><input type="checkbox" disabled={busy} checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} className="mt-1" /><span>I confirm these historical bookings were paid and approve the reviewed current catalogue prices for their records and receipts. These prices may differ from the original charges.</span></label>
           </div>}
           <button type="button" disabled={busy || !preview.validBookings || !pricesReviewed || !confirmed} onClick={() => void importBookings()} className="rounded-lg bg-emerald-900 px-4 py-2 font-semibold text-white disabled:opacity-50">Import {preview.validBookings} paid bookings</button>

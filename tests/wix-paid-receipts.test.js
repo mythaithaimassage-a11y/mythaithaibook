@@ -28,9 +28,10 @@ test('reviewed Wix import produces paid records and actual receipt endpoint issu
   const profileHeaders = ['businessName', 'legalName', 'tagline', 'email', 'phone', 'website', 'address', 'taxRegistrationNumber', 'photoUrl'];
   t.mock.method(google, 'sheets', () => ({
     spreadsheets: {
-      get: async () => ({ data: { sheets: ['Services', 'BusinessProfile'].map((title) => ({ properties: { title } })) } }),
+      get: async () => ({ data: { sheets: ['Services', 'BusinessProfile', 'Therapists'].map((title) => ({ properties: { title } })) } }),
       values: {
         get: async ({ range }) => {
+          if (range === 'Therapists!A2:J') return { data: { values: [[7, 'Mapped Therapist', '', 4.9, 'TRUE', 'FALSE', '1', '{}', 'TRUE']] } };
           if (range === 'Services!A2:K') return { data: { values: services.map((service) => [
             service.id, service.name, 'Massage', service.duration, service.price, 0, 'FALSE', service.taxRate, '', 'TRUE',
           ]) } };
@@ -147,14 +148,22 @@ test('reviewed Wix import produces paid records and actual receipt endpoint issu
   const stale = await request('wix-bookings-import', { csv, preview: true, priceMappings: priceMappings.map((mapping) => ({ ...mapping, price: 1 })) });
   assert.equal(stale.code, 400);
   assert.equal(records.size, 0);
-  const reviewed = await request('wix-bookings-import', { csv, preview: true, priceMappings });
+  assert.deepEqual(initial.data.therapistGroups, [{ sourceName: 'Test Staff', count: 2 }]);
+  const therapistMappings = [{ sourceName: 'Test Staff', therapistId: 7, therapistName: 'Mapped Therapist' }];
+  const staleTherapist = await request('wix-bookings-import', { csv, preview: true, therapistMappings: [{ ...therapistMappings[0], therapistName: 'Old name' }] });
+  assert.equal(staleTherapist.code, 400);
+  const reviewed = await request('wix-bookings-import', { csv, preview: true, priceMappings, therapistMappings });
   assert.equal(reviewed.code, 200);
   assert.equal(reviewed.data.approvedTotal, 233);
-  const imported = await request('wix-bookings-import', { csv, priceMappings, confirmPaid: true });
+  assert.equal(reviewed.data.mappedTherapistBookings, 2);
+  assert.ok(reviewed.data.sample.every((record) => record.therapist_name === 'Mapped Therapist'));
+  const imported = await request('wix-bookings-import', { csv, priceMappings, therapistMappings, confirmPaid: true });
   assert.equal(imported.code, 200);
   assert.equal(imported.data.imported, 2);
   assert.equal(emails.length, 0);
   for (const record of records.values()) {
+    assert.equal(record.therapist_name, 'Mapped Therapist');
+    assert.equal(JSON.parse(record.intake_notes).sourceFields['Staff name'], 'Test Staff');
     assert.equal(record.paid_amount, record.total);
     const receiptResponse = await request('issue-receipt', { bookingId: record.booking_id });
     assert.equal(receiptResponse.code, 200, JSON.stringify(receiptResponse.data));
