@@ -56,6 +56,8 @@ Configure these Vercel environment variables before using it:
 - `BIGQUERY_LOYALTY_LEDGER_TABLE` (optional; defaults to `loyalty_ledger`)
 - `BIGQUERY_LOYALTY_COMPANIES_TABLE` (optional; defaults to `loyalty_companies`)
 - `BIGQUERY_LOCATION` (optional; defaults to `US`)
+- `BIGQUERY_WIX_CONTACTS_TABLE` (optional; defaults to `wix_contacts`; must not
+  point to any existing booking, patient-history, payment, campaign or loyalty table)
 - `GOOGLE_PLACES_API_KEY` / `GOOGLE_PLACE_ID` (optional; enables the Google
   Reviews section — requires the **Places API (New)** enabled on the project,
   not the legacy Places API)
@@ -105,6 +107,175 @@ to the BigQuery client library's temporal wrapper objects. Square payment
 records are looked up and updated by `order_id` (the identifier Square's
 webhook payload provides) and are separately queried by `booking_id` for the
 refund lookup used during self-service cancellation.
+
+## Historical Wix contact import
+
+Sign in to the owner dashboard and open **Manage → Wix contacts import**.
+Choose the **contacts CSV exported by Wix**, review the preview and skipped-row
+warnings, then select **Import contacts**. The import supports UTF-8/BOM CSV,
+quoted commas, escaped quotes and multiline fields. Each file may contain up
+to 10,000 contact rows and be no larger than 3 MiB. Split larger exports into
+smaller files, retaining the original header in each file.
+
+Contacts are stored in a **separate BigQuery table**, `wix_contacts` in the
+configured booking dataset (override with `BIGQUERY_WIX_CONTACTS_TABLE`).
+It is created automatically using the existing BigQuery credentials and IAM
+permissions. **No existing table schema is altered, and no existing bookings,
+patient forms, payments, loyalty balances or campaign records are updated.**
+If the destination has an incompatible schema, the import fails rather than
+changing it. The original CSV is not committed to this repository.
+
+The archive maps these Wix fields:
+
+| Wix export | BigQuery columns |
+| --- | --- |
+| First Name / Last Name | `first_name`, `last_name`, combined `name` |
+| Email 1–N / Phone 1–N | First valid `email` / `phone`, all values in `emails_json` / `phones_json` |
+| Address N - fields | `addresses_json` (preserves each address's type, street, region, postal code and country when supplied) |
+| Labels | `labels` |
+| Created At (UTC+0) | `wix_created_at` (ISO UTC string) |
+| Email / SMS subscriber status | `email_subscriber_status`, `sms_subscriber_status` (historical values only) |
+| Last Activity / Last Activity Date (UTC+0) | `last_activity`, `last_activity_at` |
+| Source / Language / Linked Locations | `source`, `language`, `linked_locations` |
+| Every original column, including unmapped fields | `source_fields_json` |
+| Import metadata | Deterministic `contact_id`, `imported_at` |
+
+All archive columns are `STRING`; structured collections are serialized as
+JSON. The import strips Wix's leading apostrophe from phone numbers for the
+normalized phone fields while retaining the original value in source fields.
+Unrecognized dates remain in source fields with a warning; no activity date
+is interpreted as an actual appointment.
+
+Identity uses the first valid email (case-insensitive), falling back to the
+first valid phone's digits when no valid email exists. Rows with neither are
+skipped. Duplicate identities within one CSV retain the first occurrence.
+Re-importing the same identity skips the existing archive record instead of
+overwriting it. Phone-only records that later gain an email have a different
+identity; shared phone numbers without email collapse to one contact.
+The preview shows up to five contacts and twenty warnings. Import results
+report newly inserted, already existing, invalid and duplicate row counts.
+Expanded BigQuery parameters are split into batches below 8 MiB to stay within
+BigQuery's request limits. Each batch is atomic, but the entire file is not:
+if a later batch fails or a request times out, some contacts may already have
+been saved. Refresh the list and re-import the same CSV to finish; completed
+records are skipped. Failures are reported explicitly, including confirmed
+insert counts when available.
+Use the searchable, paginated contact list to verify the imported records.
+
+**No emails are sent and no marketing consent or loyalty membership is
+created.** Wix's subscription status is retained for reference, not treated as
+a new opt-in. Contacts stay in this archive, separate from the booking-derived
+loyalty directory and campaign audiences.
+
+The owner-authenticated API exposes:
+
+- `POST /api/booking?view=wix-contacts-import` with
+  `{ "csv": "<CSV text>", "preview": true }` to validate without writing.
+- The same POST without `preview: true` to insert new archive records using a
+  parameterized, insert-only BigQuery `MERGE` batches.
+- `GET /api/booking?view=wix-contacts&search=<text>&offset=0` to read contacts
+  (50 per page). Import requests require the same-origin owner session.
+
+Local regression tests: `node --test tests/wix-contacts.test.js`.
+
+## Historical Wix booking import (existing table only)
+
+Open **Manage → Wix bookings import** in the owner dashboard, select the Wix
+**bookings** CSV, map each Wix service/duration to a current catalogue service,
+select **Preview mapped prices**, and confirm historical payment and the
+reviewed prices. Then select **Import paid bookings**.
+These exports are assigned to **Mississauga Central**, as requested. The
+destination is the **existing** `BIGQUERY_BOOKINGS_TABLE` (default `bookings`)
+in the configured dataset. The import verifies that this table exists and
+matches the existing booking column types. It does **not** create a table or
+dataset or alter schemas. Existing payments/receipts are protected. Missing or incompatible
+tables cause an explicit error before any bookings are written.
+
+| Wix booking export | Existing booking columns |
+| --- | --- |
+| Booking contact name / email / phone | `customer_name`, `email`, `phone` |
+| Session date / Start time | `date` (`YYYY-MM-DD`), `time` (`hh:mm AM/PM`) |
+| Duration (`1h, 30m`, etc.) | `duration_minutes` (`INT64`) |
+| Service name / Staff name | Owner-selected catalogue `service_name` for receipt tax classification; original `therapist_name`; original Wix names retained in notes |
+| Registration date | `created_at` (date only; no invented timestamp) |
+| Booking / Attendance status | `status`; original statuses in `status_notes` |
+| Payment status | Owner-confirmed paid `payment_option`; original Wix status in notes |
+| Reviewed current catalogue price | Tax-inclusive `total` and equal `paid_amount` (fully paid) |
+| Client address, spots, service type, all form questions/answers, and original columns | JSON in `intake_notes` |
+| Branch | `branch_name` = `Mississauga Central`; `branch_address` blank (client address is not the clinic's address) |
+
+Sessions are sorted by date and 24-hour start time. Generated IDs use
+`WIX-YYYYMMDD-HHMM-<appointment hash>`, not row numbers, so reordering or splitting
+the CSV does not change them. Identity combines branch, session date/time,
+email (falling back to phone or name), service, staff and duration. Different
+staff at the same time remain separate bookings. Identical appointment
+identities keep the first CSV row. Changing identity fields creates a
+different ID. Unchanged identities skip records with existing amounts or
+receipt data. Re-importing the same CSV can fill previous zero-amount Wix records
+only when total/paid amounts are both zero and receipt number, issue date and
+email status are empty. Updates are limited to service, payment option,
+amounts and pricing notes; other booking fields remain unchanged.
+Without an original Wix booking ID, duplicate
+identical appointments cannot be distinguished and imported appointments
+cannot automatically be matched to existing non-Wix booking IDs.
+
+The export's session times are clinic-local (`GOOGLE_CALENDAR_TIME_ZONE`,
+default `America/Toronto`), not UTC. Only session dates through the clinic's
+current date are accepted; future dates are reported/skipped. Confirmed rows
+with unspecified attendance stay **Confirmed**, not assumed attended because
+their date is in the past. Cancelled rows become **Cancelled**, explicit
+attended rows **Completed**, and explicit no-shows **No Show**. Unsupported
+booking statuses and invalid session dates/times/durations are reported and
+skipped. Missing names are allowed when a valid email or phone identifies the
+client. Invalid email/phone/registration fields are blanked with warnings,
+while original values remain in notes. Rows without any name, valid email or
+valid phone are skipped.
+
+**Payment amounts are unavailable in this export.** The owner has chosen to use
+reviewed **current catalogue prices**, not verified historical charges. An
+initial preview has zero placeholders until all price mappings are reviewed.
+Each group must map to an active service of the same duration and a positive
+price. Catalogue subtotal plus rounded tax becomes both `total` and
+`paid_amount`; a “spots filled” value does not multiply the booking price.
+There is no automatic ambiguous service matching. The backend verifies the
+reviewed service name, price and tax rate against the current catalogue and
+rejects stale mappings rather than silently charging different amounts.
+Pricing provenance and original Wix data are kept in existing note columns.
+
+Services must use receipt-supported taxes (13% for regular massage; 0% for
+services named RMT, registered massage therapy or acupuncture). A mismatched
+catalogue tax classification is rejected. The mapped catalogue service name
+ensures the existing receipt flow applies the matching tax calculation.
+These prices also affect reports: they are owner-approved reconstructed values,
+not original Wix revenue. Prices that differ from actual charges should not
+be used for receipts without correction.
+
+After import, open **Events & bookings**, choose a booking, and select
+**Issue & email receipt**. A valid email and positive fully paid total are
+still required; there is no bypass of those checks. Receipts are issued on
+demand, not emailed in bulk during import. No Calendar events, patient consent
+records, or memberships are created, and no customer is charged. Existing
+receipt fields remain empty until issuance, and discounts stay zero.
+Imported Wix bookings remain excluded from retroactive loyalty awards and
+current prepaid-hour consumption.
+
+Limits are the same as contact imports: 3 MiB CSV / 10,000 rows per file,
+up to 20 warnings and 5 chronological preview rows, with bounded BigQuery
+`MERGE` batches (insert new IDs; update only untouched zero-amount Wix IDs).
+Failures after a completed batch may leave partial
+data; check **Events & bookings** and retry the same CSV safely. Original
+export details live only in existing note columns, not a new archive table.
+
+API: `POST /api/booking?view=wix-bookings-import` with
+`{ "csv": "<CSV text>", "preview": true }` validates without writing.
+For a priced preview, add `priceMappings`, an array of
+`{ key, serviceId, serviceName, price, taxRate }`, using `priceGroups[].key`
+from the initial preview. To import, omit `preview: true` and supply all
+`priceMappings` plus `confirmPaid: true`. Both require owner authentication;
+POSTs require the same origin. No additional environment variables are required.
+
+Regression tests:
+`node --test tests/wix-contacts.test.js tests/wix-bookings.test.js tests/wix-paid-receipts.test.js`.
 
 ## Loyalty program tables in BigQuery
 

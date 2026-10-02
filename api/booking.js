@@ -1,15 +1,23 @@
 import { google } from 'googleapis';
 import { BigQuery } from '@google-cloud/bigquery';
 import crypto from 'node:crypto';
+import { createWixContactStore, prepareWixContacts } from '../lib/wix-contacts.js';
+import { applyWixCataloguePrices, importWixBookings, prepareWixBookings } from '../lib/wix-bookings.js';
+import { BOOKING_TABLE_FIELDS } from '../lib/booking-schema.js';
 
 // Body parsing is done manually (see readRawBody/parseRequestBody below) so the Square
 // webhook handler can verify its HMAC signature against the exact raw request bytes;
 // every other view still gets the same parsed `req.body` object it always has.
 export const config = { api: { bodyParser: false }, maxDuration: 60 };
 
-async function readRawBody(req) {
+async function readRawBody(req, maxBytes = Infinity) {
   const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
+  let bytes = 0;
+  for await (const chunk of req) {
+    bytes += chunk.length;
+    if (bytes > maxBytes) throw Object.assign(new Error('Import request is too large. Split the CSV into smaller files.'), { statusCode: 413 });
+    chunks.push(chunk);
+  }
   return Buffer.concat(chunks).toString('utf8');
 }
 
@@ -167,36 +175,6 @@ const BIGQUERY_PROJECT_ID = process.env.BIGQUERY_PROJECT_ID || process.env.GOOGL
 const BIGQUERY_DATASET_ID = process.env.BIGQUERY_DATASET || 'booking_system';
 const BIGQUERY_BOOKINGS_TABLE = process.env.BIGQUERY_BOOKINGS_TABLE || 'bookings';
 
-// Column order matches the historical Sheet1 layout (A-Z) exactly, so every
-// existing `row[N]` access throughout this file keeps working unchanged.
-const BOOKING_TABLE_FIELDS = [
-  { name: 'booking_id', prop: 'id', type: 'STRING', mode: 'REQUIRED' },
-  { name: 'customer_name', prop: 'customerName', type: 'STRING' },
-  { name: 'phone', prop: 'phone', type: 'STRING' },
-  { name: 'email', prop: 'email', type: 'STRING' },
-  { name: 'branch_name', prop: 'branchName', type: 'STRING' },
-  { name: 'service_name', prop: 'serviceName', type: 'STRING' },
-  { name: 'therapist_name', prop: 'therapistName', type: 'STRING' },
-  { name: 'date', prop: 'date', type: 'STRING' },
-  { name: 'time', prop: 'time', type: 'STRING' },
-  { name: 'payment_option', prop: 'paymentOption', type: 'STRING' },
-  { name: 'paid_amount', prop: 'paidAmount', type: 'FLOAT64' },
-  { name: 'total', prop: 'total', type: 'FLOAT64' },
-  { name: 'duration_minutes', prop: 'durationMinutes', type: 'INT64' },
-  { name: 'branch_address', prop: 'branchAddress', type: 'STRING' },
-  { name: 'intake_notes', prop: 'intakeNotes', type: 'STRING' },
-  { name: 'calendar_id', prop: 'calendarId', type: 'STRING' },
-  { name: 'calendar_event_id', prop: 'calendarEventId', type: 'STRING' },
-  { name: 'created_at', prop: 'createdAt', type: 'STRING' },
-  { name: 'receipt_number', prop: 'receiptNumber', type: 'STRING' },
-  { name: 'receipt_issued_at', prop: 'receiptIssuedAt', type: 'STRING' },
-  { name: 'receipt_email_status', prop: 'receiptEmailStatus', type: 'STRING' },
-  { name: 'membership_type', prop: 'membershipType', type: 'STRING' },
-  { name: 'discount_percent', prop: 'discountPercent', type: 'FLOAT64' },
-  { name: 'membership_discount_amount', prop: 'membershipDiscountAmount', type: 'FLOAT64' },
-  { name: 'status', prop: 'status', type: 'STRING' },
-  { name: 'status_notes', prop: 'statusNotes', type: 'STRING' },
-];
 // Sentinel first row so every existing `rows[0]?.[0] === 'Booking ID' ? rows.slice(1) : rows`
 // header-detection check throughout this file keeps working unchanged.
 const BOOKING_ROW_SENTINEL_HEADER = ['Booking ID'];
@@ -3954,7 +3932,12 @@ export default async function handler(req, res) {
   let rawRequestBody = '';
   req.body = {};
   if (req.method === 'POST') {
-    rawRequestBody = await readRawBody(req);
+    try {
+      rawRequestBody = await readRawBody(req, ['wix-contacts-import', 'wix-bookings-import'].includes(req.query?.view) ? 4 * 1024 * 1024 : Infinity);
+    } catch (error) {
+      if (error.statusCode !== 413) throw error;
+      return res.status(413).json({ message: error.message });
+    }
     const contentType = String(req.headers['content-type'] || '');
     if (contentType.includes('application/json') && rawRequestBody) {
       try {
@@ -4009,17 +3992,79 @@ export default async function handler(req, res) {
     }
 
     const view = String(req.query?.view || '');
-    const validGetViews = ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'business-name', 'square-config', 'google-reviews', 'branches', 'services', 'therapists', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal', 'company-join', 'find-booking', 'availability', 'unavailability', 'campaign-log', 'campaign-audience-options', 'review-request-audience', 'therapist-accounts'];
-    if (req.method === 'GET' && !validGetViews.includes(view)) {
+    const validGetViews = ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'business-name', 'square-config', 'google-reviews', 'branches', 'services', 'therapists', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal', 'company-join', 'find-booking', 'availability', 'unavailability', 'campaign-log', 'campaign-audience-options', 'review-request-audience', 'therapist-accounts', 'wix-contacts'];
+    if (req.method === 'GET' && !validGetViews.includes(view) && !['wix-contacts-import', 'wix-bookings-import'].includes(view)) {
       return res.status(404).json({ message: 'Unknown booking view' });
     }
     const ownerOnlyRequest =
+      ['wix-contacts', 'wix-contacts-import', 'wix-bookings-import'].includes(view) ||
       (req.method === 'GET' && ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'google-ads-report', 'loyalty-dashboard', 'google-reviews', 'unavailability', 'campaign-log', 'campaign-audience-options', 'review-request-audience', 'therapist-accounts'].includes(view)) ||
       ['business-profile', 'mark-paid', 'therapist-account-status', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-clear-ledger', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-link', 'unavailability-delete', 'review-request-send', 'reassign-therapist'].includes(view) ||
       (req.method === 'POST' && ['branches', 'services', 'therapists', 'unavailability'].includes(view));
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
     if (ownerOnlyRequest && !getOwnerSession(req)) {
       return res.status(401).json({ message: 'Owner sign-in required' });
+    }
+    if (req.method === 'POST' && ['wix-contacts-import', 'wix-bookings-import'].includes(view) && !isSameOriginRequest(req)) {
+      return res.status(403).json({ message: 'Wix import origin is not allowed' });
+    }
+    if (view === 'wix-bookings-import') {
+      if (req.method !== 'POST') return res.status(405).json({ message: 'Method Not Allowed' });
+      let prepared = prepareWixBookings(req.body?.csv, { timeZone: CALENDAR_TIME_ZONE });
+      if (req.body?.preview !== true && req.body?.confirmPaid !== true) {
+        return res.status(400).json({ message: 'Confirm historical payment and review current catalogue prices before importing.' });
+      }
+      if (req.body?.priceMappings !== undefined || req.body?.preview !== true) {
+        const pricingAuth = new google.auth.GoogleAuth({
+          credentials: { client_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL, private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n') },
+          scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+        });
+        const catalogue = await getServices(google.sheets({ version: 'v4', auth: pricingAuth }));
+        prepared = applyWixCataloguePrices(prepared, catalogue, req.body?.priceMappings, req.body?.preview !== true);
+      } else {
+        prepared = applyWixCataloguePrices(prepared, [], []);
+      }
+      if (req.body?.preview === true) {
+        return res.status(200).json({ ...prepared.summary, sample: prepared.bookings.slice(0, 5) });
+      }
+      if (!prepared.bookings.length) {
+        return res.status(400).json({ message: 'No valid historical bookings to import. Correct the skipped rows and preview again.', ...prepared.summary });
+      }
+      const counts = await importWixBookings(getBigQueryClient(), prepared.bookings, {
+        projectId: BIGQUERY_PROJECT_ID, datasetId: BIGQUERY_DATASET_ID,
+        tableId: BIGQUERY_BOOKINGS_TABLE, fields: BOOKING_TABLE_FIELDS, reviewedPaid: true,
+      });
+      return res.status(200).json({ ...prepared.summary, ...counts, existing: prepared.bookings.length - counts.imported - counts.updated });
+    }
+    if (view === 'wix-contacts' || view === 'wix-contacts-import') {
+      if ((view === 'wix-contacts' && req.method !== 'GET') || (view === 'wix-contacts-import' && req.method !== 'POST')) {
+        return res.status(405).json({ message: 'Method Not Allowed' });
+      }
+      const prepared = view === 'wix-contacts-import' ? prepareWixContacts(req.body?.csv) : null;
+      if (prepared && req.body?.preview === true) {
+        return res.status(200).json({ ...prepared.summary, sample: prepared.contacts.slice(0, 5) });
+      }
+      if (prepared && !prepared.contacts.length) {
+        return res.status(400).json({ message: 'No valid contacts to import. Correct the skipped rows and preview again.', ...prepared.summary });
+      }
+      const store = createWixContactStore(getBigQueryClient(), {
+        projectId: BIGQUERY_PROJECT_ID,
+        datasetId: BIGQUERY_DATASET_ID,
+        tableId: process.env.BIGQUERY_WIX_CONTACTS_TABLE || 'wix_contacts',
+        forbiddenTables: [
+          BIGQUERY_BOOKINGS_TABLE, BIGQUERY_PATIENT_HISTORY_TABLE, BIGQUERY_PATIENT_HISTORY_MIGRATIONS_TABLE,
+          BIGQUERY_SQUARE_PAYMENTS_TABLE, BIGQUERY_CAMPAIGN_LOG_TABLE, BIGQUERY_CAMPAIGN_RECIPIENTS_TABLE,
+          ...Object.values(LOYALTY_TABLE_NAMES),
+        ],
+      });
+      if (!prepared) {
+        return res.status(200).json(await store.list({
+          search: req.query?.search || '',
+          offset: Number(req.query?.offset || 0),
+        }));
+      }
+      const imported = await store.importContacts(prepared.contacts);
+      return res.status(200).json({ ...prepared.summary, imported, existing: prepared.contacts.length - imported });
     }
     if (['business-profile', 'branches', 'services', 'therapists', 'therapist-account-status', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-clear-ledger', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-signup', 'company-portal-bulk-signup', 'company-join-signup', 'company-portal-link', 'square-create-checkout', 'cancel-booking', 'reschedule-booking', 'unavailability', 'unavailability-delete', 'review-request-send', 'reassign-therapist'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
       return res.status(403).json({ message: 'Profile update origin is not allowed' });
@@ -4488,6 +4533,7 @@ export default async function handler(req, res) {
         });
       });
       const eligibleBookings = bookingDataRows.filter((row) => {
+        if (String(row[0] || '').startsWith('WIX-')) return false;
         const email = normalizeLoyaltyEmail(row[3]);
         const total = Number(row[11]) || 0;
         const paidAmount = Number(row[10]) || 0;
@@ -4979,6 +5025,9 @@ export default async function handler(req, res) {
 
     if (req.method === 'POST' && view === 'loyalty-award') {
       const bookingId = String(req.body?.bookingId || '').trim();
+      if (bookingId.startsWith('WIX-')) {
+        return res.status(409).json({ message: 'Historical Wix bookings cannot consume current loyalty benefits or earn retroactive points.' });
+      }
       if (!bookingId || bookingId.length > 100) {
         return res.status(400).json({ message: 'A valid booking ID is required.' });
       }

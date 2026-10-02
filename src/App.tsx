@@ -11,6 +11,8 @@ import {
   Megaphone, ReceiptText, Download, Eye, MousePointerClick, Upload, Crown, Star, CalendarX, CalendarOff, Ban, Copy, UserCheck
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import WixContacts from './WixContacts';
+import WixBookings from './WixBookings';
 
 const MOCK_BRANCHES = [
   { id: 1, name: "Mississauga Central", address: "4310 Sherwoodtowne Blvd", city: "Mississauga, ON", phone: "+1 437 898 7424" },
@@ -5553,6 +5555,8 @@ function AdminPortal({
     { id: 'branches', label: 'Branches', icon: MapPin, section: 'Manage' },
     { id: 'availability', label: 'Availability', icon: CalendarX, section: 'Manage' },
     { id: 'patient-history', label: 'Patients', icon: UserRound, section: 'Manage' },
+    { id: 'wix-contacts', label: 'Wix contacts import', icon: Upload, section: 'Manage' },
+    { id: 'wix-bookings', label: 'Wix bookings import', icon: Database, section: 'Manage' },
     { id: 'therapist-approvals', label: 'Therapist approvals', icon: UserCheck, section: 'Manage', badge: pendingTherapistAccounts.length },
     { id: 'business-profile', label: 'Business profile', icon: Building, section: 'Manage' },
     { id: 'loyalty', label: 'Loyalty program', icon: Award, section: 'Grow' },
@@ -5574,6 +5578,8 @@ function AdminPortal({
     branches: 'Branches',
     availability: 'Availability',
     'patient-history': 'Patient Summary',
+    'wix-contacts': 'Historical Wix contacts',
+    'wix-bookings': 'Historical Wix bookings',
     'therapist-approvals': 'Therapist approvals',
     'business-profile': 'Business profile',
   }[activeTab] || 'Owner dashboard';
@@ -5716,6 +5722,9 @@ function AdminPortal({
           <div className="mt-1 text-[11px] text-slate-400">Estimated Ontario HST</div>
         </div>
       </div>
+
+      {activeTab === 'wix-contacts' && <WixContacts />}
+      {activeTab === 'wix-bookings' && <WixBookings onViewBookings={() => setActiveTab('schedule')} />}
 
       {/* TAB CONTENT: SCHEDULE */}
       {activeTab === 'schedule' && (
