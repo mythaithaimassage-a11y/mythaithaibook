@@ -22,6 +22,7 @@ type PriceGroup = { key: string; serviceName: string; durationMinutes: number; c
 type PriceMapping = { key: string; serviceId: number | string; serviceName: string; price: number; taxRate: number };
 type Therapist = { id: number | string; name: string; active: boolean };
 type TherapistMapping = { sourceName: string; therapistId: number | string; therapistName: string };
+type CalendarSync = { synced: number; pending: number | null; errors: { bookingId: string; message: string }[] };
 type Summary = {
   totalRows: number;
   validBookings: number;
@@ -44,6 +45,7 @@ type Summary = {
   approvedTotal: number;
   therapistGroups: { sourceName: string; count: number }[];
   mappedTherapistBookings: number;
+  calendarSync?: CalendarSync;
 };
 
 export default function WixBookings({ onViewBookings }: { onViewBookings: () => void }) {
@@ -61,6 +63,42 @@ export default function WixBookings({ onViewBookings }: { onViewBookings: () => 
   const [therapists, setTherapists] = useState<Therapist[]>([]);
   const [therapistError, setTherapistError] = useState('');
   const [therapistMappings, setTherapistMappings] = useState<TherapistMapping[]>([]);
+  const [calendarMessage, setCalendarMessage] = useState('');
+
+  const requestCalendarSync = async (): Promise<CalendarSync> => {
+    const response = await fetch('/api/booking?view=wix-calendar-sync', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+    });
+    return readWixResponse<CalendarSync>(response);
+  };
+
+  const continueCalendarSync = async (initial?: CalendarSync) => {
+    let current: CalendarSync = initial ?? await requestCalendarSync();
+    let synced = 0;
+    do {
+      synced += current.synced;
+      setCalendarMessage(`Calendar: ${synced} bookings synced in this run; ${current.pending ?? 'unknown'} remaining.`);
+      if (current.errors.length) {
+        throw new Error(`Bookings are saved, but Calendar sync stopped: ${current.errors.map((issue) => `${issue.bookingId}: ${issue.message}`).join('; ')} Use "Sync existing Wix bookings to Calendar" to retry.`);
+      }
+      if (current.pending === 0) break;
+      if (current.synced === 0) throw new Error('Calendar sync made no progress. Refresh and retry the backfill.');
+      current = await requestCalendarSync();
+    } while (true);
+  };
+
+  const backfillCalendar = async () => {
+    setBusy(true);
+    setError('');
+    setCalendarMessage('Syncing existing Wix bookings to Calendar...');
+    try {
+      await continueCalendarSync();
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Unable to sync Calendar. Retry to resume.');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   useEffect(() => {
     const controller = new AbortController();
@@ -116,9 +154,11 @@ export default function WixBookings({ onViewBookings }: { onViewBookings: () => 
     setBusy(true);
     setError('');
     try {
-      setResult(await request(csv, false, mappings, therapistMappings));
+      const imported = await request(csv, false, mappings, therapistMappings);
+      setResult(imported);
       setPreview(null);
       setCsv('');
+      await continueCalendarSync(imported.calendarSync);
     } catch (failure) {
       setError(`${failure instanceof Error ? failure.message : 'Unable to import Wix bookings.'} If the request timed out, check Events & bookings and retry the same CSV; existing IDs are skipped.`);
     } finally {
@@ -147,8 +187,10 @@ export default function WixBookings({ onViewBookings }: { onViewBookings: () => 
       <p className="text-sm text-slate-600">Destination: the existing BigQuery bookings table, for <strong>Mississauga Central</strong>. No tables or schema changes are created. Bookings receive stable Wix-prefixed IDs. Re-imports can fill zero-amount Wix records without receipts; existing recorded payments and receipts are preserved.</p>
       <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
         <p>The CSV has no payment amounts. Map each Wix service to a current catalogue service, review the tax-inclusive prices, and confirm that these amounts may be used for the paid records and receipts. These are owner-approved current prices, not historical amounts verified by Wix. Original Wix details remain in notes. Each CSV row represents one booking; prices are not multiplied by spots filled. Four-session package visits use one-quarter of the package subtotal; register and link a verified package in Package tracking to deduct sessions.</p>
-        <p>Session times are interpreted in the clinic timezone. Future session dates are skipped. Staff names and original Wix fields are preserved; mapped service labels are used for receipts. The import does not create Calendar events, send emails, issue receipts, charge customers, or award loyalty points.</p>
+        <p>Session times are interpreted in the clinic timezone. Future session dates are skipped. Staff names and original Wix fields are preserved; mapped service labels are used for receipts. Imports automatically sync to the primary Google Calendar in batches. Cancelled/no-show bookings are not added. No invitation emails, reminders, receipts, charges, or loyalty points are generated. Keep this page open until syncing finishes; retry/backfill resumes unsynced bookings without duplicates.</p>
       </div>
+      <button type="button" disabled={busy} onClick={() => void backfillCalendar()} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold disabled:opacity-50">Sync existing Wix bookings to Calendar</button>
+      {calendarMessage && <p role="status" className="text-sm text-slate-700">{calendarMessage}</p>}
       <label htmlFor="wix-bookings-file" className="block text-sm font-semibold text-slate-800"><Upload className="mr-2 inline h-4 w-4" />Preview Wix bookings CSV (up to 3 MiB / 10,000 records)</label>
       <input id="wix-bookings-file" type="file" accept=".csv,text/csv" disabled={busy} className="block w-full text-sm" onChange={(event) => {
         const file = event.target.files?.[0];

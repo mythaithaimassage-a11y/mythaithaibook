@@ -6,6 +6,7 @@ import { applyWixCataloguePrices, applyWixTherapistMappings, importWixBookings, 
 import { BOOKING_TABLE_FIELDS } from '../lib/booking-schema.js';
 import { createPackageStore, historicalPackageVisit, readPackageUsage, packageReceiptDetails } from '../lib/packages.js';
 import { createBookingHistoryStore } from '../lib/booking-history.js';
+import { syncWixCalendarBatch } from '../lib/wix-calendar.js';
 
 // Body parsing is done manually (see readRawBody/parseRequestBody below) so the Square
 // webhook handler can verify its HMAC signature against the exact raw request bytes;
@@ -4015,12 +4016,13 @@ export default async function handler(req, res) {
     const view = String(req.query?.view || '');
     const packageViews = ['packages', 'package-register', 'package-redeem'];
     const historyViews = ['booking-history-preview', 'clear-booking-history'];
+    const wixCalendarViews = ['wix-calendar-sync'];
     const validGetViews = ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'business-name', 'square-config', 'google-reviews', 'branches', 'services', 'therapists', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal', 'company-join', 'find-booking', 'availability', 'unavailability', 'campaign-log', 'campaign-audience-options', 'review-request-audience', 'therapist-accounts', 'wix-contacts'];
-    if (req.method === 'GET' && !validGetViews.includes(view) && !['wix-contacts-import', 'wix-bookings-import', ...packageViews, ...historyViews].includes(view)) {
+    if (req.method === 'GET' && !validGetViews.includes(view) && !['wix-contacts-import', 'wix-bookings-import', ...packageViews, ...historyViews, ...wixCalendarViews].includes(view)) {
       return res.status(404).json({ message: 'Unknown booking view' });
     }
     const ownerOnlyRequest =
-      ['wix-contacts', 'wix-contacts-import', 'wix-bookings-import', ...packageViews, ...historyViews].includes(view) ||
+      ['wix-contacts', 'wix-contacts-import', 'wix-bookings-import', ...packageViews, ...historyViews, ...wixCalendarViews].includes(view) ||
       (req.method === 'GET' && ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'google-ads-report', 'loyalty-dashboard', 'google-reviews', 'unavailability', 'campaign-log', 'campaign-audience-options', 'review-request-audience', 'therapist-accounts'].includes(view)) ||
       ['business-profile', 'mark-paid', 'therapist-account-status', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-clear-ledger', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-link', 'unavailability-delete', 'review-request-send', 'reassign-therapist'].includes(view) ||
       (req.method === 'POST' && ['branches', 'services', 'therapists', 'unavailability'].includes(view));
@@ -4037,8 +4039,22 @@ export default async function handler(req, res) {
       });
       return res.status(200).json(view === 'booking-history-preview' ? await store.preview() : await store.clear(req.body));
     }
-    if (req.method === 'POST' && ['wix-contacts-import', 'wix-bookings-import', ...packageViews].includes(view) && !isSameOriginRequest(req)) {
+    if (req.method === 'POST' && ['wix-contacts-import', 'wix-bookings-import', ...packageViews, ...wixCalendarViews].includes(view) && !isSameOriginRequest(req)) {
       return res.status(403).json({ message: 'Wix import origin is not allowed' });
+    }
+    const syncWixCalendar = () => {
+      const calendarAuth = new google.auth.GoogleAuth({
+        credentials: { client_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL, private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n') },
+        scopes: ['https://www.googleapis.com/auth/calendar'],
+      });
+      return syncWixCalendarBatch(getBigQueryClient(), google.calendar({ version: 'v3', auth: calendarAuth }), {
+        projectId: BIGQUERY_PROJECT_ID, datasetId: BIGQUERY_DATASET_ID, tableId: BIGQUERY_BOOKINGS_TABLE,
+        calendarId: PRIMARY_CALENDAR_ID, timeZone: CALENDAR_TIME_ZONE,
+      });
+    };
+    if (wixCalendarViews.includes(view)) {
+      if (req.method !== 'POST') return res.status(405).json({ message: 'Method Not Allowed' });
+      return res.status(200).json(await syncWixCalendar());
     }
     if (packageViews.includes(view)) {
       if ((view === 'packages' && req.method !== 'GET') || (view !== 'packages' && req.method !== 'POST')) return res.status(405).json({ message: 'Method Not Allowed' });
@@ -4091,7 +4107,14 @@ export default async function handler(req, res) {
         projectId: BIGQUERY_PROJECT_ID, datasetId: BIGQUERY_DATASET_ID,
         tableId: BIGQUERY_BOOKINGS_TABLE, fields: BOOKING_TABLE_FIELDS, reviewedPaid: true,
       });
-      return res.status(200).json({ ...prepared.summary, ...counts, existing: prepared.bookings.length - counts.imported - counts.updated });
+      let calendarSync;
+      try {
+        calendarSync = await syncWixCalendar();
+      } catch (error) {
+        console.error('Wix import saved, but Calendar sync failed:', error);
+        calendarSync = { synced: 0, pending: null, errors: [{ bookingId: '', message: error.message || 'Calendar sync failed.' }] };
+      }
+      return res.status(200).json({ ...prepared.summary, ...counts, existing: prepared.bookings.length - counts.imported - counts.updated, calendarSync });
     }
     if (view === 'wix-contacts' || view === 'wix-contacts-import') {
       if ((view === 'wix-contacts' && req.method !== 'GET') || (view === 'wix-contacts-import' && req.method !== 'POST')) {
@@ -6371,7 +6394,11 @@ export default async function handler(req, res) {
               const start = event.start?.dateTime || event.start?.date || '';
               const end = event.end?.dateTime || event.end?.date || '';
               const localStart = start ? getLocalDateTime(start) : { date: '', time: '' };
-              const bookingRow = bookingByEventId.get(event.id);
+              const wixBookingId = event.extendedProperties?.private?.wixBookingId;
+              const bookingRow = bookingByEventId.get(event.id) ||
+                (wixBookingId ? dataRows.find((row) => row[0] === wixBookingId) : undefined);
+              // Do not turn retained Wix events back into bookings after history is cleared.
+              if (wixBookingId && !bookingRow) continue;
               const parsedDescription = parseBookingFieldsFromDescription(event.description || '');
               const eventTherapist = bookingRow?.[6] || parsedDescription.therapistName || getTherapistFromDescription(event.description);
               if (

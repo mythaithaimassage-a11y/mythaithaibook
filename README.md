@@ -248,8 +248,8 @@ Booking IDs and duplicate detection still use the original Wix staff name, so
 mapping two aliases to one person cannot merge distinct exported bookings.
 Mappings apply to newly inserted records only; re-import does not reassign
 existing bookings (including zero-amount records). Use existing booking
-reassignment controls for records already imported. Mapping does not create
-staff accounts, notifications or Calendar events.
+reassignment controls for records already imported. Mapping itself does not
+create staff accounts or notifications; imported events use the stored names.
 
 Sessions are sorted by date and 24-hour start time. Generated IDs use
 `WIX-YYYYMMDD-HHMM-<appointment hash>`, not row numbers, so reordering or splitting
@@ -312,11 +312,31 @@ be used for receipts without correction.
 After import, open **Events & bookings**, choose a booking, and select
 **Issue & email receipt**. A valid email and positive fully paid total are
 still required; there is no bypass of those checks. Receipts are issued on
-demand, not emailed in bulk during import. No Calendar events, patient consent
-records, or memberships are created, and no customer is charged. Existing
+demand, not emailed in bulk during import. No patient consent records or
+memberships are created, and no customer is charged. Existing
 receipt fields remain empty until issuance, and discounts stay zero.
 Imported Wix bookings remain excluded from retroactive loyalty awards and
 current prepaid-hour consumption.
+
+Wix imports now automatically sync eligible stored Wix bookings to the same
+primary Google Calendar as live bookings (`GOOGLE_PRIMARY_CALENDAR_ID`). The
+service account needs Editor access to that calendar and the Calendar API must
+be enabled. Original or owner-mapped therapist names appear in event descriptions.
+Cancelled/no-show bookings are not added. No attendees, email invitations, or
+reminders are created. Times use `GOOGLE_CALENDAR_TIME_ZONE`.
+
+The import starts a batch of up to ten pending bookings, and the owner UI
+continues batches via owner-only, same-origin POST `view=wix-calendar-sync`.
+Keep the page open until complete. **Sync existing Wix bookings to Calendar**
+backfills older imports or resumes interrupted/failed syncs without a new CSV.
+Progress and errors are explicit; an import can save database rows even when
+Calendar permissions or quotas prevent syncing. Fix the reported error and retry.
+Stable Calendar event IDs and ownership checks recover an event created before
+its database link was saved without duplicating it. Existing linked events are
+skipped; the existing booking schema is unchanged. This backfill does not reassign
+therapists on existing rows or repair events deleted manually from Calendar.
+Retained Wix Calendar events are not automatically recreated as new bookings
+after database history is cleared. They remain visible in Google Calendar itself.
 
 Limits are the same as contact imports: 3 MiB CSV / 10,000 rows per file,
 up to 20 warnings and 5 chronological preview rows, with bounded BigQuery

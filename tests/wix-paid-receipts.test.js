@@ -48,6 +48,10 @@ test('reviewed Wix import produces paid records and actual receipt endpoint issu
   t.mock.method(google, 'gmail', () => ({
     users: { messages: { send: async (options) => { emails.push(options); return { data: { id: 'mock-email-id' } }; } } },
   }));
+  const calendarEvents = [];
+  t.mock.method(google, 'calendar', () => ({
+    events: { insert: async (options) => { calendarEvents.push(options); return { data: { id: options.requestBody.id } }; } },
+  }));
   const loyaltyColumns = [
     'settings_json', 'updated_at', 'email', 'name', 'phone', 'enrolled_at', 'membership_type',
     'organization', 'paid_through', 'company_id', 'company_contact_email', 'is_primary_contact',
@@ -82,6 +86,16 @@ test('reviewed Wix import produces paid records and actual receipt endpoint issu
     }];
   });
   t.mock.method(BigQuery.prototype, 'query', async ({ query, params }) => {
+    if (query.includes("COALESCE(calendar_event_id, '') = ''")) {
+      const pending = [...records.values()].filter((record) => !record.calendar_event_id && !['Cancelled', 'No Show'].includes(record.status));
+      if (query.startsWith('SELECT COUNT')) return [[{ pending: pending.length }]];
+      if (query.startsWith('SELECT *')) return [pending.slice(0, 10)];
+      if (query.startsWith('BEGIN TRANSACTION')) {
+        const record = records.get(params.bookingId);
+        Object.assign(record, { calendar_id: params.calendarId, calendar_event_id: params.eventId });
+        return [[]];
+      }
+    }
     if (query.startsWith('MERGE `test-project.booking_system.session_packages`')) {
       if (!packages.has(params.package_id)) packages.set(params.package_id, { ...params });
       return [[]];
@@ -160,8 +174,12 @@ test('reviewed Wix import produces paid records and actual receipt endpoint issu
   const imported = await request('wix-bookings-import', { csv, priceMappings, therapistMappings, confirmPaid: true });
   assert.equal(imported.code, 200);
   assert.equal(imported.data.imported, 2);
+  assert.deepEqual(imported.data.calendarSync, { synced: 2, pending: 0, errors: [] });
+  assert.equal(calendarEvents.length, 2);
+  assert.ok(calendarEvents.every((event) => event.sendUpdates === 'none' && /Mapped Therapist/.test(event.requestBody.description)));
   assert.equal(emails.length, 0);
   for (const record of records.values()) {
+    assert.match(record.calendar_event_id, /^a11[a-f0-9]{64}$/);
     assert.equal(record.therapist_name, 'Mapped Therapist');
     assert.equal(JSON.parse(record.intake_notes).sourceFields['Staff name'], 'Test Staff');
     assert.equal(record.paid_amount, record.total);
