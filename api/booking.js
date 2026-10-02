@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import { createWixContactStore, prepareWixContacts } from '../lib/wix-contacts.js';
 import { applyWixCataloguePrices, importWixBookings, prepareWixBookings } from '../lib/wix-bookings.js';
 import { BOOKING_TABLE_FIELDS } from '../lib/booking-schema.js';
+import { createPackageStore, historicalPackageVisit, readPackageUsage, packageReceiptDetails } from '../lib/packages.js';
 
 // Body parsing is done manually (see readRawBody/parseRequestBody below) so the Square
 // webhook handler can verify its HMAC signature against the exact raw request bytes;
@@ -287,7 +288,7 @@ async function bqAppendBookingRows(bigquery, rowArrays) {
 
 // fields uses the same camelCase property names as the row-array mapping
 // (e.g. { paidAmount: 50 }, { status: 'Cancelled', statusNotes: '...' }).
-async function bqUpdateBookingFields(bigquery, bookingId, fields) {
+async function bqUpdateBookingFields(bigquery, bookingId, fields, receiptSnapshot = null) {
   await ensureBookingsTable(bigquery);
   const entries = Object.entries(fields).map(([prop, value]) => {
     const field = BOOKING_TABLE_FIELDS.find((candidate) => candidate.prop === prop);
@@ -302,6 +303,21 @@ async function bqUpdateBookingFields(bigquery, bookingId, fields) {
     else if (field.type === 'INT64') params[`set_${field.name}`] = value === '' || value === null || value === undefined ? 0 : Math.trunc(Number(value) || 0);
     else params[`set_${field.name}`] = value === null || value === undefined ? '' : String(value);
   });
+  if (receiptSnapshot) {
+    Object.assign(params, {
+      expected_notes: String(receiptSnapshot.notes || ''),
+      expected_total: receiptSnapshot.total, expected_paid: receiptSnapshot.paid,
+      expected_receipt: String(receiptSnapshot.receipt || ''),
+    });
+    await bigquery.query({
+      query: `BEGIN TRANSACTION;
+        ASSERT (SELECT COUNT(*) FROM ${bookingsTableRef()} WHERE booking_id = @where_booking_id AND COALESCE(intake_notes, '') = @expected_notes AND total = @expected_total AND paid_amount = @expected_paid AND COALESCE(receipt_number, '') = @expected_receipt) = 1 AS 'Booking changed during receipt issuance; refresh and retry';
+        UPDATE ${bookingsTableRef()} SET ${setClauses.join(', ')} WHERE booking_id = @where_booking_id;
+        COMMIT TRANSACTION;`,
+      params,
+    });
+    return;
+  }
   await bigquery.query({
     query: `UPDATE ${bookingsTableRef()} SET ${setClauses.join(', ')} WHERE booking_id = @where_booking_id`,
     params,
@@ -3545,6 +3561,7 @@ async function sendReceiptEmail(gmail, booking, receipt, businessProfile) {
     ...(receipt.loyaltyDiscount > 0 ? [`Loyalty discount: -$${receipt.loyaltyDiscount.toFixed(2)}`, `Points redeemed: ${receipt.pointsRedeemed.toLocaleString()}`] : []),
     `${receipt.taxLabel}: $${receipt.tax.toFixed(2)}`,
     `Total paid: $${receipt.total.toFixed(2)}`,
+    ...(receipt.packageUsage ? [receipt.packageUsage.description, `Allocated prepaid session value: $${receipt.packageUsage.allocatedTotal.toFixed(2)}; new payment collected: $0.00.`] : []),
     ...(receipt.loyaltyMember ? [`Loyalty points balance: ${receipt.pointsBalance.toLocaleString()} points`] : []),
     '',
     'Thank you for choosing us.',
@@ -3555,9 +3572,12 @@ async function sendReceiptEmail(gmail, booking, receipt, businessProfile) {
   const membershipDiscountRow = receipt.membershipDiscountAmount > 0
     ? `<tr><td style="padding:8px 0;color:#64716b">${escapeHtml(receipt.membershipDiscountLabel)} (${receipt.membershipDiscountPercent}%)</td><td align="right" style="padding:8px 0">-$${receipt.membershipDiscountAmount.toFixed(2)}</td></tr>`
     : '';
-  const loyaltyBalance = receipt.loyaltyMember
-    ? `<p style="margin:18px 0 0;padding:12px;background:#eff6f3;border-radius:8px;font-size:13px"><strong>Loyalty balance:</strong> ${receipt.pointsBalance.toLocaleString()} points</p>`
+  const packageBalance = receipt.packageUsage
+    ? `<p style="margin:18px 0 0;padding:12px;background:#eff6f3;border-radius:8px;font-size:13px"><strong>Package usage:</strong> ${escapeHtml(receipt.packageUsage.description)}<br>Allocated prepaid session value: $${receipt.packageUsage.allocatedTotal.toFixed(2)}. New payment collected: $0.00.</p>`
     : '';
+  const loyaltyBalance = (receipt.loyaltyMember
+    ? `<p style="margin:18px 0 0;padding:12px;background:#eff6f3;border-radius:8px;font-size:13px"><strong>Loyalty balance:</strong> ${receipt.pointsBalance.toLocaleString()} points</p>`
+    : '') + packageBalance;
   const html = `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Receipt ${escapeHtml(receipt.number)}</title></head><body style="margin:0;background:#f3f5f4;padding:28px 12px;font-family:Arial,Helvetica,sans-serif;color:#18251f"><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td align="center"><table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width:600px;width:100%;background:#fff;border:1px solid #e2e9e5;border-radius:14px;overflow:hidden"><tr><td style="padding:28px 32px;background:#073d32;color:#fff"><p style="margin:0 0 8px;font-size:12px;letter-spacing:2px">${escapeHtml(businessProfile.businessName).toUpperCase()}</p><h1 style="margin:0;font-size:25px">Payment receipt</h1></td></tr><tr><td style="padding:26px 32px"><p style="margin:0 0 6px;font-weight:bold">${escapeHtml(businessProfile.legalName || businessProfile.businessName)}</p><p style="margin:0 0 4px;color:#66736d">${escapeHtml(businessProfile.address)}</p><p style="margin:0 0 4px;color:#66736d">${escapeHtml(businessProfile.phone)} · ${escapeHtml(businessProfile.email)}</p>${businessProfile.taxRegistrationNumber ? `<p style="margin:0 0 20px;color:#66736d">GST/HST No.: ${escapeHtml(businessProfile.taxRegistrationNumber)}</p>` : '<div style="height:20px"></div>'}<p style="margin:0 0 6px"><strong>Receipt No.</strong> ${escapeHtml(receipt.number)}</p><p style="margin:0 0 22px;color:#66736d">Issued ${escapeHtml(receipt.issuedAt.slice(0, 10))}</p><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse"><tr><td style="padding:10px 0;border-bottom:1px solid #e6ebe8;color:#64716b">Client</td><td align="right" style="padding:10px 0;border-bottom:1px solid #e6ebe8;font-weight:bold">${escapeHtml(booking.customerName)}</td></tr><tr><td style="padding:10px 0;border-bottom:1px solid #e6ebe8;color:#64716b">Email</td><td align="right" style="padding:10px 0;border-bottom:1px solid #e6ebe8">${escapeHtml(booking.email)}</td></tr><tr><td style="padding:10px 0;border-bottom:1px solid #e6ebe8;color:#64716b">Service</td><td align="right" style="padding:10px 0;border-bottom:1px solid #e6ebe8">${escapeHtml(booking.serviceName)}</td></tr><tr><td style="padding:10px 0;border-bottom:1px solid #e6ebe8;color:#64716b">Service date</td><td align="right" style="padding:10px 0;border-bottom:1px solid #e6ebe8">${escapeHtml(booking.date)}</td></tr><tr><td style="padding:10px 0;color:#64716b">Payment method</td><td align="right" style="padding:10px 0">${escapeHtml(booking.paymentOption)}</td></tr></table><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-top:24px;border-top:2px solid #087765"><tr><td style="padding:10px 0;color:#64716b">Subtotal</td><td align="right" style="padding:10px 0">$${receipt.subtotal.toFixed(2)}</td></tr>${membershipDiscountRow}${loyaltyRows}<tr><td style="padding:8px 0;color:#64716b">${escapeHtml(receipt.taxLabel)}</td><td align="right" style="padding:8px 0">$${receipt.tax.toFixed(2)}</td></tr><tr><td style="padding:14px 0;border-top:1px solid #d8e2dc;font-size:18px;font-weight:bold">Total paid</td><td align="right" style="padding:14px 0;border-top:1px solid #d8e2dc;font-size:18px;font-weight:bold">$${receipt.total.toFixed(2)}</td></tr></table>${loyaltyBalance}<p style="margin:24px 0 0;text-align:center;color:#64716b">Thank you for choosing ${escapeHtml(businessProfile.businessName)}.</p></td></tr></table></td></tr></table></body></html>`;
   const boundary = `receipt_${crypto.randomBytes(12).toString('hex')}`;
   const encode = (value) => Buffer.from(value).toString('base64').match(/.{1,76}/g).join('\r\n');
@@ -3992,12 +4012,13 @@ export default async function handler(req, res) {
     }
 
     const view = String(req.query?.view || '');
+    const packageViews = ['packages', 'package-register', 'package-redeem'];
     const validGetViews = ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'business-name', 'square-config', 'google-reviews', 'branches', 'services', 'therapists', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal', 'company-join', 'find-booking', 'availability', 'unavailability', 'campaign-log', 'campaign-audience-options', 'review-request-audience', 'therapist-accounts', 'wix-contacts'];
-    if (req.method === 'GET' && !validGetViews.includes(view) && !['wix-contacts-import', 'wix-bookings-import'].includes(view)) {
+    if (req.method === 'GET' && !validGetViews.includes(view) && !['wix-contacts-import', 'wix-bookings-import', ...packageViews].includes(view)) {
       return res.status(404).json({ message: 'Unknown booking view' });
     }
     const ownerOnlyRequest =
-      ['wix-contacts', 'wix-contacts-import', 'wix-bookings-import'].includes(view) ||
+      ['wix-contacts', 'wix-contacts-import', 'wix-bookings-import', ...packageViews].includes(view) ||
       (req.method === 'GET' && ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'google-ads-report', 'loyalty-dashboard', 'google-reviews', 'unavailability', 'campaign-log', 'campaign-audience-options', 'review-request-audience', 'therapist-accounts'].includes(view)) ||
       ['business-profile', 'mark-paid', 'therapist-account-status', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-clear-ledger', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-link', 'unavailability-delete', 'review-request-send', 'reassign-therapist'].includes(view) ||
       (req.method === 'POST' && ['branches', 'services', 'therapists', 'unavailability'].includes(view));
@@ -4005,8 +4026,23 @@ export default async function handler(req, res) {
     if (ownerOnlyRequest && !getOwnerSession(req)) {
       return res.status(401).json({ message: 'Owner sign-in required' });
     }
-    if (req.method === 'POST' && ['wix-contacts-import', 'wix-bookings-import'].includes(view) && !isSameOriginRequest(req)) {
+    if (req.method === 'POST' && ['wix-contacts-import', 'wix-bookings-import', ...packageViews].includes(view) && !isSameOriginRequest(req)) {
       return res.status(403).json({ message: 'Wix import origin is not allowed' });
+    }
+    if (packageViews.includes(view)) {
+      if ((view === 'packages' && req.method !== 'GET') || (view !== 'packages' && req.method !== 'POST')) return res.status(405).json({ message: 'Method Not Allowed' });
+      const store = createPackageStore(getBigQueryClient(), {
+        projectId: BIGQUERY_PROJECT_ID, datasetId: BIGQUERY_DATASET_ID,
+        tableId: process.env.BIGQUERY_PACKAGES_TABLE || 'session_packages',
+        bookingsTableId: BIGQUERY_BOOKINGS_TABLE, loyaltyTableId: LOYALTY_TABLE_NAMES.LoyaltyLedger,
+        forbiddenTables: [BIGQUERY_PATIENT_HISTORY_TABLE, BIGQUERY_PATIENT_HISTORY_MIGRATIONS_TABLE, BIGQUERY_SQUARE_PAYMENTS_TABLE, BIGQUERY_CAMPAIGN_LOG_TABLE, BIGQUERY_CAMPAIGN_RECIPIENTS_TABLE, process.env.BIGQUERY_WIX_CONTACTS_TABLE || 'wix_contacts', ...Object.values(LOYALTY_TABLE_NAMES)],
+      });
+      if (view === 'packages') return res.status(200).json(await store.list({ search: req.query?.search || '', offset: Number(req.query?.offset || 0) }));
+      if (view === 'package-register') return res.status(200).json(await store.register(req.body));
+      return res.status(200).json(await store.redeem({
+        packageId: req.body?.packageId, bookingId: req.body?.bookingId,
+        isCompleted: (booking) => isAppointmentCompleteByTime(booking.date, booking.time, booking.duration_minutes),
+      }));
     }
     if (view === 'wix-bookings-import') {
       if (req.method !== 'POST') return res.status(405).json({ message: 'Method Not Allowed' });
@@ -4534,6 +4570,7 @@ export default async function handler(req, res) {
       });
       const eligibleBookings = bookingDataRows.filter((row) => {
         if (String(row[0] || '').startsWith('WIX-')) return false;
+        if (readPackageUsage(row[14])) return false;
         const email = normalizeLoyaltyEmail(row[3]);
         const total = Number(row[11]) || 0;
         const paidAmount = Number(row[10]) || 0;
@@ -5044,6 +5081,7 @@ export default async function handler(req, res) {
       const rowIndex = bookingRows.findIndex((row, index) => index >= (hasHeader ? 1 : 0) && String(row[0] || '') === bookingId);
       if (rowIndex < 0) return res.status(404).json({ message: 'Booking was not found.' });
       const booking = bookingRows[rowIndex];
+      if (readPackageUsage(booking[14])) return res.status(409).json({ message: 'This visit is covered by a prepaid package and cannot also consume loyalty benefits.' });
       const email = normalizeLoyaltyEmail(booking[3]);
       const memberRows = (membersResult.data.values || []).slice(1);
       const member = memberRows.find((row) => normalizeLoyaltyEmail(row[0]) === email);
@@ -5193,6 +5231,7 @@ export default async function handler(req, res) {
       if (!booking || normalizeLoyaltyEmail(booking[3]) !== email) {
         return res.status(404).json({ message: 'The selected receipt booking was not found for this loyalty member.' });
       }
+      if (readPackageUsage(booking[14])) return res.status(409).json({ message: 'A package-covered visit cannot also redeem a loyalty discount.' });
       const bookingTotal = Number(booking[11]) || 0;
       if (!bookingTotal || (Number(booking[10]) || 0) + 0.005 < bookingTotal) {
         return res.status(409).json({ message: 'A loyalty discount can only be linked to a fully paid booking.' });
@@ -6510,6 +6549,7 @@ export default async function handler(req, res) {
 
       const row = rows[rowIndex];
       const resolvedTotal = total !== null ? total : (Number(row[11]) || 0);
+      if (readPackageUsage(row[14])) return res.status(409).json({ message: 'Package-linked booking amounts and contact details are locked to preserve its usage record and receipt.' });
       const resolvedPaid = paidAmount !== null ? paidAmount : (Number(row[10]) || 0);
       if (resolvedPaid > resolvedTotal + 0.005) {
         return res.status(400).json({ message: 'The amount paid cannot exceed the appointment total' });
@@ -6573,6 +6613,7 @@ export default async function handler(req, res) {
       const total = Number(row[11]) || 0;
       const paidAmount = Number(row[10]) || 0;
       const remaining = Math.round((total - paidAmount) * 100) / 100;
+      if (readPackageUsage(row[14])) return res.status(409).json({ message: 'This appointment is covered by a prepaid package; no new payment is due.' });
       if (remaining <= 0) {
         return res.status(409).json({ message: 'This booking is already fully paid' });
       }
@@ -6797,6 +6838,13 @@ export default async function handler(req, res) {
         paidAmount: Number(row[10]) || 0,
         total: Number(row[11]) || 0,
       };
+      const packageUsage = packageReceiptDetails(row[14]);
+      if (historicalPackageVisit(row[0], row[5], row[14]) && !packageUsage) {
+        return res.status(409).json({ message: 'Register/verify this customer package and link the visit in Package tracking before issuing its receipt.' });
+      }
+      if (packageUsage && (Math.abs(packageUsage.allocatedTotal - booking.total) > 0.005 || Math.abs(booking.paidAmount - booking.total) > 0.005)) {
+        return res.status(409).json({ message: 'Package allocation and booking payment do not match. Reconcile the record before issuing a receipt.' });
+      }
       if (!booking.email || !/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(booking.email)) {
         return res.status(400).json({ message: 'This appointment does not have a valid patient email address' });
       }
@@ -6821,6 +6869,7 @@ export default async function handler(req, res) {
         return res.status(409).json({ message: 'Multiple loyalty redemptions are linked to this booking. Resolve the ledger entries before issuing a receipt.' });
       }
       const redemption = linkedRedemptions[0]?.row;
+      if (packageUsage && (redemption || Number(row[22]) > 0 || Number(row[23]) > 0)) return res.status(409).json({ message: 'Package usage cannot be combined with loyalty or membership receipt discounts.' });
       const loyaltyDiscount = Number(redemption?.[5]) || 0;
       const pointsRedeemed = Math.abs(Number(redemption?.[4]) || 0);
       const membershipType = String(row[21] || '').toLowerCase();
@@ -6833,13 +6882,13 @@ export default async function handler(req, res) {
         .reduce((sum, loyaltyRow) => sum + (Number(loyaltyRow[4]) || 0), 0);
       const businessProfile = await getBusinessProfile(sheets);
       const isTaxExempt = /registered massage therapy|\brmt\b|acupuncture/i.test(booking.serviceName);
-      const discountedSubtotal = Math.round((isTaxExempt ? booking.total : booking.total / 1.13) * 100) / 100;
+      const discountedSubtotal = packageUsage ? packageUsage.allocatedSubtotal : Math.round((isTaxExempt ? booking.total : booking.total / 1.13) * 100) / 100;
       if (loyaltyDiscount > discountedSubtotal + 0.005) {
         return res.status(409).json({ message: 'The loyalty redemption exceeds this receipt subtotal. Adjust the redemption before issuing this receipt.' });
       }
       const subtotal = Math.round((discountedSubtotal + membershipDiscountAmount) * 100) / 100;
       const receiptSubtotal = Math.round((discountedSubtotal - loyaltyDiscount) * 100) / 100;
-      const tax = isTaxExempt ? 0 : Math.round(receiptSubtotal * 0.13 * 100) / 100;
+      const tax = packageUsage ? packageUsage.allocatedTax : isTaxExempt ? 0 : Math.round(receiptSubtotal * 0.13 * 100) / 100;
       const receipt = {
         number: row[18] || `MTT-${new Date().getFullYear()}-${String(Math.floor(100000 + Math.random() * 900000))}`,
         issuedAt: row[19] || new Date().toISOString(),
@@ -6858,12 +6907,13 @@ export default async function handler(req, res) {
         pointsRedeemed,
         pointsBalance,
         loyaltyMember,
+        packageUsage,
       };
       await bqUpdateBookingFields(bigquery, bookingId, {
         receiptNumber: receipt.number,
         receiptIssuedAt: receipt.issuedAt,
         receiptEmailStatus: row[20] || 'pending',
-      });
+      }, { notes: row[14], total: booking.total, paid: booking.paidAmount, receipt: row[18] });
       for (const { rowNumber } of linkedRedemptions) {
         await bqLoyaltyValuesUpdate(`LoyaltyLedger!J${rowNumber}`, [[receipt.number]]);
       }
@@ -6932,6 +6982,7 @@ export default async function handler(req, res) {
       const calendarId = row[15] || PRIMARY_CALENDAR_ID;
       const calendarEventId = row[16] || '';
       let calendarDeleted = false;
+      if (readPackageUsage(row[14])) return res.status(409).json({ message: 'A package-linked visit cannot be deleted; its deduction must remain auditable.' });
       let calendarError = '';
       if (calendarEventId) {
         try {
@@ -6991,6 +7042,7 @@ export default async function handler(req, res) {
         return res.status(409).json({ message: 'This booking has already been cancelled.' });
       }
       const paidAmount = Number(row[10]) || 0;
+      if (readPackageUsage(row[14])) return res.status(409).json({ message: 'A completed package-linked visit cannot be cancelled or refunded as a new payment.' });
       const { hoursUntil, eligible: refundEligible } = computeBookingRefundEligibility(row[7], row[8]);
 
       let refundIssued = false;
@@ -7098,6 +7150,7 @@ export default async function handler(req, res) {
       if (row[24] === 'Cancelled') {
         return res.status(409).json({ message: 'This booking has already been cancelled and cannot be rescheduled.' });
       }
+      if (readPackageUsage(row[14])) return res.status(409).json({ message: 'A completed package-linked visit cannot be rescheduled.' });
       const { eligible: wasWithinPolicyWindow } = computeBookingRefundEligibility(row[7], row[8]);
       let newStartDateTime;
       try {

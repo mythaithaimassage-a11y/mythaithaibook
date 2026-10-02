@@ -58,6 +58,8 @@ Configure these Vercel environment variables before using it:
 - `BIGQUERY_LOCATION` (optional; defaults to `US`)
 - `BIGQUERY_WIX_CONTACTS_TABLE` (optional; defaults to `wix_contacts`; must not
   point to any existing booking, patient-history, payment, campaign or loyalty table)
+- `BIGQUERY_PACKAGES_TABLE` (optional; defaults to `session_packages`; a
+  separate owner-verified four-session package tracking table)
 - `GOOGLE_PLACES_API_KEY` / `GOOGLE_PLACE_ID` (optional; enables the Google
   Reviews section — requires the **Places API (New)** enabled on the project,
   not the legacy Places API)
@@ -235,8 +237,20 @@ valid phone are skipped.
 reviewed **current catalogue prices**, not verified historical charges. An
 initial preview has zero placeholders until all price mappings are reviewed.
 Each group must map to an active service of the same duration and a positive
-price. Catalogue subtotal plus rounded tax becomes both `total` and
+price. A fixed **120-minute Thai Traditional Massage** import option is also
+available at **$185 + 13% HST = $209.05**, even if the current catalogue has no
+120-minute service. This option is import-only and does not modify the live
+booking catalogue.
+
+Catalogue subtotal plus rounded tax becomes both `total` and
 `paid_amount`; a “spots filled” value does not multiply the booking price.
+When a mapped service is named `Package: ... x 4 Sessions`, a historical
+booking is a **single visit**, priced at **one quarter** of the four-session
+subtotal, not the full package price. For example, $360 + tax becomes
+$90 + $11.70 = $101.70 per 60-minute visit; $540 + tax becomes
+$135 + $17.55 = $152.55 per 90-minute visit. An import never invents a package
+purchase or remaining balance. Historical package visits require an
+owner-verified package linkage before issuing their receipt.
 There is no automatic ambiguous service matching. The backend verifies the
 reviewed service name, price and tax rate against the current catalogue and
 rejects stale mappings rather than silently charging different amounts.
@@ -275,7 +289,80 @@ from the initial preview. To import, omit `preview: true` and supply all
 POSTs require the same origin. No additional environment variables are required.
 
 Regression tests:
-`node --test tests/wix-contacts.test.js tests/wix-bookings.test.js tests/wix-paid-receipts.test.js`.
+`node --test tests/wix-contacts.test.js tests/wix-bookings.test.js tests/wix-paid-receipts.test.js tests/packages.test.js`.
+
+## Four-session prepaid package tracking
+
+Open **Grow → Package tracking** in the owner dashboard. This is separate
+from loyalty points and corporate prepaid hours; no existing booking or
+loyalty schema is changed. The authorized new BigQuery table
+`session_packages` is created on first use in the existing dataset (override
+with `BIGQUERY_PACKAGES_TABLE`). Existing IAM permissions cover it. The table
+contains the customer's email/name, package duration/price/tax, unique
+purchase reference/date, verified starting balance, remaining sessions,
+revision, and JSON usage history.
+
+1. **Register a verified purchase.** Enter the actual full four-session price
+   before tax, purchase date, session duration, and a unique purchase
+   reference. Confirm that payment and the starting balance have been
+   verified. Start with four sessions for a new purchase or the verified
+   remaining number (0-4) for an existing package.
+2. **Find the customer/package** by name, email, package name or purchase
+   reference. Multiple genuine purchases use different purchase references.
+   Registering the same reference again never resets or replenishes a balance;
+   conflicting registrations fail explicitly.
+3. **Link a completed booking** with the same email and duration. Confirm
+   that it belongs to the package and has not already been deducted from the
+   registered starting balance. One session is deducted, and the booking is
+   covered by the allocated prepaid session value. There is no new charge.
+4. **Issue the receipt** through the existing booking controls. The receipt
+   email (text/HTML), dashboard receipt, and printed receipt include package
+   name/reference, one deducted session, remaining balance **after that visit**,
+   allocated value, and **$0 new payment collected**. Reissuing a receipt does
+   not deduct another session; older receipt balances remain snapshots.
+
+If a verified remaining balance already includes old visits, **do not deduct
+those visits again**. To track those visits for receipts, verify/register the
+balance before the visits being linked, then link them chronologically. The
+Wix CSV cannot establish purchases, the number of packages bought, or the
+remaining balance on its own. Existing historical package records accidentally
+priced at the full package amount can be corrected by linking their verified
+package **before** receipt issuance; issued receipts are never rewritten.
+
+Deductions use a single BigQuery transaction that updates both the package
+balance/history and booking. Revision/snapshot guards reject stale concurrent
+updates; refresh/retry after conflicts. The same booking cannot be linked
+twice or to another package, and an exhausted package cannot cover a fifth
+session. Full-package cents (subtotal and tax) are allocated across four
+sessions without rounding away or creating money.
+
+Only confirmed/completed bookings whose treatment time has passed qualify.
+Future visits, cancelled/no-show visits, customer/duration mismatches,
+pre-purchase visits, existing receipts, and existing loyalty/membership
+benefit use are rejected. Non-Wix bookings with a recorded payment must be
+reconciled before using a package; reconstructed historical Wix payments may
+be replaced by the package allocation. Linked visits cannot be deleted,
+cancelled/refunded, rescheduled, or have their amounts/contact details changed
+through the normal booking controls. This keeps the usage record and receipts
+auditable. There is no automatic cancellation credit or package refund flow;
+such corrections need reconciliation, not deletion of the audit history.
+
+Package purchase registration itself is an owner verification operation, not
+a payment collection, automatic email, or purchase receipt. Visit receipts
+document use of prepayment; they must not be counted as additional cash
+collections on top of the original package purchase.
+
+Owner-only API routes:
+
+- `GET /api/booking?view=packages&search=<text>&offset=0` (50 packages/page).
+- `POST /api/booking?view=package-register` with `email`, `customerName`,
+  `packageName`, `purchaseReference`, `purchaseDate`, `durationMinutes`,
+  `remainingSessions`, full-package `subtotal`, `taxRate` (0 or 0.13), and
+  `confirmed: true`.
+- `POST /api/booking?view=package-redeem` with `packageId` and `bookingId`.
+
+POSTs require the same-origin owner session. Table names cannot target existing
+booking, loyalty, payment, patient, contact or campaign tables.
 
 ## Loyalty program tables in BigQuery
 

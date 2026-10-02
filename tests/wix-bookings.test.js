@@ -294,6 +294,9 @@ test('booking import API enforces owner/origin, previews without backend writes 
   const cookie = login.headers['Set-Cookie'].split(';')[0];
   assert.equal((await request('wix-bookings-import', { cookie, origin: 'https://foreign.example' })).code, 403);
   assert.equal((await request('wix-bookings-import', { cookie, method: 'GET' })).code, 405);
+  assert.equal((await request('packages', { cookie, method: 'POST' })).code, 405);
+  assert.equal((await request('package-register', { cookie, origin: 'https://foreign.example' })).code, 403);
+  assert.equal((await request('package-redeem', { body: { packageId: 'x', bookingId: 'y' } })).code, 401);
   const preview = await request('wix-bookings-import', { cookie, body: { csv: csv([{}]), preview: true } });
   assert.equal(preview.code, 200);
   assert.equal(preview.headers['Cache-Control'], 'no-store');

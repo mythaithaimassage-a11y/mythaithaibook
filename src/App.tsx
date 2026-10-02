@@ -13,6 +13,7 @@ import {
 import * as XLSX from 'xlsx';
 import WixContacts from './WixContacts';
 import WixBookings from './WixBookings';
+import PackageTracking from './PackageTracking';
 
 const MOCK_BRANCHES = [
   { id: 1, name: "Mississauga Central", address: "4310 Sherwoodtowne Blvd", city: "Mississauga, ON", phone: "+1 437 898 7424" },
@@ -5353,7 +5354,8 @@ function AdminPortal({
     const safe = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
     }[char]));
-    const { receipt, booking, businessProfile: profile } = data;
+    const { receipt, booking: originalBooking, businessProfile: profile } = data;
+    const booking = { ...originalBooking, paymentOption: `${originalBooking.paymentOption}${receipt.packageUsage ? ` — ${receipt.packageUsage.description} Allocated session value $${receipt.packageUsage.allocatedTotal.toFixed(2)}; new payment $0.00.` : ''}` };
     popup.document.write(`<!doctype html><html><head><title>Receipt ${safe(receipt.number)}</title><meta charset="utf-8"><style>body{font:15px Arial,sans-serif;color:#17231e;max-width:760px;margin:48px auto;padding:32px}header{display:flex;justify-content:space-between;border-bottom:3px solid #087765;padding-bottom:20px}h1{font-size:28px;margin:0}small,.muted{color:#65716b}.row{display:flex;justify-content:space-between;padding:12px 0;border-bottom:1px solid #e5ebe7}.total{font-size:20px;font-weight:bold;border-top:2px solid #087765;margin-top:18px;padding-top:18px}.balance{margin-top:20px;padding:12px;background:#eff6f3;border-radius:8px}button{margin:24px 0;padding:10px 18px;background:#073d32;color:white;border:0;border-radius:8px}@media print{button{display:none}body{margin:0 auto}}</style></head><body><header><div><h1>${safe(profile.businessName)}</h1><p class="muted">${safe(profile.legalName)}</p><p class="muted">${safe(profile.address)}</p><p class="muted">${safe(profile.phone)} · ${safe(profile.email)}</p>${profile.taxRegistrationNumber ? `<p class="muted">GST/HST No.: ${safe(profile.taxRegistrationNumber)}</p>` : ''}</div><h1>RECEIPT</h1></header><p><strong>Receipt No.</strong> ${safe(receipt.number)}<br><strong>Issued</strong> ${safe(receipt.issuedAt.slice(0, 10))}</p><p><strong>Client</strong> ${safe(booking.customerName)}<br>${safe(booking.email)}<br>${safe(booking.phone)}</p><p><strong>Service date</strong> ${safe(booking.date)}<br><strong>Payment method</strong> ${safe(booking.paymentOption)}</p><div class="row"><strong>${safe(booking.serviceName)}</strong><span>$${receipt.subtotal.toFixed(2)}</span></div>${receipt.membershipDiscountAmount > 0 ? `<div class="row"><span>${safe(receipt.membershipDiscountLabel)} (${receipt.membershipDiscountPercent}%)</span><span>-$${receipt.membershipDiscountAmount.toFixed(2)}</span></div>` : ''}${receipt.loyaltyDiscount > 0 ? `<div class="row"><span>Loyalty discount · ${receipt.pointsRedeemed.toLocaleString()} points</span><span>-$${receipt.loyaltyDiscount.toFixed(2)}</span></div>` : ''}<div class="row"><span>${safe(receipt.taxLabel)}</span><span>$${receipt.tax.toFixed(2)}</span></div><div class="row total"><span>Total paid</span><span>$${receipt.total.toFixed(2)}</span></div>${receipt.loyaltyMember ? `<p class="balance"><strong>Loyalty points balance:</strong> ${receipt.pointsBalance.toLocaleString()}</p>` : ''}<p class="muted" style="text-align:center;margin-top:64px">Thank you for choosing ${safe(profile.businessName)}.</p><button onclick="window.print()">Print receipt</button></body></html>`);
     popup.document.close();
     popup.focus();
@@ -5557,6 +5559,7 @@ function AdminPortal({
     { id: 'patient-history', label: 'Patients', icon: UserRound, section: 'Manage' },
     { id: 'wix-contacts', label: 'Wix contacts import', icon: Upload, section: 'Manage' },
     { id: 'wix-bookings', label: 'Wix bookings import', icon: Database, section: 'Manage' },
+    { id: 'packages', label: 'Package tracking', icon: Layers, section: 'Grow' },
     { id: 'therapist-approvals', label: 'Therapist approvals', icon: UserCheck, section: 'Manage', badge: pendingTherapistAccounts.length },
     { id: 'business-profile', label: 'Business profile', icon: Building, section: 'Manage' },
     { id: 'loyalty', label: 'Loyalty program', icon: Award, section: 'Grow' },
@@ -5580,6 +5583,7 @@ function AdminPortal({
     'patient-history': 'Patient Summary',
     'wix-contacts': 'Historical Wix contacts',
     'wix-bookings': 'Historical Wix bookings',
+    packages: 'Package tracking',
     'therapist-approvals': 'Therapist approvals',
     'business-profile': 'Business profile',
   }[activeTab] || 'Owner dashboard';
@@ -5725,6 +5729,7 @@ function AdminPortal({
 
       {activeTab === 'wix-contacts' && <WixContacts />}
       {activeTab === 'wix-bookings' && <WixBookings onViewBookings={() => setActiveTab('schedule')} />}
+      {activeTab === 'packages' && <PackageTracking onViewBookings={() => setActiveTab('schedule')} />}
 
       {/* TAB CONTENT: SCHEDULE */}
       {activeTab === 'schedule' && (
@@ -7737,6 +7742,7 @@ function AdminPortal({
                         {issuedReceipt.receipt.loyaltyDiscount > 0 && <div className="mt-3 flex justify-between border-t border-emerald-100 pt-3 text-sm"><span className="text-slate-600">Loyalty discount · {issuedReceipt.receipt.pointsRedeemed.toLocaleString()} points</span><span>-${issuedReceipt.receipt.loyaltyDiscount.toFixed(2)}</span></div>}
                         <div className="mt-3 flex justify-between border-t border-emerald-100 pt-3 text-sm"><span className="text-slate-600">{issuedReceipt.receipt.taxLabel}</span><span>${issuedReceipt.receipt.tax.toFixed(2)}</span></div>
                         <div className="mt-2 flex justify-between text-sm font-bold"><span>Total paid</span><span>${issuedReceipt.receipt.total.toFixed(2)}</span></div>
+                        {issuedReceipt.receipt.packageUsage && <p className="mt-3 rounded-lg bg-emerald-100 p-3 text-xs text-emerald-950">{issuedReceipt.receipt.packageUsage.description} Allocated prepaid value: ${issuedReceipt.receipt.packageUsage.allocatedTotal.toFixed(2)}. New payment: $0.00.</p>}
                         <p className="mt-3 text-xs text-emerald-900">Loyalty balance: {issuedReceipt.receipt.pointsBalance.toLocaleString()} points.</p>
                         <p className="mt-3 text-xs text-emerald-900">Receipt email sent to {issuedReceipt.booking.email}.</p>
                       </div>

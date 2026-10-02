@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Upload } from 'lucide-react';
 import { readWixResponse } from './wixImportApi';
+import { wixImportServices, packageSessionCount } from '../lib/wix-pricing.js';
 
 type Booking = {
   booking_id: string;
@@ -58,7 +59,7 @@ export default function WixBookings({ onViewBookings }: { onViewBookings: () => 
     const controller = new AbortController();
     fetch('/api/booking?view=services', { signal: controller.signal })
       .then((response) => readWixResponse<{ services: Service[] }>(response))
-      .then((data) => setServices(data.services))
+      .then((data) => setServices(wixImportServices(data.services)))
       .catch((failure: unknown) => { if (!controller.signal.aborted) setCatalogueError(failure instanceof Error ? failure.message : 'Unable to load current catalogue.'); });
     return () => controller.abort();
   }, []);
@@ -128,8 +129,8 @@ export default function WixBookings({ onViewBookings }: { onViewBookings: () => 
       <h2 className="text-lg font-bold text-slate-900">Import historical Wix bookings</h2>
       <p className="text-sm text-slate-600">Destination: the existing BigQuery bookings table, for <strong>Mississauga Central</strong>. No tables or schema changes are created. Bookings receive stable Wix-prefixed IDs. Re-imports can fill zero-amount Wix records without receipts; existing recorded payments and receipts are preserved.</p>
       <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-        <p>The CSV has no payment amounts. Map each Wix service to a current catalogue service, review the tax-inclusive prices, and confirm that these amounts may be used for the paid records and receipts. These are owner-approved current prices, not historical amounts verified by Wix. Original Wix details remain in notes. Each CSV row represents one booking; prices are not multiplied by spots filled.</p>
-        <p>Session times are interpreted in the clinic timezone. Future session dates are skipped. Staff and service names are preserved as exported, not matched to current accounts. The import does not create Calendar events, send emails, issue receipts, charge customers, or award loyalty points.</p>
+        <p>The CSV has no payment amounts. Map each Wix service to a current catalogue service, review the tax-inclusive prices, and confirm that these amounts may be used for the paid records and receipts. These are owner-approved current prices, not historical amounts verified by Wix. Original Wix details remain in notes. Each CSV row represents one booking; prices are not multiplied by spots filled. Four-session package visits use one-quarter of the package subtotal; register and link a verified package in Package tracking to deduct sessions.</p>
+        <p>Session times are interpreted in the clinic timezone. Future session dates are skipped. Staff names and original Wix fields are preserved; mapped service labels are used for receipts. The import does not create Calendar events, send emails, issue receipts, charge customers, or award loyalty points.</p>
       </div>
       <label htmlFor="wix-bookings-file" className="block text-sm font-semibold text-slate-800"><Upload className="mr-2 inline h-4 w-4" />Preview Wix bookings CSV (up to 3 MiB / 10,000 records)</label>
       <input id="wix-bookings-file" type="file" accept=".csv,text/csv" disabled={busy} className="block w-full text-sm" onChange={(event) => {
@@ -163,7 +164,7 @@ export default function WixBookings({ onViewBookings }: { onViewBookings: () => 
                 setConfirmed(false);
               }}>
                 <option value="">Select a catalogue service</option>
-                {services.filter((service) => service.active !== false && service.duration === group.durationMinutes && service.price > 0).map((service) => <option key={service.id} value={service.id}>{service.name} | ${service.price.toFixed(2)} + {service.taxRate * 100}% tax</option>)}
+                {services.filter((service) => service.active !== false && service.duration === group.durationMinutes && service.price > 0).map((service) => <option key={service.id} value={service.id}>{service.name} | ${(service.price / packageSessionCount(service.name)).toFixed(2)}{packageSessionCount(service.name) > 1 ? ' per session (4-session package)' : ''} + {service.taxRate * 100}% tax</option>)}
               </select>
             </label>;
           })}
