@@ -46,7 +46,10 @@ const PATIENT_HISTORY_SPREADSHEET_ID = process.env.PATIENT_HISTORY_SPREADSHEET_I
 const THERAPIST_SESSION_SECRET = process.env.THERAPIST_SESSION_SECRET || '';
 const THERAPIST_ACCOUNTS = process.env.THERAPIST_ACCOUNTS || '[]';
 const OWNER_ADMIN_PASSWORD = process.env.OWNER_ADMIN_PASSWORD || '';
+const OWNER_ADMIN_EMAIL = (process.env.OWNER_ADMIN_EMAIL || '').trim().toLowerCase();
 const OWNER_ADMIN_SESSION_SECRET = process.env.OWNER_ADMIN_SESSION_SECRET || '';
+const DASHBOARD_USERS_TABLE = 'dashboard_users';
+const DASHBOARD_LOGIN_CHALLENGES_TABLE = 'dashboard_login_challenges';
 const SQUARE_ACCESS_TOKEN = process.env.SQUARE_ACCESS_TOKEN || '';
 const SQUARE_LOCATION_ID = process.env.SQUARE_LOCATION_ID || '';
 const SQUARE_ENVIRONMENT = (process.env.SQUARE_ENVIRONMENT || 'production').toLowerCase() === 'sandbox' ? 'sandbox' : 'production';
@@ -1208,33 +1211,174 @@ function therapistCookie(value, maxAge) {
   return `mtt_therapist_session=${encodeURIComponent(value)}; Max-Age=${maxAge}; Path=/; HttpOnly; SameSite=Strict; Secure`;
 }
 
-function signOwnerSession() {
-  const payload = Buffer.from(JSON.stringify({ role: 'owner', expiresAt: Date.now() + 8 * 60 * 60 * 1000 })).toString('base64url');
+function signOwnerSession(account) {
+  const payload = Buffer.from(JSON.stringify({
+    userId: account.id,
+    email: account.email,
+    name: account.name || '',
+    role: account.role,
+    branchIds: account.branchIds || [],
+    expiresAt: Date.now() + 8 * 60 * 60 * 1000,
+  })).toString('base64url');
   const signature = crypto.createHmac('sha256', OWNER_ADMIN_SESSION_SECRET).update(payload).digest('base64url');
   return `${payload}.${signature}`;
 }
 
 function isOwnerAuthConfigured() {
-  return OWNER_ADMIN_PASSWORD.length >= 16 && OWNER_ADMIN_SESSION_SECRET.length >= 32;
+  return /^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(OWNER_ADMIN_EMAIL)
+    && OWNER_ADMIN_PASSWORD.length >= 16
+    && OWNER_ADMIN_SESSION_SECRET.length >= 32
+    && Boolean(GOOGLE_OAUTH_CLIENT_ID && GOOGLE_OAUTH_CLIENT_SECRET && GOOGLE_OAUTH_REFRESH_TOKEN && GOOGLE_GMAIL_SENDER_EMAIL);
 }
 
-function getOwnerSession(req) {
+async function getOwnerSession(req) {
   if (!isOwnerAuthConfigured()) return null;
   const value = parseCookies(req).mtt_owner_session || '';
   const [payload, signature] = value.split('.');
   if (!payload || !signature) return null;
   const expected = crypto.createHmac('sha256', OWNER_ADMIN_SESSION_SECRET).update(payload).digest('base64url');
   if (signature.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return null;
+  let session;
   try {
-    const session = JSON.parse(Buffer.from(payload, 'base64url').toString());
-    return session.role === 'owner' && session.expiresAt > Date.now() ? session : null;
+    session = JSON.parse(Buffer.from(payload, 'base64url').toString());
   } catch {
     return null;
   }
+  if (!session.userId || !session.email || !['owner', 'branch_manager', 'branch_receptionist'].includes(session.role)
+    || !Array.isArray(session.branchIds) || session.expiresAt <= Date.now()) return null;
+  if (session.userId === 'env-owner' && session.email === OWNER_ADMIN_EMAIL) return session;
+  const account = await findDashboardUser(session.email);
+  return account && account.id === session.userId
+    ? { ...session, name: account.name, role: account.role, branchIds: account.branchIds }
+    : null;
 }
 
 function ownerCookie(value, maxAge) {
   return `mtt_owner_session=${encodeURIComponent(value)}; Max-Age=${maxAge}; Path=/; HttpOnly; SameSite=Strict; Secure`;
+}
+
+function dashboardUsersTableRef() {
+  return `\`${BIGQUERY_PROJECT_ID}.${BIGQUERY_DATASET_ID}.${DASHBOARD_USERS_TABLE}\``;
+}
+
+function dashboardLoginChallengesTableRef() {
+  return `\`${BIGQUERY_PROJECT_ID}.${BIGQUERY_DATASET_ID}.${DASHBOARD_LOGIN_CHALLENGES_TABLE}\``;
+}
+
+let dashboardAuthTablesPromise = null;
+async function ensureDashboardAuthTables(bigquery = getBigQueryClient()) {
+  if (!dashboardAuthTablesPromise) {
+    dashboardAuthTablesPromise = (async () => {
+      const dataset = bigquery.dataset(BIGQUERY_DATASET_ID);
+      const [datasetExists] = await dataset.exists();
+      if (!datasetExists) throw new Error(`BigQuery dataset ${BIGQUERY_DATASET_ID} does not exist`);
+      for (const [tableName, fields] of [
+        [DASHBOARD_USERS_TABLE, [
+          { name: 'id', type: 'STRING' }, { name: 'email', type: 'STRING' },
+          { name: 'name', type: 'STRING' }, { name: 'password_hash', type: 'STRING' },
+          { name: 'role', type: 'STRING' }, { name: 'branch_ids', type: 'STRING' },
+          { name: 'status', type: 'STRING' }, { name: 'created_at', type: 'STRING' },
+          { name: 'updated_at', type: 'STRING' },
+        ]],
+        [DASHBOARD_LOGIN_CHALLENGES_TABLE, [
+          { name: 'id', type: 'STRING' }, { name: 'email', type: 'STRING' },
+          { name: 'otp_hash', type: 'STRING' }, { name: 'expires_at', type: 'STRING' },
+          { name: 'attempts', type: 'INTEGER' }, { name: 'consumed', type: 'BOOLEAN' },
+        ]],
+      ]) {
+        const table = dataset.table(tableName);
+        const [exists] = await table.exists();
+        if (!exists) {
+          try {
+            await dataset.createTable(tableName, {
+              schema: fields.map((field) => ({ ...field, mode: 'NULLABLE' })),
+            });
+          } catch (error) {
+            if (error.code !== 409 && error.status !== 409) throw error;
+          }
+        }
+      }
+    })().catch((error) => {
+      dashboardAuthTablesPromise = null;
+      throw error;
+    });
+  }
+  await dashboardAuthTablesPromise;
+}
+
+async function findDashboardUser(email) {
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  if (normalizedEmail === OWNER_ADMIN_EMAIL) {
+    return {
+      id: 'env-owner',
+      email: OWNER_ADMIN_EMAIL,
+      name: 'Practice owner',
+      role: 'owner',
+      branchIds: [],
+      passwordHash: '',
+    };
+  }
+  const bigquery = getBigQueryClient();
+  await ensureDashboardAuthTables(bigquery);
+  const [rows] = await bigquery.query({
+    query: `SELECT id, email, name, password_hash, role, branch_ids, status FROM ${dashboardUsersTableRef()} WHERE LOWER(email) = @email AND status = 'active' LIMIT 1`,
+    params: { email: normalizedEmail },
+  });
+  const row = rows[0];
+  if (!row) return null;
+  let branchIds;
+  try {
+    branchIds = JSON.parse(row.branch_ids || '[]');
+  } catch {
+    throw new Error(`Dashboard account ${normalizedEmail} has invalid branch assignments`);
+  }
+  return {
+    id: row.id,
+    email: String(row.email).toLowerCase(),
+    name: row.name || '',
+    role: row.role,
+    branchIds: Array.isArray(branchIds) ? branchIds.map(String) : [],
+    passwordHash: row.password_hash,
+  };
+}
+
+async function getDashboardBranchNames(sheets, session) {
+  if (!session || session.role === 'owner') return null;
+  const ids = new Set(session.branchIds.map(String));
+  return new Set((await getBranches(sheets))
+    .filter((branch) => ids.has(String(branch.id)))
+    .map((branch) => String(branch.name).trim().toLowerCase()));
+}
+
+function verifyDashboardPassword(password, account) {
+  if (account.id === 'env-owner') {
+    const provided = Buffer.from(String(password || ''));
+    const expected = Buffer.from(OWNER_ADMIN_PASSWORD);
+    return provided.length === expected.length && crypto.timingSafeEqual(provided, expected);
+  }
+  return verifyPassword(password, account.passwordHash);
+}
+
+function dashboardOtpHash(challengeId, code) {
+  return crypto.createHmac('sha256', OWNER_ADMIN_SESSION_SECRET)
+    .update(`${challengeId}:${code}`)
+    .digest('hex');
+}
+
+async function sendDashboardOtp(email, code) {
+  const raw = [
+    `From: ${GOOGLE_GMAIL_SENDER_EMAIL}`,
+    `To: ${email}`,
+    `Subject: Your MY THAI THAI dashboard sign-in code`,
+    'MIME-Version: 1.0',
+    'Content-Type: text/plain; charset=UTF-8',
+    '',
+    `Your dashboard verification code is ${code}. It expires in 10 minutes. If you did not request this code, you can ignore this email.`,
+  ].join('\r\n');
+  await sendGmailMessage(createGmailApi(), {
+    userId: 'me',
+    requestBody: { raw: Buffer.from(raw).toString('base64url') },
+  });
 }
 
 function isSameOriginRequest(req) {
@@ -4013,31 +4157,111 @@ export default async function handler(req, res) {
 
     if (req.query?.view === 'owner-session' && req.method === 'GET') {
       if (!isOwnerAuthConfigured()) {
-        return res.status(503).json({ message: 'Configure an owner password of at least 16 characters and a session secret of at least 32 characters.' });
+        return res.status(503).json({ message: 'Configure the owner email, a password of at least 16 characters, a session secret of at least 32 characters, and Gmail OAuth before enabling dashboard sign-in.' });
       }
       res.setHeader('Cache-Control', 'no-store');
-      return res.status(200).json({ authenticated: Boolean(getOwnerSession(req)) });
+      const session = await getOwnerSession(req);
+      return res.status(200).json({
+        authenticated: Boolean(session),
+        user: session ? { id: session.userId, email: session.email, name: session.name, role: session.role, branchIds: session.branchIds } : null,
+      });
     }
 
     if (req.query?.view === 'owner-login' && req.method === 'POST') {
       if (!isOwnerAuthConfigured()) {
-        return res.status(503).json({ message: 'Configure an owner password of at least 16 characters and a session secret of at least 32 characters.' });
+        return res.status(503).json({ message: 'Configure the owner email, a password of at least 16 characters, a session secret of at least 32 characters, and Gmail OAuth before enabling dashboard sign-in.' });
       }
       if (!isSameOriginRequest(req)) {
         return res.status(403).json({ message: 'Sign-in request origin is not allowed' });
       }
+      const email = String(req.body?.email || '').trim().toLowerCase();
       const password = String(req.body?.password || '');
-      const provided = Buffer.from(password);
-      const expected = Buffer.from(OWNER_ADMIN_PASSWORD);
-      if (
-        password.length > 1024 ||
-        provided.length !== expected.length ||
-        !crypto.timingSafeEqual(provided, expected)
-      ) {
-        return res.status(401).json({ message: 'Incorrect owner password' });
+      if (!/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(email) || password.length > 1024) {
+        return res.status(400).json({ message: 'Enter a valid email and password.' });
       }
-      res.setHeader('Set-Cookie', ownerCookie(signOwnerSession(), 8 * 60 * 60));
-      return res.status(200).json({ authenticated: true });
+      const account = await findDashboardUser(email);
+      if (!account || !verifyDashboardPassword(password, account)) {
+        return res.status(401).json({ message: 'Incorrect email or password.' });
+      }
+      const bigquery = getBigQueryClient();
+      await ensureDashboardAuthTables(bigquery);
+      const [recentChallenges] = await bigquery.query({
+        query: `SELECT id FROM ${dashboardLoginChallengesTableRef()} WHERE email = @email AND consumed = FALSE AND expires_at > @now ORDER BY expires_at DESC LIMIT 3`,
+        params: { email, now: new Date().toISOString() },
+      });
+      if (recentChallenges.length >= 3) {
+        return res.status(429).json({ message: 'Too many verification codes were requested. Wait 10 minutes and try again.' });
+      }
+      const challengeId = crypto.randomUUID();
+      const code = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+      await bigquery.query({
+        query: `INSERT INTO ${dashboardLoginChallengesTableRef()} (id, email, otp_hash, expires_at, attempts, consumed) VALUES (@id, @email, @otp_hash, @expires_at, 0, FALSE)`,
+        params: {
+          id: challengeId,
+          email,
+          otp_hash: dashboardOtpHash(challengeId, code),
+          expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+        },
+      });
+      try {
+        await sendDashboardOtp(email, code);
+      } catch (error) {
+        await bigquery.query({
+          query: `UPDATE ${dashboardLoginChallengesTableRef()} SET consumed = TRUE WHERE id = @id`,
+          params: { id: challengeId },
+        });
+        console.error('Dashboard sign-in OTP email error:', error);
+        return res.status(503).json({ message: 'Could not send a verification code. Check Gmail configuration and try again.' });
+      }
+      res.setHeader('Cache-Control', 'no-store');
+      return res.status(200).json({ otpRequired: true, challengeId, message: 'A verification code was sent to your email.' });
+    }
+
+    if (req.query?.view === 'owner-verify' && req.method === 'POST') {
+      if (!isOwnerAuthConfigured()) {
+        return res.status(503).json({ message: 'Dashboard sign-in is not configured.' });
+      }
+      if (!isSameOriginRequest(req)) {
+        return res.status(403).json({ message: 'Sign-in request origin is not allowed' });
+      }
+      const challengeId = String(req.body?.challengeId || '');
+      const code = String(req.body?.code || '');
+      if (!/^[0-9a-f-]{36}$/i.test(challengeId) || !/^\d{6}$/.test(code)) {
+        return res.status(400).json({ message: 'Enter the six-digit verification code from your email.' });
+      }
+      const bigquery = getBigQueryClient();
+      await ensureDashboardAuthTables(bigquery);
+      const [challenges] = await bigquery.query({
+        query: `SELECT id, email, otp_hash, expires_at, attempts, consumed FROM ${dashboardLoginChallengesTableRef()} WHERE id = @id LIMIT 1`,
+        params: { id: challengeId },
+      });
+      const challenge = challenges[0];
+      if (!challenge || challenge.consumed || new Date(challenge.expires_at).getTime() <= Date.now() || Number(challenge.attempts) >= 5) {
+        return res.status(401).json({ message: 'This verification code is expired or no longer valid. Sign in again to get a new code.' });
+      }
+      const providedHash = dashboardOtpHash(challengeId, code);
+      const expectedHash = String(challenge.otp_hash || '');
+      const validCode = providedHash.length === expectedHash.length
+        && crypto.timingSafeEqual(Buffer.from(providedHash), Buffer.from(expectedHash));
+      if (!validCode) {
+        await bigquery.query({
+          query: `UPDATE ${dashboardLoginChallengesTableRef()} SET attempts = attempts + 1, consumed = attempts + 1 >= 5 WHERE id = @id AND consumed = FALSE`,
+          params: { id: challengeId },
+        });
+        return res.status(401).json({ message: 'That verification code is incorrect.' });
+      }
+      await bigquery.query({
+        query: `UPDATE ${dashboardLoginChallengesTableRef()} SET consumed = TRUE WHERE id = @id AND consumed = FALSE`,
+        params: { id: challengeId },
+      });
+      const account = await findDashboardUser(challenge.email);
+      if (!account) return res.status(401).json({ message: 'This dashboard account is no longer active.' });
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('Set-Cookie', ownerCookie(signOwnerSession(account), 8 * 60 * 60));
+      return res.status(200).json({
+        authenticated: true,
+        user: { id: account.id, email: account.email, name: account.name, role: account.role, branchIds: account.branchIds },
+      });
     }
 
     if (req.query?.view === 'owner-logout' && req.method === 'POST') {
@@ -4052,18 +4276,68 @@ export default async function handler(req, res) {
     const packageViews = ['packages', 'package-register', 'package-redeem'];
     const historyViews = ['booking-history-preview', 'clear-booking-history'];
     const wixCalendarViews = ['wix-calendar-sync'];
-    const validGetViews = ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'business-name', 'square-config', 'google-reviews', 'branches', 'services', 'therapists', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal', 'company-join', 'find-booking', 'availability', 'unavailability', 'campaign-log', 'campaign-audience-options', 'review-request-audience', 'therapist-accounts', 'wix-contacts'];
+    const validGetViews = ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'business-name', 'square-config', 'google-reviews', 'branches', 'services', 'therapists', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal', 'company-join', 'find-booking', 'availability', 'unavailability', 'campaign-log', 'campaign-audience-options', 'review-request-audience', 'therapist-accounts', 'wix-contacts', 'dashboard-users'];
     if (req.method === 'GET' && !validGetViews.includes(view) && !['wix-contacts-import', 'wix-bookings-import', ...packageViews, ...historyViews, ...wixCalendarViews].includes(view)) {
       return res.status(404).json({ message: 'Unknown booking view' });
     }
     const ownerOnlyRequest =
       ['wix-contacts', 'wix-contacts-import', 'wix-bookings-import', ...packageViews, ...historyViews, ...wixCalendarViews].includes(view) ||
-      (req.method === 'GET' && ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'google-ads-report', 'loyalty-dashboard', 'google-reviews', 'unavailability', 'campaign-log', 'campaign-audience-options', 'review-request-audience', 'therapist-accounts'].includes(view)) ||
-      ['business-profile', 'mark-paid', 'therapist-account-status', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-clear-ledger', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-link', 'unavailability-delete', 'review-request-send', 'reassign-therapist'].includes(view) ||
+      (req.method === 'GET' && ['patient-history', 'appointment-notes', 'business-profile', 'google-ads-report', 'loyalty-dashboard', 'google-reviews', 'unavailability', 'campaign-log', 'campaign-audience-options', 'review-request-audience', 'therapist-accounts', 'dashboard-users'].includes(view)) ||
+      ['business-profile', 'dashboard-user', 'dashboard-user-status', 'therapist-account-status', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-clear-ledger', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-link', 'unavailability-delete', 'review-request-send', 'reassign-therapist'].includes(view) ||
       (req.method === 'POST' && ['branches', 'services', 'therapists', 'unavailability'].includes(view));
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
-    if (ownerOnlyRequest && !getOwnerSession(req)) {
-      return res.status(401).json({ message: 'Owner sign-in required' });
+    const dashboardSession = await getOwnerSession(req);
+    if (ownerOnlyRequest && dashboardSession?.role !== 'owner') {
+      return res.status(dashboardSession ? 403 : 401).json({ message: dashboardSession ? 'Owner role required' : 'Dashboard sign-in required' });
+    }
+    if (['', 'calendar'].includes(view) && req.method === 'GET' && !dashboardSession) {
+      return res.status(401).json({ message: 'Dashboard sign-in required' });
+    }
+    if (
+      dashboardSession?.role === 'branch_receptionist'
+      && ['reports', 'patient-history', 'appointment-notes', 'mark-paid', 'appointment-note', 'issue-receipt'].includes(view)
+    ) {
+      return res.status(403).json({ message: 'This dashboard role does not have access to that information or action.' });
+    }
+    if (
+      dashboardSession?.role === 'branch_manager'
+      && ['patient-history', 'issue-receipt'].includes(view)
+    ) {
+      return res.status(403).json({ message: 'This dashboard role does not have access to that information or action.' });
+    }
+    if (view === 'mark-paid' && dashboardSession?.role !== 'owner' && dashboardSession?.role !== 'branch_manager') {
+      return res.status(dashboardSession ? 403 : 401).json({ message: 'A branch manager or owner sign-in is required for this action.' });
+    }
+
+    if (req.method === 'GET' && view === 'dashboard-users') {
+      const bigquery = getBigQueryClient();
+      await ensureDashboardAuthTables(bigquery);
+      const [rows] = await bigquery.query({
+        query: `SELECT id, email, name, role, branch_ids, status, created_at, updated_at FROM ${dashboardUsersTableRef()} ORDER BY email`,
+      });
+      return res.status(200).json({
+        users: rows.map((row) => ({
+          id: row.id, email: row.email, name: row.name, role: row.role,
+          branchIds: JSON.parse(row.branch_ids || '[]'), status: row.status,
+          createdAt: row.created_at, updatedAt: row.updated_at,
+        })),
+      });
+    }
+
+    if (req.method === 'POST' && view === 'dashboard-user-status') {
+      if (!isSameOriginRequest(req)) return res.status(403).json({ message: 'Dashboard user request origin is not allowed' });
+      const id = String(req.body?.id || '');
+      const status = String(req.body?.status || '');
+      if (!/^[0-9a-f-]{36}$/i.test(id) || !['active', 'disabled'].includes(status)) {
+        return res.status(400).json({ message: 'Choose a valid dashboard account and status.' });
+      }
+      const bigquery = getBigQueryClient();
+      await ensureDashboardAuthTables(bigquery);
+      await bigquery.query({
+        query: `UPDATE ${dashboardUsersTableRef()} SET status = @status, updated_at = @updated_at WHERE id = @id`,
+        params: { id, status, updated_at: new Date().toISOString() },
+      });
+      return res.status(200).json({ status });
     }
     if (historyViews.includes(view)) {
       if (req.method !== 'POST') return res.status(405).json({ message: 'Method Not Allowed' });
@@ -4204,6 +4478,48 @@ export default async function handler(req, res) {
     const sheets = google.sheets({ version: 'v4', auth });
     const calendarApi = google.calendar({ version: 'v3', auth });
 
+    if (req.method === 'POST' && view === 'dashboard-user') {
+      if (!isSameOriginRequest(req)) return res.status(403).json({ message: 'Dashboard user request origin is not allowed' });
+      const email = String(req.body?.email || '').trim().toLowerCase();
+      const name = String(req.body?.name || '').trim();
+      const password = String(req.body?.password || '');
+      const role = String(req.body?.role || '');
+      const branchIds = Array.isArray(req.body?.branchIds) ? [...new Set(req.body.branchIds.map(String))] : [];
+      if (!/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(email) || email === OWNER_ADMIN_EMAIL) {
+        return res.status(400).json({ message: 'Enter a valid staff email different from the configured owner email.' });
+      }
+      if (!name || name.length > 120 || password.length < 12 || password.length > 1024) {
+        return res.status(400).json({ message: 'Enter a name and a unique password of at least 12 characters.' });
+      }
+      if (!['owner', 'branch_manager', 'branch_receptionist'].includes(role)) {
+        return res.status(400).json({ message: 'Choose a valid dashboard role.' });
+      }
+      if (role !== 'owner' && !branchIds.length) {
+        return res.status(400).json({ message: 'Assign at least one branch to branch staff.' });
+      }
+      const validBranches = await getBranches(sheets);
+      if (branchIds.some((id) => !validBranches.some((branch) => String(branch.id) === id))) {
+        return res.status(400).json({ message: 'One or more assigned branches do not exist.' });
+      }
+      const bigquery = getBigQueryClient();
+      await ensureDashboardAuthTables(bigquery);
+      const [existing] = await bigquery.query({
+        query: `SELECT id FROM ${dashboardUsersTableRef()} WHERE LOWER(email) = @email LIMIT 1`,
+        params: { email },
+      });
+      if (existing.length) return res.status(409).json({ message: 'A dashboard account already exists for this email.' });
+      const id = crypto.randomUUID();
+      const timestamp = new Date().toISOString();
+      await bigquery.query({
+        query: `INSERT INTO ${dashboardUsersTableRef()} (id, email, name, password_hash, role, branch_ids, status, created_at, updated_at) VALUES (@id, @email, @name, @password_hash, @role, @branch_ids, 'active', @created_at, @updated_at)`,
+        params: {
+          id, email, name, password_hash: hashPassword(password), role,
+          branch_ids: JSON.stringify(branchIds), created_at: timestamp, updated_at: timestamp,
+        },
+      });
+      return res.status(201).json({ user: { id, email, name, role, branchIds, status: 'active' } });
+    }
+
     if (req.method === 'GET' && view === 'business-name') {
       res.setHeader('Cache-Control', 'no-store');
       const businessProfile = await getBusinessProfile(sheets);
@@ -4303,7 +4619,10 @@ export default async function handler(req, res) {
 
     if (req.method === 'GET' && view === 'branches') {
       res.setHeader('Cache-Control', 'no-store');
-      const branches = await getBranches(sheets);
+      const branchNames = await getDashboardBranchNames(sheets, dashboardSession);
+      const branches = (await getBranches(sheets)).filter((branch) =>
+        !branchNames || branchNames.has(String(branch.name).trim().toLowerCase()),
+      );
       return res.status(200).json({ branches });
     }
 
@@ -4333,7 +4652,12 @@ export default async function handler(req, res) {
 
     if (req.method === 'GET' && view === 'therapists') {
       res.setHeader('Cache-Control', 'no-store');
-      const therapists = await getTherapists(sheets);
+      const branchIds = new Set(dashboardSession?.role === 'owner' ? [] : dashboardSession?.branchIds || []);
+      const therapists = (await getTherapists(sheets)).filter((therapist) =>
+        !dashboardSession || dashboardSession.role === 'owner'
+        || (therapist.branches || []).some((id) => branchIds.has(String(id)))
+        || Object.values(therapist.schedule || {}).some((id) => branchIds.has(String(id))),
+      );
       return res.status(200).json({ therapists });
     }
 
@@ -6400,6 +6724,7 @@ export default async function handler(req, res) {
 
       if (req.query?.view === 'calendar') {
         const date = req.query.date || new Date().toISOString().slice(0, 10);
+        const allowedBranchNames = await getDashboardBranchNames(sheets, dashboardSession);
         const branch = String(req.query.branch || '').trim().toLowerCase();
         const branchName = String(req.query.branchName || '').trim().toLowerCase();
         const matchesBranchName = (name) => {
@@ -6456,6 +6781,7 @@ export default async function handler(req, res) {
               const eventTherapist = bookingRow?.[6] || parsedDescription.therapistName || getTherapistFromDescription(event.description);
               if (
                 localStart.date === date &&
+                (!allowedBranchNames || allowedBranchNames.has(String(booking.branchName || location).trim().toLowerCase())) &&
                 ((!branch && !branchName) || matchesBranchName(bookingRow?.[4]) || matchesBranchName(location) ||
                   (branch && [location, bookingRow?.[13]].some((address) => String(address || '').toLowerCase().includes(branch)))) &&
                 (!therapist || eventTherapist.toLowerCase() === therapist)
@@ -6536,6 +6862,9 @@ export default async function handler(req, res) {
                   };
                 }
 
+                const calendarBooking = dashboardSession?.role === 'branch_receptionist'
+                  ? { ...booking, paymentOption: '', paidAmount: 0, total: 0, receiptNumber: '', receiptEmailStatus: '' }
+                  : booking;
                 events.push({
                   id: event.id,
                   calendarId,
@@ -6548,7 +6877,7 @@ export default async function handler(req, res) {
                   therapistName: eventTherapist,
                   localTime: localStart.time,
                   isCouple: /couple/i.test(booking.serviceName || event.summary || ''),
-                  booking,
+                  booking: calendarBooking,
                 });
               }
             }
@@ -6564,6 +6893,7 @@ export default async function handler(req, res) {
 
         const unavailability = (await getUnavailabilityBlocks(sheets))
           .filter((block) => block.date === date)
+          .filter((block) => !allowedBranchNames || block.scope !== 'business' || !block.branchName || allowedBranchNames.has(String(block.branchName).trim().toLowerCase()))
           .filter((block) => block.scope !== 'business' || (!branch && !branchName) || !block.branchName || matchesBranchName(block.branchName))
           .filter((block) => block.scope !== 'therapist' || !therapist || block.therapistName.toLowerCase() === therapist)
           .map((block) => ({
@@ -6589,8 +6919,11 @@ export default async function handler(req, res) {
       const result = await bqFetchBookingRows(getBigQueryClient());
       const rows = result.data.values || [];
       const dataRows = rows[0]?.[0] === 'Booking ID' ? rows.slice(1) : rows;
+      const allowedBranchNames = await getDashboardBranchNames(sheets, dashboardSession);
       return res.status(200).json({
-        bookings: dataRows.reverse().map((row) => ({
+        bookings: dataRows.reverse().filter((row) =>
+          !allowedBranchNames || allowedBranchNames.has(String(row[4] || '').trim().toLowerCase()),
+        ).map((row) => ({
           id: row[0] || '',
           customerName: row[1] || '',
           phone: row[2] || '',
@@ -6600,18 +6933,18 @@ export default async function handler(req, res) {
           therapistName: row[6] || '',
           date: row[7] || '',
           time: row[8] || '',
-          paymentOption: row[9] || '',
-          paidAmount: Number(row[10]) || 0,
-          total: Number(row[11]) || 0,
+          paymentOption: dashboardSession?.role === 'branch_receptionist' ? '' : row[9] || '',
+          paidAmount: dashboardSession?.role === 'branch_receptionist' ? 0 : Number(row[10]) || 0,
+          total: dashboardSession?.role === 'branch_receptionist' ? 0 : Number(row[11]) || 0,
           durationMinutes: Number(row[12]) || 0,
           branchAddress: row[13] || '',
           intakeNotes: row[14] || '',
           calendarId: row[15] || '',
           calendarEventId: row[16] || '',
           createdAt: row[17] || '',
-          receiptNumber: row[18] || '',
-          receiptIssuedAt: row[19] || '',
-          receiptEmailStatus: row[20] || '',
+          receiptNumber: dashboardSession?.role === 'branch_receptionist' ? '' : row[18] || '',
+          receiptIssuedAt: dashboardSession?.role === 'branch_receptionist' ? '' : row[19] || '',
+          receiptEmailStatus: dashboardSession?.role === 'branch_receptionist' ? '' : row[20] || '',
           status: row[24] || '',
           statusNotes: row[25] || '',
           isCouple: /couple/i.test(row[5] || ''),
@@ -6891,6 +7224,12 @@ export default async function handler(req, res) {
       if (rowIndex < 0) return res.status(404).json({ message: 'Booking was not found' });
 
       const row = rows[rowIndex];
+      if (dashboardSession?.role === 'branch_manager') {
+        const allowedBranches = await getDashboardBranchNames(sheets, dashboardSession);
+        if (!allowedBranches?.has(String(row[4] || '').trim().toLowerCase())) {
+          return res.status(403).json({ message: 'This booking is outside your assigned branch access.' });
+        }
+      }
       const total = Number(row[11]) || 0;
       if (total <= 0) {
         return res.status(409).json({ message: 'This booking does not have a valid appointment total' });
@@ -7047,7 +7386,7 @@ export default async function handler(req, res) {
       if (!note || note.length > 2000) {
         return res.status(400).json({ message: 'Enter a note of no more than 2,000 characters.' });
       }
-      const ownerSession = getOwnerSession(req);
+      const ownerSession = await getOwnerSession(req);
       await ensureAppointmentNotesSheet(sheets);
       const savedNote = {
         noteId: crypto.randomUUID(),
@@ -7477,8 +7816,11 @@ export default async function handler(req, res) {
     }
     const selectedBranch = (await getBranches(sheets)).find((branch) => branch.active !== false && branch.name === payload.branchName);
     if (!selectedBranch) return res.status(400).json({ message: 'Choose an active branch.' });
+    if (dashboardSession && dashboardSession.role !== 'owner' && !dashboardSession.branchIds.includes(String(selectedBranch.id))) {
+      return res.status(403).json({ message: 'You can only create bookings for your assigned branches.' });
+    }
     const paymentOptions = validateBranchPaymentOptions(selectedBranch);
-    if (!Object.hasOwn(paymentOptions, payload.paymentOption) || (!paymentOptions[payload.paymentOption] && !(payload.paymentOption === 'clinic' && getOwnerSession(req)))) {
+    if (!Object.hasOwn(paymentOptions, payload.paymentOption) || (!paymentOptions[payload.paymentOption] && !(payload.paymentOption === 'clinic' && dashboardSession))) {
       return res.status(400).json({ message: 'This payment option is not available at the selected branch. Review the payment choices again.' });
     }
     const subtotal = Number(payload.subtotalAmount);

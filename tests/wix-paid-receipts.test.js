@@ -5,10 +5,12 @@ import { google } from 'googleapis';
 import { BigQuery } from '@google-cloud/bigquery';
 import { BOOKING_TABLE_FIELDS } from '../lib/booking-schema.js';
 import { validatePackageRegistration } from '../lib/packages.js';
+import { createDashboardChallengeStore, handleDashboardChallengeQuery, readDashboardOtp } from './helpers/dashboard-auth.js';
 
 test('reviewed Wix import produces paid records and actual receipt endpoint issues/emails taxable and exempt receipts', async (t) => {
   Object.assign(process.env, {
     OWNER_ADMIN_PASSWORD: 'synthetic-owner-password-for-tests',
+    OWNER_ADMIN_EMAIL: 'owner@example.com',
     OWNER_ADMIN_SESSION_SECRET: 'synthetic-session-secret-longer-than-thirty-two-characters',
     GOOGLE_SERVICE_ACCOUNT_EMAIL: 'test@example.com',
     GOOGLE_PRIVATE_KEY: 'synthetic-key-never-used-by-mocked-network',
@@ -75,6 +77,7 @@ test('reviewed Wix import produces paid records and actual receipt endpoint issu
   }));
   const records = new Map();
   const packages = new Map();
+  const dashboardChallenges = createDashboardChallengeStore();
   t.mock.method(BigQuery.prototype, 'createQueryJob', async ({ params }) => {
     let inserted = 0;
     for (const record of params.records) {
@@ -86,7 +89,9 @@ test('reviewed Wix import produces paid records and actual receipt endpoint issu
     }];
   });
   t.mock.method(BigQuery.prototype, 'query', async ({ query, params }) => {
-    if (query.includes("COALESCE(calendar_event_id, '') = ''")) {
+    const dashboardAuthResult = handleDashboardChallengeQuery(query, params, dashboardChallenges);
+    if (dashboardAuthResult) return dashboardAuthResult;
+    if (!params?.links && query.includes("COALESCE(calendar_event_id, '') = ''")) {
       const pending = [...records.values()].filter((record) => !record.calendar_event_id && !['Cancelled', 'No Show'].includes(record.status));
       if (query.startsWith('SELECT COUNT')) return [[{ pending: pending.length }]];
       if (query.startsWith('SELECT *')) return [pending.slice(0, 10)];
@@ -103,6 +108,12 @@ test('reviewed Wix import produces paid records and actual receipt endpoint issu
     if (query.startsWith('SELECT * FROM `test-project.booking_system.session_packages`')) return [[packages.get(params.id)].filter(Boolean)];
     if (query.startsWith('SELECT transaction_id')) return [[]];
     if (query.startsWith('BEGIN TRANSACTION')) {
+      if (params.links) {
+        for (const link of params.links) {
+          Object.assign(records.get(link.bookingId), { calendar_id: params.calendarId, calendar_event_id: link.eventId });
+        }
+        return [[]];
+      }
       if (params.where_booking_id) {
         const record = records.get(params.where_booking_id);
         assert.equal(record.intake_notes, params.expected_notes);
@@ -143,7 +154,13 @@ test('reviewed Wix import produces paid records and actual receipt endpoint issu
     await handler(req, res);
     return res;
   };
-  assert.equal((await request('owner-login', { password: process.env.OWNER_ADMIN_PASSWORD })).code, 200);
+  const login = await request('owner-login', { email: process.env.OWNER_ADMIN_EMAIL, password: process.env.OWNER_ADMIN_PASSWORD });
+  assert.equal(login.code, 200);
+  const verified = await request('owner-verify', {
+    challengeId: login.data.challengeId,
+    code: readDashboardOtp(emails.at(-1)),
+  });
+  assert.equal(verified.code, 200);
   const headers = [
     'Session date', 'Start time', 'Registration date', 'Booking contact name', 'Booking contact email',
     'Booking contact phone', 'Client address', 'Spots filled', 'Duration', 'Service name', 'Service type',
@@ -177,7 +194,7 @@ test('reviewed Wix import produces paid records and actual receipt endpoint issu
   assert.deepEqual(imported.data.calendarSync, { synced: 2, pending: 0, errors: [] });
   assert.equal(calendarEvents.length, 2);
   assert.ok(calendarEvents.every((event) => event.sendUpdates === 'none' && /Mapped Therapist/.test(event.requestBody.description)));
-  assert.equal(emails.length, 0);
+  assert.equal(emails.length, 1);
   for (const record of records.values()) {
     assert.match(record.calendar_event_id, /^a11[a-f0-9]{64}$/);
     assert.equal(record.therapist_name, 'Mapped Therapist');
@@ -198,7 +215,7 @@ test('reviewed Wix import produces paid records and actual receipt endpoint issu
     assert.equal(retry.data.alreadyIssued, true);
     assert.equal(retry.data.receipt.number, receipt.number);
   }
-  assert.equal(emails.length, 2);
+  assert.equal(emails.length, 3);
   assert.equal((await request('package-register', { confirmed: false })).code, 400);
   const packageForm = {
     email: 'test0@example.com', customerName: 'Test Client', packageName: 'Package: 90 min x 4 Sessions',
@@ -235,8 +252,8 @@ test('reviewed Wix import produces paid records and actual receipt endpoint issu
   assert.equal(issued.data.receipt.packageUsage.remainingSessions, 3);
   assert.equal(issued.data.receipt.packageUsage.newPayment, 0);
   assert.match(issued.data.receipt.packageUsage.description, /1 session deducted; 3 of 4 sessions remain/);
-  assert.equal(emails.length, 3);
-  const mime = Buffer.from(emails[2].requestBody.raw, 'base64url').toString();
+  assert.equal(emails.length, 4);
+  const mime = Buffer.from(emails[3].requestBody.raw, 'base64url').toString();
   const textBody = mime.match(/Content-Type: text\/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n([\s\S]*?)\r\n--/)[1];
   assert.match(Buffer.from(textBody.replace(/\s/g, ''), 'base64').toString(), /1 session deducted; 3 of 4 sessions remain/);
   const htmlBody = mime.match(/Content-Type: text\/html; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n([\s\S]*?)\r\n--/)[1];

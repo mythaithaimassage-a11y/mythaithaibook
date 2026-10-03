@@ -4,6 +4,7 @@ import { Readable } from 'node:stream';
 import { BigQuery } from '@google-cloud/bigquery';
 import { google } from 'googleapis';
 import { createBookingHistoryStore, CLEAR_HISTORY_CONFIRMATION } from '../lib/booking-history.js';
+import { createDashboardChallengeStore, handleDashboardChallengeQuery, readDashboardOtp } from './helpers/dashboard-auth.js';
 
 const options = {
   projectId: 'test-project', datasetId: 'booking_system', tableId: 'bookings',
@@ -113,7 +114,12 @@ test('preview cutoff is frozen so future and ongoing appointments cannot become 
 test('booking history API enforces owner authentication, same origin, method and explicit confirmation', async (t) => {
   Object.assign(process.env, {
     OWNER_ADMIN_PASSWORD: 'synthetic-owner-password-for-tests',
+    OWNER_ADMIN_EMAIL: 'owner@example.com',
     OWNER_ADMIN_SESSION_SECRET: options.secret,
+    GOOGLE_OAUTH_CLIENT_ID: 'synthetic-client',
+    GOOGLE_OAUTH_CLIENT_SECRET: 'synthetic-secret',
+    GOOGLE_OAUTH_REFRESH_TOKEN: 'synthetic-refresh',
+    GOOGLE_GMAIL_SENDER_EMAIL: 'sender@example.com',
     GOOGLE_SERVICE_ACCOUNT_EMAIL: 'test@example.com',
     GOOGLE_PRIVATE_KEY: 'synthetic-key-not-used',
     BIGQUERY_PROJECT_ID: options.projectId,
@@ -122,10 +128,21 @@ test('booking history API enforces owner authentication, same origin, method and
     GOOGLE_CALENDAR_TIME_ZONE: options.timeZone,
   });
   const db = mockDatabase();
-  t.mock.method(BigQuery.prototype, 'query', db.query.bind(db));
-  t.mock.method(BigQuery.prototype, 'dataset', () => { throw new Error('No table/schema creation permitted'); });
+  const dashboardChallenges = createDashboardChallengeStore();
+  t.mock.method(BigQuery.prototype, 'query', async (args) =>
+    handleDashboardChallengeQuery(args.query, args.params, dashboardChallenges) || db.query(args),
+  );
+  t.mock.method(BigQuery.prototype, 'dataset', () => ({
+    exists: async () => [true],
+    table: () => ({ exists: async () => [true] }),
+    createTable: async () => { throw new Error('No table/schema creation permitted'); },
+  }));
   t.mock.method(google, 'sheets', () => { throw new Error('Do not change contacts or patient records'); });
   t.mock.method(google, 'calendar', () => { throw new Error('Do not delete calendar events'); });
+  const emails = [];
+  t.mock.method(google, 'gmail', () => ({
+    users: { messages: { send: async (options) => { emails.push(options); return { data: { id: 'otp-email' } }; } } },
+  }));
   const { default: handler } = await import('../api/booking.js');
   let cookie = '';
   async function request(view, body = {}, { method = 'POST', origin = 'https://test.example', signedIn = true } = {}) {
@@ -145,7 +162,13 @@ test('booking history API enforces owner authentication, same origin, method and
   for (const view of ['booking-history-preview', 'clear-booking-history']) {
     assert.equal((await request(view)).code, 401);
   }
-  assert.equal((await request('owner-login', { password: process.env.OWNER_ADMIN_PASSWORD })).code, 200);
+  const login = await request('owner-login', { email: process.env.OWNER_ADMIN_EMAIL, password: process.env.OWNER_ADMIN_PASSWORD });
+  assert.equal(login.code, 200);
+  const verified = await request('owner-verify', {
+    challengeId: login.data.challengeId,
+    code: readDashboardOtp(emails.at(-1)),
+  });
+  assert.equal(verified.code, 200);
   for (const view of ['booking-history-preview', 'clear-booking-history']) {
     assert.equal((await request(view, {}, { origin: 'https://evil.example' })).code, 403);
     assert.equal((await request(view, {}, { method: 'GET' })).code, 405);

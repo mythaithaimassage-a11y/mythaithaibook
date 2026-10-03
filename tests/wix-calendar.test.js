@@ -4,6 +4,7 @@ import { Readable } from 'node:stream';
 import { BigQuery } from '@google-cloud/bigquery';
 import { google } from 'googleapis';
 import { isTransientCalendarError, retryCalendarOperation, syncWixCalendarBatch, wixCalendarEvent } from '../lib/wix-calendar.js';
+import { createDashboardChallengeStore, handleDashboardChallengeQuery, readDashboardOtp } from './helpers/dashboard-auth.js';
 
 const options = {
   projectId: 'test-project', datasetId: 'booking_system', tableId: 'bookings',
@@ -367,14 +368,23 @@ test('slow batches stop scheduling new work after 180 seconds and leave it resum
 test('Calendar backfill endpoint enforces owner authentication, method, origin and no-store', async (t) => {
   Object.assign(process.env, {
     OWNER_ADMIN_PASSWORD: 'synthetic-owner-password-for-tests',
+    OWNER_ADMIN_EMAIL: 'owner@example.com',
     OWNER_ADMIN_SESSION_SECRET: 'synthetic-session-secret-longer-than-thirty-two-characters',
+    GOOGLE_OAUTH_CLIENT_ID: 'synthetic-client',
+    GOOGLE_OAUTH_CLIENT_SECRET: 'synthetic-secret',
+    GOOGLE_OAUTH_REFRESH_TOKEN: 'synthetic-refresh',
+    GOOGLE_GMAIL_SENDER_EMAIL: 'sender@example.com',
     GOOGLE_SERVICE_ACCOUNT_EMAIL: 'test@example.com', GOOGLE_PRIVATE_KEY: 'synthetic-key-unused',
     GOOGLE_SPREADSHEET_ID: 'synthetic-spreadsheet',
     BIGQUERY_PROJECT_ID: options.projectId, BIGQUERY_DATASET: options.datasetId,
     BIGQUERY_BOOKINGS_TABLE: options.tableId, GOOGLE_PRIMARY_CALENDAR_ID: options.calendarId,
   });
   const f = fixture();
+  const dashboardChallenges = createDashboardChallengeStore();
+  const emails = [];
   t.mock.method(BigQuery.prototype, 'query', async (args) => {
+    const dashboardAuthResult = handleDashboardChallengeQuery(args.query, args.params, dashboardChallenges);
+    if (dashboardAuthResult) return dashboardAuthResult;
     if (args.query.includes('ORDER BY created_at ASC')) return [f.rows];
     return f.bigquery.query(args);
   });
@@ -405,6 +415,9 @@ test('Calendar backfill endpoint enforces owner authentication, method, origin a
     })) } };
   };
   t.mock.method(google, 'calendar', () => f.calendar);
+  t.mock.method(google, 'gmail', () => ({
+    users: { messages: { send: async (options) => { emails.push(options); return { data: { id: 'otp-email' } }; } } },
+  }));
   const { default: handler } = await import('../api/booking.js');
   let cookie;
   async function request(view, { method = 'POST', origin = 'https://test.example', body = {}, query = {} } = {}) {
@@ -420,7 +433,12 @@ test('Calendar backfill endpoint enforces owner authentication, method, origin a
     return res;
   }
   assert.equal((await request('wix-calendar-sync')).code, 401);
-  assert.equal((await request('owner-login', { body: { password: process.env.OWNER_ADMIN_PASSWORD } })).code, 200);
+  const login = await request('owner-login', { body: { email: process.env.OWNER_ADMIN_EMAIL, password: process.env.OWNER_ADMIN_PASSWORD } });
+  assert.equal(login.code, 200);
+  const verified = await request('owner-verify', {
+    body: { challengeId: login.data.challengeId, code: readDashboardOtp(emails.at(-1)) },
+  });
+  assert.equal(verified.code, 200);
   assert.equal((await request('wix-calendar-sync', { method: 'GET' })).code, 405);
   assert.equal((await request('wix-calendar-sync', { origin: 'https://evil.example' })).code, 403);
   assert.equal((await request('wix-calendar-sync', { body: { excludedIds: ['LIVE-test'] } })).code, 400);

@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Readable } from 'node:stream';
 import { BigQuery } from '@google-cloud/bigquery';
+import { google } from 'googleapis';
 import { createWixContactStore, prepareWixContacts, WIX_CONTACT_FIELDS, MAX_WIX_CSV_BYTES, MAX_WIX_QUERY_BYTES } from '../lib/wix-contacts.js';
+import { createDashboardChallengeStore, handleDashboardChallengeQuery, readDashboardOtp } from './helpers/dashboard-auth.js';
 
 const headers = [
   'First Name', 'Last Name', 'Email 1', 'Email 2', 'Phone 1', 'Phone 2',
@@ -188,9 +190,27 @@ test('search and pagination remain parameterized and validated', async () => {
   await assert.rejects(() => store.list({ search: 'x'.repeat(201) }), { statusCode: 400 });
 });
 
-test('owner-only API protects listing/import and previews without backend credentials or writes', async () => {
+test('owner-only API protects listing/import and previews without backend credentials or writes', async (t) => {
   process.env.OWNER_ADMIN_PASSWORD = 'test-password-for-wix-import';
+  process.env.OWNER_ADMIN_EMAIL = 'owner@example.com';
   process.env.OWNER_ADMIN_SESSION_SECRET = 'test-session-secret-at-least-thirty-two-characters';
+  Object.assign(process.env, {
+    GOOGLE_SERVICE_ACCOUNT_EMAIL: 'test@example.com', GOOGLE_PRIVATE_KEY: 'synthetic-key',
+    GOOGLE_SPREADSHEET_ID: 'test-sheet', BIGQUERY_PROJECT_ID: 'test-project', BIGQUERY_DATASET: 'booking_system',
+    GOOGLE_OAUTH_CLIENT_ID: 'synthetic-client', GOOGLE_OAUTH_CLIENT_SECRET: 'synthetic-secret',
+    GOOGLE_OAUTH_REFRESH_TOKEN: 'synthetic-refresh', GOOGLE_GMAIL_SENDER_EMAIL: 'sender@example.com',
+  });
+  const dashboardChallenges = createDashboardChallengeStore();
+  const emails = [];
+  t.mock.method(BigQuery.prototype, 'dataset', () => ({
+    exists: async () => [true], table: () => ({ exists: async () => [true] }),
+  }));
+  t.mock.method(BigQuery.prototype, 'query', async ({ query, params }) =>
+    handleDashboardChallengeQuery(query, params, dashboardChallenges) || [[]],
+  );
+  t.mock.method(google, 'gmail', () => ({
+    users: { messages: { send: async (options) => { emails.push(options); return { data: { id: 'otp-email' } }; } } },
+  }));
   const { default: handler } = await import('../api/booking.js');
   const request = async (view, { method = 'GET', body, cookie, origin = 'https://test.example' } = {}) => {
     const req = Readable.from(body === undefined ? [] : [Buffer.from(JSON.stringify(body))]);
@@ -208,9 +228,11 @@ test('owner-only API protects listing/import and previews without backend creden
   };
   assert.equal((await request('wix-contacts')).code, 401);
   assert.equal((await request('wix-contacts-import', { method: 'POST', body: { csv: 'invalid' } })).code, 401);
-  const login = await request('owner-login', { method: 'POST', body: { password: process.env.OWNER_ADMIN_PASSWORD } });
+  const login = await request('owner-login', { method: 'POST', body: { email: process.env.OWNER_ADMIN_EMAIL, password: process.env.OWNER_ADMIN_PASSWORD } });
   assert.equal(login.code, 200);
-  const cookie = login.headers['Set-Cookie'].split(';')[0];
+  const verified = await request('owner-verify', { method: 'POST', body: { challengeId: login.data.challengeId, code: readDashboardOtp(emails.at(-1)) } });
+  assert.equal(verified.code, 200);
+  const cookie = verified.headers['Set-Cookie'].split(';')[0];
   assert.equal((await request('wix-contacts-import', { method: 'POST', cookie, origin: 'https://foreign.example' })).code, 403);
   assert.equal((await request('wix-contacts-import', { cookie })).code, 405);
   assert.equal((await request('wix-contacts', { method: 'POST', cookie })).code, 405);

@@ -37,8 +37,10 @@ Configure these Vercel environment variables before using it:
 - `GOOGLE_OAUTH_REFRESH_TOKEN`
 - `PATIENT_HISTORY_SPREADSHEET_ID` (defaults to the dedicated patient-history
   spreadsheet configured for this project)
-- `OWNER_ADMIN_PASSWORD` (strong password for the owner dashboard)
-- `OWNER_ADMIN_SESSION_SECRET` (long random secret used to sign owner sessions)
+- `OWNER_ADMIN_EMAIL` and `OWNER_ADMIN_PASSWORD` (owner dashboard credentials;
+  use a unique password of at least 16 characters)
+- `OWNER_ADMIN_SESSION_SECRET` (at least 32 random characters used to sign
+  dashboard sessions and OTP challenges)
 - `THERAPIST_SESSION_SECRET` (long random secret used to sign HTTP-only
   therapist sessions)
 - `THERAPIST_ACCOUNTS` (JSON array of therapist accounts with scrypt password
@@ -565,9 +567,8 @@ the home page continue to work.
 
 Staff URLs have `X-Robots-Tag: noindex, nofollow` headers to discourage indexing.
 They are not secret URLs, separate private deployments, or network restrictions:
-the login pages remain publicly reachable. Server-side owner and therapist
-authentication still controls access to protected records. No new environment
-variables are needed.
+the login pages remain publicly reachable. Server-side dashboard and therapist
+authentication controls access to protected records.
 
 The Admin Dashboard schedule loads live booking rows from `GET /api/booking`,
 which reads from the BigQuery `bookings` table (see "Booking records in
@@ -575,15 +576,28 @@ BigQuery" below).
 
 The admin dashboard includes a live Google Calendar tab with date and branch
 filters, a native embedded Google Calendar view for
-`mythaithaimassage@gmail.com`, and a filtered appointment list. Owner access
-uses server-side password verification. Set `OWNER_ADMIN_PASSWORD` and
-`OWNER_ADMIN_SESSION_SECRET` in Vercel before deploying the owner dashboard
-changes. Use a unique password of at least 16 characters and generate the
-session secret with `openssl rand -hex 32`. The owner sign-in creates an
-HTTP-only, same-site session that expires after eight hours. Owner-only
-booking reads, calendar, patient-history, business-profile, and loyalty
-management endpoints require this session; public customer booking submissions
-remain unchanged.
+`mythaithaimassage@gmail.com`, and a filtered appointment list. Dashboard
+sign-in requires an account email and password followed by a six-digit OTP
+sent through the configured Gmail sender. Codes expire after 10 minutes and
+allow at most five attempts; sessions expire after eight hours. Set
+`OWNER_ADMIN_EMAIL`, `OWNER_ADMIN_PASSWORD`, and `OWNER_ADMIN_SESSION_SECRET`
+in Vercel. Use a unique owner password of at least 16 characters and generate
+the session secret with `openssl rand -hex 32`.
+
+The owner can create accounts and assign branches in the **Dashboard access**
+section. Staff account password hashes and OTP challenges are stored in the
+BigQuery `dashboard_users` and `dashboard_login_challenges` tables. Initial
+passwords should be shared through a separate secure channel.
+
+- **Owner:** full dashboard access and staff-account administration.
+- **Branch manager:** appointments and sales reporting for assigned branches;
+  no patient medical-history or business-administration access.
+- **Branch receptionist:** assigned-branch appointments and booking creation;
+  no revenue/payment amounts, sales reports, patient records, or settings.
+
+Branch restrictions and protected actions are enforced by the API as well as
+the dashboard UI. Public customer booking submissions remain available without
+a dashboard session.
 
 The owner dashboard's **Google Ads** section provides read-only campaign
 reporting for a selected date range, with campaign search, status filters, and

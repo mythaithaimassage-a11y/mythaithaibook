@@ -2232,10 +2232,13 @@ function TherapistPortal() {
 }
 
 function AdminGate({ children }) {
-  const [authenticated, setAuthenticated] = useState(false);
+  const [dashboardUser, setDashboardUser] = useState(null);
   const [isCheckingSession, setIsCheckingSession] = useState(true);
   const [isSigningIn, setIsSigningIn] = useState(false);
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [challengeId, setChallengeId] = useState('');
+  const [otpCode, setOtpCode] = useState('');
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -2243,7 +2246,7 @@ function AdminGate({ children }) {
       .then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.message || 'Owner sign-in is unavailable.');
-        setAuthenticated(Boolean(data.authenticated));
+        setDashboardUser(data.authenticated ? data.user : null);
       })
       .catch((requestError) => setError(requestError.message || 'Unable to verify owner session.'))
       .finally(() => setIsCheckingSession(false));
@@ -2254,7 +2257,10 @@ function AdminGate({ children }) {
       const response = await fetch('/api/booking?view=owner-logout', { method: 'POST' });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || 'Unable to sign out.');
-      setAuthenticated(false);
+      setDashboardUser(null);
+      setChallengeId('');
+      setOtpCode('');
+      setEmail('');
       setPassword('');
       setError('');
     } catch (requestError) {
@@ -2262,7 +2268,7 @@ function AdminGate({ children }) {
     }
   };
 
-  if (authenticated) {
+  if (dashboardUser) {
     return (
       <div>
         <div className="flex justify-end mb-2">
@@ -2273,7 +2279,7 @@ function AdminGate({ children }) {
             Sign out
           </button>
         </div>
-        {children}
+        {React.cloneElement(children, { dashboardUser })}
       </div>
     );
   }
@@ -2282,7 +2288,7 @@ function AdminGate({ children }) {
     return (
       <div className="mx-auto my-16 max-w-md rounded-3xl border border-slate-200 bg-white p-8 text-center shadow-sm">
         <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-4 border-emerald-100 border-t-emerald-800" />
-        <p className="text-sm font-medium text-slate-600">Verifying secure owner access…</p>
+        <p className="text-sm font-medium text-slate-600">Verifying secure dashboard access…</p>
       </div>
     );
   }
@@ -2294,23 +2300,29 @@ function AdminGate({ children }) {
           <Building className="h-6 w-6" />
         </div>
         <p className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-100">MY THAI THAI</p>
-        <h1 className="mt-2 text-2xl font-bold">Owner sign in</h1>
-        <p className="mt-2 text-sm leading-6 text-emerald-50/80">Sign in to manage your business profile and practice dashboard.</p>
+        <h1 className="mt-2 text-2xl font-bold">Dashboard sign in</h1>
+        <p className="mt-2 text-sm leading-6 text-emerald-50/80">Sign in with your account and verify using a code sent to your email.</p>
       </div>
       <form onSubmit={async (event) => {
         event.preventDefault();
         setIsSigningIn(true);
         setError('');
         try {
-          const response = await fetch('/api/booking?view=owner-login', {
+          const response = await fetch(`/api/booking?view=${challengeId ? 'owner-verify' : 'owner-login'}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ password }),
+            body: JSON.stringify(challengeId ? { challengeId, code: otpCode } : { email, password }),
           });
           const data = await response.json();
           if (!response.ok) throw new Error(data.message || 'Unable to sign in.');
-          setAuthenticated(true);
-          setPassword('');
+          if (data.otpRequired) {
+            setChallengeId(data.challengeId);
+            setPassword('');
+          } else {
+            setDashboardUser(data.user);
+            setPassword('');
+            setOtpCode('');
+          }
         } catch (requestError) {
           setError(requestError.message || 'Unable to sign in.');
         } finally {
@@ -2318,19 +2330,19 @@ function AdminGate({ children }) {
         }
       }} className="space-y-4 p-8">
         {error && <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">{error}</p>}
-        <label htmlFor="owner-password" className="block text-sm font-semibold text-slate-700">Owner password</label>
-        <input
-          id="owner-password"
-          type="password"
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-          autoComplete="current-password"
-          required
-          className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none transition placeholder:text-slate-400 focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100"
-          placeholder="Enter your password"
-        />
+        {!challengeId ? <>
+          <label htmlFor="dashboard-email" className="block text-sm font-semibold text-slate-700">Email</label>
+          <input id="dashboard-email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="username" required className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" placeholder="you@example.com" />
+          <label htmlFor="dashboard-password" className="block text-sm font-semibold text-slate-700">Password</label>
+          <input id="dashboard-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" placeholder="Enter your password" />
+        </> : <>
+          <p role="status" className="rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-900">A six-digit verification code was sent to {email}.</p>
+          <label htmlFor="dashboard-otp" className="block text-sm font-semibold text-slate-700">Email verification code</label>
+          <input id="dashboard-otp" type="text" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} value={otpCode} onChange={(event) => setOtpCode(event.target.value.replace(/\D/g, '').slice(0, 6))} autoComplete="one-time-code" required className="w-full rounded-xl border border-slate-300 px-4 py-3 text-center font-mono text-lg tracking-[0.4em] outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" placeholder="000000" />
+          <button type="button" onClick={() => { setChallengeId(''); setOtpCode(''); setError(''); }} className="text-xs font-semibold text-emerald-800 underline">Back to email and password</button>
+        </>}
         <button type="submit" disabled={isSigningIn} className="w-full rounded-xl bg-emerald-900 py-3 text-sm font-bold text-white shadow-lg shadow-emerald-950/15 transition hover:bg-emerald-800 disabled:cursor-wait disabled:opacity-60">
-          {isSigningIn ? 'Signing in…' : 'Sign in securely'}
+          {isSigningIn ? 'Please wait…' : challengeId ? 'Verify and sign in' : 'Continue to email verification'}
         </button>
         <p className="text-center text-xs leading-5 text-slate-500">Your secure session expires after 8 hours.</p>
       </form>
@@ -4060,10 +4072,18 @@ function AdminPortal({
   setSelectedBranchId,
   lang,
   setLang,
-  onNavigateToBookingPortal
+  onNavigateToBookingPortal,
+  dashboardUser,
 }) {
   const [activeTab, setActiveTab] = useState('schedule');
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [dashboardUsers, setDashboardUsers] = useState([]);
+  const [dashboardUserError, setDashboardUserError] = useState('');
+  const [dashboardUserMessage, setDashboardUserMessage] = useState('');
+  const [savingDashboardUser, setSavingDashboardUser] = useState(false);
+  const [newDashboardUser, setNewDashboardUser] = useState({
+    name: '', email: '', password: '', role: 'branch_manager', branchIds: [],
+  });
   const [branchForm, setBranchForm] = useState(() => branches.map((branch) => ({ ...branch })));
   const [isSavingBranches, setIsSavingBranches] = useState(false);
   const [branchSaveError, setBranchSaveError] = useState('');
@@ -4880,11 +4900,78 @@ function AdminPortal({
     { key: 'thu', label: 'Thu' }, { key: 'fri', label: 'Fri' }, { key: 'sat', label: 'Sat' }, { key: 'sun', label: 'Sun' },
   ];
 
+  const loadDashboardUsers = async () => {
+    setDashboardUserError('');
+    try {
+      const response = await fetch('/api/booking?view=dashboard-users');
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Unable to load dashboard accounts.');
+      setDashboardUsers(data.users || []);
+    } catch (error) {
+      setDashboardUserError(error.message || 'Unable to load dashboard accounts.');
+    }
+  };
+
+  useEffect(() => {
+    if (dashboardUser.role === 'owner' && activeTab === 'dashboard-users') loadDashboardUsers();
+  }, [activeTab, dashboardUser.role]);
+
+  const createDashboardUser = async (event) => {
+    event.preventDefault();
+    setSavingDashboardUser(true);
+    setDashboardUserError('');
+    setDashboardUserMessage('');
+    try {
+      const response = await fetch('/api/booking?view=dashboard-user', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newDashboardUser),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Unable to create dashboard account.');
+      setDashboardUserMessage(`Created ${data.user.role.replaceAll('_', ' ')} access for ${data.user.email}. Share the initial password through a secure channel.`);
+      setNewDashboardUser({ name: '', email: '', password: '', role: 'branch_manager', branchIds: [] });
+      await loadDashboardUsers();
+    } catch (error) {
+      setDashboardUserError(error.message || 'Unable to create dashboard account.');
+    } finally {
+      setSavingDashboardUser(false);
+    }
+  };
+
+  const updateDashboardUserStatus = async (account) => {
+    const status = account.status === 'active' ? 'disabled' : 'active';
+    if (status === 'disabled' && !window.confirm(`Disable dashboard access for ${account.email}?`)) return;
+    setDashboardUserError('');
+    try {
+      const response = await fetch('/api/booking?view=dashboard-user-status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: account.id, status }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Unable to update dashboard account.');
+      setDashboardUsers((current) => current.map((user) => user.id === account.id ? { ...user, status: data.status } : user));
+    } catch (error) {
+      setDashboardUserError(error.message || 'Unable to update dashboard account.');
+    }
+  };
+
   const t = TRANSLATIONS[lang];
 
-  const selectedBranchName = selectedBranchId === 'all'
+  const assignedBranchIds = new Set((dashboardUser.branchIds || []).map(String));
+  const effectiveSelectedBranchId = dashboardUser.role === 'owner' || selectedBranchId === 'all'
+    || assignedBranchIds.has(String(selectedBranchId))
+    ? selectedBranchId
+    : 'all';
+  useEffect(() => {
+    if (dashboardUser.role !== 'owner' && selectedBranchId !== 'all' && !assignedBranchIds.has(String(selectedBranchId))) {
+      setSelectedBranchId('all');
+    }
+  }, [dashboardUser.role, selectedBranchId, dashboardUser.branchIds]);
+  const selectedBranchName = effectiveSelectedBranchId === 'all'
     ? ''
-    : branches.find((branch) => String(branch.id) === String(selectedBranchId))?.name || '';
+    : branches.find((branch) => String(branch.id) === String(effectiveSelectedBranchId))?.name || '';
   const dashboardBookings = useMemo(
     () => bookings.filter((booking) => !selectedBranchName || booking.branchName === selectedBranchName),
     [bookings, selectedBranchName],
@@ -4893,11 +4980,11 @@ function AdminPortal({
     () => therapists.filter((therapist) => {
       if (therapist.active === false) return false;
       if (!selectedBranchName) return true;
-      const branchId = String(selectedBranchId);
+      const branchId = String(effectiveSelectedBranchId);
       return (therapist.branches || []).some((id) => String(id) === branchId)
         || Object.values(therapist.schedule || {}).some((id) => String(id) === branchId);
     }),
-    [therapists, selectedBranchId, selectedBranchName],
+    [therapists, effectiveSelectedBranchId, selectedBranchName],
   );
   const totalRevenue = useMemo(
     () => dashboardBookings.reduce((sum, booking) => sum + (Number(booking.total) || 0), 0),
@@ -5703,13 +5790,24 @@ function AdminPortal({
     { id: 'wix-bookings', label: 'Wix bookings import', icon: Database, section: 'Manage' },
     { id: 'packages', label: 'Package tracking', icon: Layers, section: 'Grow' },
     { id: 'therapist-approvals', label: 'Therapist approvals', icon: UserCheck, section: 'Manage', badge: pendingTherapistAccounts.length },
+    { id: 'dashboard-users', label: 'Dashboard access', icon: ShieldCheck, section: 'Manage' },
     { id: 'business-profile', label: 'Business profile', icon: Building, section: 'Manage' },
     { id: 'loyalty', label: 'Loyalty program', icon: Award, section: 'Grow' },
     { id: 'marketing', label: 'Email marketing', icon: Megaphone, section: 'Grow' },
     { id: 'google-ads', label: 'Google Ads', icon: TrendingUp, section: 'Grow' },
     { id: 'reviews', label: 'Google Reviews', icon: Star, section: 'Grow' },
   ];
-  const navigationSections = ['Workspace', 'Manage', 'Grow'];
+  const visibleAdminNavigation = adminNavigation.filter((item) => {
+    if (dashboardUser.role === 'owner') return true;
+    if (item.id === 'schedule' || item.id === 'calendar') return true;
+    if (dashboardUser.role === 'branch_manager' && item.id === 'reports') return true;
+    return false;
+  });
+  const navigationSections = [...new Set(visibleAdminNavigation.map((item) => item.section))];
+  const dashboardBranches = dashboardUser.role === 'owner'
+    ? branches
+    : branches.filter((branch) => assignedBranchIds.has(String(branch.id)));
+  const isBranchReceptionist = dashboardUser.role === 'branch_receptionist';
   const pageTitle = {
     schedule: t.schedule,
     calendar: 'Booking Calendar',
@@ -5748,9 +5846,9 @@ function AdminPortal({
             <div key={section} className="mb-5">
               <p className="px-3 pb-2 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">{section}</p>
               <div className="space-y-1">
-                {adminNavigation.filter((item) => item.section === section).map((item, index) => {
+                {visibleAdminNavigation.filter((item) => item.section === section).map((item, index) => {
                   const Icon = item.icon;
-                  const selected = activeTab === item.id && !adminNavigation.slice(0, adminNavigation.indexOf(item)).some((prior) => prior.id === item.id && prior.section === section);
+                  const selected = activeTab === item.id && !visibleAdminNavigation.slice(0, visibleAdminNavigation.indexOf(item)).some((prior) => prior.id === item.id && prior.section === section);
                   return (
                     <button
                       key={`${item.section}-${item.label}-${index}`}
@@ -5799,7 +5897,7 @@ function AdminPortal({
           </div>
           {mobileNavOpen && (
             <nav aria-label="Mobile owner dashboard navigation" className="mt-3 grid grid-cols-2 gap-1 border-t border-slate-100 pt-3 sm:grid-cols-3">
-              {adminNavigation.map((item, index) => {
+              {visibleAdminNavigation.map((item, index) => {
                 const Icon = item.icon;
                 return <button key={`${item.label}-${index}`} onClick={() => { setActiveTab(item.id); setMobileNavOpen(false); }} className={`flex items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-semibold ${activeTab === item.id ? 'bg-emerald-950 text-white' : 'text-slate-600 hover:bg-slate-100'}`}><Icon className="h-4 w-4" />{item.label}{item.badge > 0 && <span className="ml-auto rounded-full bg-amber-400 px-1.5 text-[10px] font-bold text-slate-950">{item.badge}</span>}</button>;
               })}
@@ -5837,8 +5935,8 @@ function AdminPortal({
         </div>
         <div className="relative z-10 mt-6 flex flex-wrap items-center gap-2 border-t border-white/15 pt-5">
           <span className="mr-1 text-[11px] font-semibold uppercase tracking-wide text-emerald-100/70">Location</span>
-          <button onClick={() => setSelectedBranchId('all')} className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${selectedBranchId === 'all' ? 'bg-white text-emerald-950' : 'text-white/80 hover:bg-white/10'}`}>{t.allBranches}</button>
-          {branches.map((branch) => (
+          <button onClick={() => setSelectedBranchId('all')} className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${selectedBranchId === 'all' ? 'bg-white text-emerald-950' : 'text-white/80 hover:bg-white/10'}`}>{dashboardUser.role === 'owner' ? t.allBranches : 'Assigned branches'}</button>
+          {dashboardBranches.map((branch) => (
             <button key={branch.id} onClick={() => setSelectedBranchId(branch.id)} className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${selectedBranchId === branch.id ? 'bg-white text-emerald-950' : 'text-white/80 hover:bg-white/10'}`}>{branch.name}</button>
           ))}
           <span className="ml-auto hidden text-xs text-emerald-100/70 sm:inline">Practice & branch management</span>
@@ -5846,7 +5944,8 @@ function AdminPortal({
       </section>
 
       {/* Admin KPI Stat Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className={`grid grid-cols-2 gap-4 ${isBranchReceptionist ? 'md:grid-cols-2' : 'md:grid-cols-4'}`}>
+        {!isBranchReceptionist && <>
         <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
           <div className="flex items-center justify-between"><div className="text-xs font-semibold text-slate-500">{t.revenueToday}</div><span className="rounded-xl bg-emerald-50 p-2 text-emerald-800"><TrendingUp className="h-4 w-4" /></span></div>
           <div className="mt-3 text-2xl font-bold tracking-tight text-emerald-900">${totalRevenue.toFixed(2)}</div>
@@ -5867,11 +5966,85 @@ function AdminPortal({
           <div className="mt-3 text-2xl font-bold tracking-tight text-slate-900">${hstCollected.toFixed(2)}</div>
           <div className="mt-1 text-[11px] text-slate-400">{selectedBranchName || 'All branches'} · Estimated Ontario HST</div>
         </div>
+        </>}
+        {isBranchReceptionist && <>
+          <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm">
+            <div className="flex items-center justify-between"><div className="text-xs font-semibold text-slate-500">{t.appointmentsToday}</div><span className="rounded-xl bg-blue-50 p-2 text-blue-800"><CalendarIcon className="h-4 w-4" /></span></div>
+            <div className="mt-3 text-2xl font-bold tracking-tight text-slate-900">{dashboardBookings.length}</div>
+            <div className="mt-1 text-[11px] text-slate-400">{selectedBranchName || 'Assigned branches'}</div>
+          </div>
+          <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm">
+            <div className="flex items-center justify-between"><div className="text-xs font-semibold text-slate-500">Active staff</div><span className="rounded-xl bg-amber-50 p-2 text-amber-800"><Users className="h-4 w-4" /></span></div>
+            <div className="mt-3 text-2xl font-bold tracking-tight text-slate-900">{dashboardTherapists.length}</div>
+            <div className="mt-1 text-[11px] text-slate-400">{selectedBranchName || 'Assigned branches'}</div>
+          </div>
+        </>}
       </div>
 
       {activeTab === 'wix-contacts' && <WixContacts />}
       {activeTab === 'wix-bookings' && <WixBookings onViewBookings={() => setActiveTab('schedule')} />}
       {activeTab === 'packages' && <PackageTracking onViewBookings={() => setActiveTab('schedule')} />}
+
+      {activeTab === 'dashboard-users' && dashboardUser.role === 'owner' && (
+        <section className="space-y-5">
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 className="text-lg font-bold text-slate-950">Dashboard access</h2>
+            <p className="mt-1 text-sm text-slate-600">Create role-limited accounts. Every account must verify sign-in with a one-time code sent to its email address.</p>
+            <form onSubmit={createDashboardUser} className="mt-4 grid gap-3 sm:grid-cols-2">
+              <label className="text-xs font-semibold text-slate-600">Name
+                <input required maxLength={120} value={newDashboardUser.name} onChange={(event) => setNewDashboardUser((current) => ({ ...current, name: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm" />
+              </label>
+              <label className="text-xs font-semibold text-slate-600">Email
+                <input required type="email" value={newDashboardUser.email} onChange={(event) => setNewDashboardUser((current) => ({ ...current, email: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm" />
+              </label>
+              <label className="text-xs font-semibold text-slate-600">Initial password (at least 12 characters)
+                <input required type="password" minLength={12} autoComplete="new-password" value={newDashboardUser.password} onChange={(event) => setNewDashboardUser((current) => ({ ...current, password: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm" />
+              </label>
+              <label className="text-xs font-semibold text-slate-600">Role
+                <select value={newDashboardUser.role} onChange={(event) => setNewDashboardUser((current) => ({ ...current, role: event.target.value, branchIds: event.target.value === 'owner' ? [] : current.branchIds }))} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm">
+                  <option value="owner">Owner</option>
+                  <option value="branch_manager">Branch manager</option>
+                  <option value="branch_receptionist">Branch receptionist</option>
+                </select>
+              </label>
+              {newDashboardUser.role !== 'owner' && <fieldset className="sm:col-span-2">
+                <legend className="text-xs font-semibold text-slate-600">Assigned branches</legend>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {branches.map((branch) => {
+                    const id = String(branch.id);
+                    const checked = newDashboardUser.branchIds.includes(id);
+                    return <label key={id} className={`inline-flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-xs ${checked ? 'border-emerald-700 bg-emerald-50 text-emerald-900' : 'border-slate-200 text-slate-600'}`}>
+                      <input type="checkbox" checked={checked} onChange={() => setNewDashboardUser((current) => ({ ...current, branchIds: checked ? current.branchIds.filter((value) => value !== id) : [...current.branchIds, id] }))} />
+                      {branch.name}
+                    </label>;
+                  })}
+                </div>
+              </fieldset>}
+              <button type="submit" disabled={savingDashboardUser} className="rounded-lg bg-emerald-950 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50 sm:col-span-2 sm:w-fit">{savingDashboardUser ? 'Creating…' : 'Create dashboard account'}</button>
+            </form>
+            <p className="mt-3 text-xs leading-5 text-slate-500">The owner sets the initial password. Share it separately through a secure channel; the account’s email is used for sign-in and OTP delivery.</p>
+            {dashboardUserMessage && <p role="status" className="mt-3 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-900">{dashboardUserMessage}</p>}
+            {dashboardUserError && <p role="alert" className="mt-3 rounded-lg bg-rose-50 p-3 text-sm text-rose-800">{dashboardUserError}</p>}
+          </div>
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-sm font-bold text-slate-900">Staff accounts</h3>
+              <button type="button" onClick={loadDashboardUsers} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">Refresh</button>
+            </div>
+            <div className="mt-3 divide-y divide-slate-100">
+              {dashboardUsers.length ? dashboardUsers.map((account) => (
+                <div key={account.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-slate-900">{account.name} · {account.email}</p>
+                    <p className="mt-1 text-xs capitalize text-slate-500">{account.role.replaceAll('_', ' ')} · {account.branchIds.map((id) => branches.find((branch) => String(branch.id) === String(id))?.name).filter(Boolean).join(', ') || 'All branches'} · {account.status}</p>
+                  </div>
+                  <button type="button" onClick={() => updateDashboardUserStatus(account)} className={`rounded-lg px-3 py-2 text-xs font-bold ${account.status === 'active' ? 'border border-rose-200 text-rose-700 hover:bg-rose-50' : 'border border-emerald-200 text-emerald-800 hover:bg-emerald-50'}`}>{account.status === 'active' ? 'Disable access' : 'Restore access'}</button>
+                </div>
+              )) : <p className="py-4 text-sm text-slate-500">No staff accounts have been created.</p>}
+            </div>
+          </div>
+        </section>
+      )}
 
       {/* TAB CONTENT: SCHEDULE */}
       {activeTab === 'schedule' && (
@@ -5906,7 +6079,7 @@ function AdminPortal({
               {deleteBookingError}
             </div>
           )}
-          <ClearBookingHistory onCleared={loadBookingsFromBackend} />
+          {dashboardUser.role === 'owner' && <ClearBookingHistory onCleared={loadBookingsFromBackend} />}
 
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs sm:text-sm">
@@ -5918,8 +6091,8 @@ function AdminPortal({
                   <th className="p-3">Therapist</th>
                   <th className="p-3">Time</th>
                   <th className="p-3"><span className="inline-flex items-center gap-1.5"><Database className="w-3.5 h-3.5" /> Database</span></th>
-                  <th className="p-3">Total</th>
-                  <th className="p-3">Actions</th>
+                  {!isBranchReceptionist && <th className="p-3">Total</th>}
+                  {dashboardUser.role === 'owner' && <th className="p-3">Actions</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-stone-100">
@@ -5944,8 +6117,8 @@ function AdminPortal({
                         </span>
                       )}
                     </td>
-                    <td className="p-3 font-bold text-stone-900">${b.total.toFixed(2)}</td>
-                    <td className="p-3">
+                    {!isBranchReceptionist && <td className="p-3 font-bold text-stone-900">${b.total.toFixed(2)}</td>}
+                    {dashboardUser.role === 'owner' && <td className="p-3">
                       <button
                         onClick={() => deleteBooking(b.id)}
                         disabled={deletingBookingId === b.id}
@@ -5953,7 +6126,7 @@ function AdminPortal({
                       >
                         {deletingBookingId === b.id ? 'Removing...' : 'Clear'}
                       </button>
-                    </td>
+                    </td>}
                   </tr>
                 ))}
               </tbody>
@@ -5978,7 +6151,7 @@ function AdminPortal({
                 Branch
                 <select value={calendarBranch} onChange={(event) => setCalendarBranch(event.target.value)} className="block mt-1 p-2 rounded-lg border border-stone-300">
                   <option value="all">All branches</option>
-                  {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
+                  {dashboardBranches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
                 </select>
               </label>
               <label className="text-xs font-semibold text-stone-600">
