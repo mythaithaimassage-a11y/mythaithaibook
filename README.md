@@ -325,13 +325,25 @@ be enabled. Original or owner-mapped therapist names appear in event description
 Cancelled/no-show bookings are not added. No attendees, email invitations, or
 reminders are created. Times use `GOOGLE_CALENDAR_TIME_ZONE`.
 
-The import starts a batch of up to ten pending bookings, and the owner UI
+The import starts a batch of up to 25 pending bookings, with at most five
+Calendar writes in flight and one guarded BigQuery transaction per batch
+(rather than a database transaction per booking). Calendar writes have a
+10-second request timeout; batches stop starting new writes after 15 seconds.
+Permission/quota/network failures stop new work and are reported explicitly.
+Invalid individual bookings are reported without blocking other valid bookings;
+the current run excludes failed IDs from later batches, but retrying a new run
+checks them again. Remaining counts exclude these reported failures.
+The owner UI
 continues batches via owner-only, same-origin POST `view=wix-calendar-sync`.
 Keep the page open until complete. **Sync existing Wix bookings to Calendar**
 backfills older imports or resumes interrupted/failed syncs without a new CSV.
 The owner **Live Google Calendar** tab also provides **Sync Wix bookings**,
 using the same resumable flow. It shows progress and refreshes the dashboard's
-calendar and booking list after completion or partial failure. Sync applies to
+calendar and booking list during sync (at most once every 10 seconds), as well
+as after completion or partial failure. The visible calendar tab also reloads
+every 15 seconds and when returning to the tab, without overlapping poll requests.
+Calendar reads follow all event pages so busy days do not silently lose appointments.
+Sync applies to
 all pending Wix dates/branches, not just the selected calendar filters. Select
 the historical appointment date to see its events in the day view.
 Progress and errors are explicit; an import can save database rows even when

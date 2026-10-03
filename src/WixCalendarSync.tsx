@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { readWixResponse } from './wixImportApi';
 import { runWixCalendarSync, type CalendarSync } from './runWixCalendarSync';
 
@@ -6,6 +6,8 @@ export default function WixCalendarSync({ onSynced }: { onSynced: () => Promise<
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState('');
   const [error, setError] = useState('');
+  const refresh = useRef(onSynced);
+  useEffect(() => { refresh.current = onSynced; }, [onSynced]);
 
   async function sync() {
     if (busy) return;
@@ -13,19 +15,24 @@ export default function WixCalendarSync({ onSynced }: { onSynced: () => Promise<
     setError('');
     setProgress('Syncing Wix bookings to the primary Google Calendar...');
     try {
-      const result = await runWixCalendarSync(async () => {
+      let lastRefresh = 0;
+      const result = await runWixCalendarSync(async (excludedIds = []) => {
         const response = await fetch('/api/booking?view=wix-calendar-sync', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ excludedIds }),
         });
         return readWixResponse<CalendarSync>(response);
-      }, ({ synced, pending }) => {
+      }, async ({ synced, pending }) => {
         setProgress(`${synced} Wix bookings synced in this run; ${pending ?? 'unknown'} remaining.`);
+        if (synced > 0 && Date.now() - lastRefresh >= 10000) {
+          lastRefresh = Date.now();
+          await refresh.current();
+        }
       });
       setProgress(`Wix Calendar sync complete: ${result.synced} bookings synced. Select the appointment date to view historical visits.`);
-      await onSynced();
+      await refresh.current();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'Unable to sync Wix bookings. Retry to resume.');
-      await onSynced();
+      await refresh.current();
     } finally {
       setBusy(false);
     }

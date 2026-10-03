@@ -65,9 +65,9 @@ export default function WixBookings({ onViewBookings }: { onViewBookings: () => 
   const [therapistMappings, setTherapistMappings] = useState<TherapistMapping[]>([]);
   const [calendarMessage, setCalendarMessage] = useState('');
 
-  const requestCalendarSync = async (): Promise<CalendarSync> => {
+  const requestCalendarSync = async (excludedIds: string[] = []): Promise<CalendarSync> => {
     const response = await fetch('/api/booking?view=wix-calendar-sync', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ excludedIds }),
     });
     return readWixResponse<CalendarSync>(response);
   };

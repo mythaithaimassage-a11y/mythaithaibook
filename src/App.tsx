@@ -1,7 +1,7 @@
 // The existing single-file app predates the strict TypeScript project setup.
 // Keep its runtime behavior unchanged while the app is incrementally typed.
 // @ts-nocheck
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { 
   Calendar as CalendarIcon, Clock, User, MapPin, CreditCard, CheckCircle2, Globe, Settings, 
   Plus, Edit, Trash2, Building, FileText, Phone, Mail, Search, Filter, 
@@ -4212,6 +4212,7 @@ function AdminPortal({
   const [calendarUrl, setCalendarUrl] = useState('');
   const [calendarWarnings, setCalendarWarnings] = useState([]);
   const [calendarUnavailability, setCalendarUnavailability] = useState([]);
+  const calendarRequest = useRef<AbortController | null>(null);
   const [unavailabilityBlocks, setUnavailabilityBlocks] = useState([]);
   const [isLoadingUnavailability, setIsLoadingUnavailability] = useState(false);
   const [unavailabilityLoadError, setUnavailabilityLoadError] = useState('');
@@ -5364,27 +5365,47 @@ function AdminPortal({
   };
 
   const loadCalendar = async () => {
+    calendarRequest.current?.abort();
+    const controller = new AbortController();
+    calendarRequest.current = controller;
     setIsLoadingCalendar(true);
     setCalendarLoadError('');
     try {
       const branch = calendarBranch === 'all' ? '' : branches.find((item) => String(item.id) === calendarBranch)?.address || '';
       const therapist = calendarTherapist === 'all' ? '' : therapists.find((item) => String(item.id) === calendarTherapist)?.name || '';
-      const response = await fetch(`/api/booking?view=calendar&date=${encodeURIComponent(calendarDate)}&branch=${encodeURIComponent(branch)}&therapist=${encodeURIComponent(therapist)}`);
+      const response = await fetch(`/api/booking?view=calendar&date=${encodeURIComponent(calendarDate)}&branch=${encodeURIComponent(branch)}&therapist=${encodeURIComponent(therapist)}`, {
+        signal: controller.signal, cache: 'no-store',
+      });
       const data = await response.json();
+      if (controller.signal.aborted) return;
       if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
       setCalendarEvents(data.events || []);
       setCalendarUrl(data.calendarUrl || '');
       setCalendarWarnings(data.errors || []);
       setCalendarUnavailability(data.unavailability || []);
     } catch (error) {
-      setCalendarLoadError(error.message || 'Unable to load Google Calendar events');
+      if (!controller.signal.aborted) setCalendarLoadError(error.message || 'Unable to load Google Calendar events');
     } finally {
-      setIsLoadingCalendar(false);
+      if (calendarRequest.current === controller) {
+        calendarRequest.current = null;
+        setIsLoadingCalendar(false);
+      }
     }
   };
 
   useEffect(() => {
-    if (activeTab === 'calendar') loadCalendar();
+    if (activeTab !== 'calendar') return;
+    void loadCalendar();
+    const refresh = () => {
+      if (!document.hidden && !calendarRequest.current) void loadCalendar();
+    };
+    const interval = window.setInterval(refresh, 15000);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener('visibilitychange', refresh);
+      calendarRequest.current?.abort();
+    };
   }, [activeTab, calendarDate, calendarBranch, calendarTherapist]);
 
   const loadUnavailability = async () => {
@@ -5919,7 +5940,7 @@ function AdminPortal({
             </div>
           </div>
           <p className="text-xs text-stone-500">
-            This live visual uses the same Google Calendar events and the same date, branch, and therapist filters as the appointment list below.
+            Updates automatically every 15 seconds while this tab is visible. This live visual uses the same Google Calendar events and the same date, branch, and therapist filters as the appointment list below.
           </p>
           <div className="flex flex-wrap gap-3 items-center rounded-xl bg-stone-50 border border-stone-200 px-3 py-2">
             <span className="text-xs font-bold text-stone-700">Therapists:</span>

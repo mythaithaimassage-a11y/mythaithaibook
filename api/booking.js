@@ -4042,19 +4042,24 @@ export default async function handler(req, res) {
     if (req.method === 'POST' && ['wix-contacts-import', 'wix-bookings-import', ...packageViews, ...wixCalendarViews].includes(view) && !isSameOriginRequest(req)) {
       return res.status(403).json({ message: 'Wix import origin is not allowed' });
     }
-    const syncWixCalendar = () => {
+    const syncWixCalendar = (excludedIds = []) => {
       const calendarAuth = new google.auth.GoogleAuth({
         credentials: { client_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL, private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n') },
         scopes: ['https://www.googleapis.com/auth/calendar'],
       });
       return syncWixCalendarBatch(getBigQueryClient(), google.calendar({ version: 'v3', auth: calendarAuth }), {
         projectId: BIGQUERY_PROJECT_ID, datasetId: BIGQUERY_DATASET_ID, tableId: BIGQUERY_BOOKINGS_TABLE,
-        calendarId: PRIMARY_CALENDAR_ID, timeZone: CALENDAR_TIME_ZONE,
+        calendarId: PRIMARY_CALENDAR_ID, timeZone: CALENDAR_TIME_ZONE, excludedIds,
       });
     };
     if (wixCalendarViews.includes(view)) {
       if (req.method !== 'POST') return res.status(405).json({ message: 'Method Not Allowed' });
-      return res.status(200).json(await syncWixCalendar());
+      const excludedIds = req.body?.excludedIds ?? [];
+      if (!Array.isArray(excludedIds) || excludedIds.length > 100 ||
+          excludedIds.some((id) => typeof id !== 'string' || !id.startsWith('WIX-') || id.length > 100)) {
+        return res.status(400).json({ message: 'Calendar sync exclusions must contain at most 100 valid Wix booking IDs.' });
+      }
+      return res.status(200).json(await syncWixCalendar(excludedIds));
     }
     if (packageViews.includes(view)) {
       if ((view === 'packages' && req.method !== 'GET') || (view !== 'packages' && req.method !== 'POST')) return res.status(405).json({ message: 'Method Not Allowed' });
@@ -6382,14 +6387,22 @@ export default async function handler(req, res) {
         for (const calendarId of calendarIds) {
           try {
             const calendar = calendars.data.items?.find((item) => item.id === calendarId);
-            const result = await calendarApi.events.list({
-              calendarId,
-              timeMin: `${shiftDate(date, -1)}T00:00:00Z`,
-              timeMax: `${shiftDate(date, 2)}T00:00:00Z`,
-              singleEvents: true,
-              orderBy: 'startTime',
-            });
-            for (const event of result.data.items || []) {
+            const items = [];
+            let pageToken;
+            do {
+              const result = await calendarApi.events.list({
+                calendarId,
+                timeMin: `${shiftDate(date, -1)}T00:00:00Z`,
+                timeMax: `${shiftDate(date, 2)}T00:00:00Z`,
+                singleEvents: true,
+                orderBy: 'startTime',
+                maxResults: 2500,
+                pageToken,
+              }, { timeout: 10000 });
+              items.push(...(result.data.items || []));
+              pageToken = result.data.nextPageToken;
+            } while (pageToken);
+            for (const event of items) {
               const location = event.location || '';
               const start = event.start?.dateTime || event.start?.date || '';
               const end = event.end?.dateTime || event.end?.date || '';

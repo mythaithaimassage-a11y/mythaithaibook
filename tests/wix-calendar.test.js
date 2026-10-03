@@ -21,25 +21,35 @@ function fixture(rows = [{ ...booking }]) {
   const events = new Map();
   const writes = [];
   const bigquery = {
-    async query({ query, params }) {
+    async query({ query, params = {} }) {
       queries.push({ query, params });
       assert.match(query, /STARTS_WITH\(booking_id, 'WIX-'\)/);
       assert.match(query, /COALESCE\(calendar_event_id, ''\) = ''/);
       assert.match(query, /NOT IN \('Cancelled', 'No Show'\)/);
       assert.doesNotMatch(query, /CREATE|ALTER|DELETE|INSERT|paid_amount =|total =/);
-      const pending = rows.filter((row) => row.booking_id.startsWith('WIX-') && !row.calendar_event_id && !['Cancelled', 'No Show'].includes(row.status));
+      const pending = rows.filter((row) => row.booking_id.startsWith('WIX-') && !row.calendar_event_id &&
+        !['Cancelled', 'No Show'].includes(row.status) && !params.excludedIds?.includes(row.booking_id));
       if (query.startsWith('SELECT COUNT')) return [[{ pending: pending.length }]];
-      if (query.startsWith('SELECT')) return [pending.slice(0, 10)];
+      if (query.startsWith('SELECT')) return [pending.slice(0, 25).map((row) => ({ ...row }))];
       assert.match(query, /BEGIN TRANSACTION/);
       assert.match(query, /ASSERT/);
-      const row = rows.find((row) => row.booking_id === params.bookingId);
-      assert.equal(params.therapist, row.therapist_name);
-      Object.assign(row, { calendar_id: params.calendarId, calendar_event_id: params.eventId });
+      assert.match(query, /ARRAY_LENGTH\(@links\)/);
+      for (const link of params.links) {
+        const matching = pending.filter((row) => row.booking_id === link.bookingId &&
+          row.date === link.expectedDate && row.time === link.expectedTime && row.duration_minutes === link.duration &&
+          row.therapist_name === link.therapist && row.status === link.expectedStatus);
+        if (matching.length !== 1) throw new Error('Booking changed during Calendar sync; refresh and retry');
+      }
+      for (const link of params.links) {
+        const row = rows.find((row) => row.booking_id === link.bookingId);
+        Object.assign(row, { calendar_id: params.calendarId, calendar_event_id: link.eventId });
+      }
       return [[]];
     },
   };
   const calendar = { events: {
-    async insert(args) {
+    async insert(args, requestOptions) {
+      assert.deepEqual(requestOptions, { timeout: 10000, retry: false });
       writes.push(args);
       if (events.has(args.requestBody.id)) throw Object.assign(new Error('Already exists'), { code: 409 });
       events.set(args.requestBody.id, args.requestBody);
@@ -66,13 +76,15 @@ test('Wix event uses clinic timezone, mapped therapist and correct midnight dura
 });
 
 test('bounded backfill only creates pending Wix events and saves existing schema links; retry skips them', async () => {
-  const rows = Array.from({ length: 12 }, (_, i) => ({ ...booking, booking_id: `WIX-${i}` }));
+  const rows = Array.from({ length: 27 }, (_, i) => ({ ...booking, booking_id: `WIX-${i}` }));
   rows.push({ ...booking, booking_id: 'LIVE-test' }, { ...booking, status: 'Cancelled' }, { ...booking, status: 'No Show' });
   const f = fixture(rows);
-  assert.deepEqual(await syncWixCalendarBatch(f.bigquery, f.calendar, options), { synced: 10, pending: 2, errors: [] });
+  assert.deepEqual(await syncWixCalendarBatch(f.bigquery, f.calendar, options), { synced: 25, pending: 2, errors: [] });
+  assert.equal(f.queries.length, 3);
+  assert.equal(f.queries.filter(({ query }) => query.startsWith('BEGIN')).length, 1);
   assert.deepEqual(await syncWixCalendarBatch(f.bigquery, f.calendar, options), { synced: 2, pending: 0, errors: [] });
   assert.deepEqual(await syncWixCalendarBatch(f.bigquery, f.calendar, options), { synced: 0, pending: 0, errors: [] });
-  assert.equal(f.events.size, 12);
+  assert.equal(f.events.size, 27);
   for (const write of f.writes) {
     assert.match(write.requestBody.id, /^a11[a-f0-9]{64}$/);
     assert.match(write.requestBody.id, /^[0-9a-v]{5,1024}$/);
@@ -90,7 +102,8 @@ test('failed database linking recovers the existing deterministic event without 
     return originalQuery(args);
   };
   const first = await syncWixCalendarBatch(f.bigquery, f.calendar, options);
-  assert.equal(first.pending, 1);
+  assert.equal(first.pending, 0);
+  assert.equal(first.stopped, true);
   assert.equal(first.errors[0].message, 'Concurrent booking change');
   assert.equal(f.events.size, 1);
   f.rows[0].therapist_name = 'Corrected therapist';
@@ -105,7 +118,8 @@ test('Calendar permission failures remain pending and never save success-shaped 
   f.calendar.events.insert = async () => { throw Object.assign(new Error('Calendar access denied'), { code: 403 }); };
   const result = await syncWixCalendarBatch(f.bigquery, f.calendar, options);
   assert.equal(result.synced, 0);
-  assert.equal(result.pending, 1);
+  assert.equal(result.pending, 0);
+  assert.equal(result.stopped, true);
   assert.equal(result.errors[0].message, 'Calendar access denied');
   assert.equal(f.rows[0].calendar_event_id, '');
   assert.equal(f.queries.filter(({ query }) => query.startsWith('BEGIN')).length, 0);
@@ -121,6 +135,102 @@ test('conflicting or deleted deterministic events are not overwritten or linked'
     assert.match(result.errors[0].message, /Reconcile/);
     assert.equal(f.rows[0].calendar_event_id, '');
   }
+});
+
+test('25 Calendar writes run in five bounded parallel waves with one database transaction', { timeout: 2000 }, async () => {
+  const f = fixture(Array.from({ length: 25 }, (_, i) => ({ ...booking, booking_id: `WIX-${i}` })));
+  const insert = f.calendar.events.insert;
+  let active = 0;
+  let peak = 0;
+  let waves = 0;
+  const waiting = [];
+  f.calendar.events.insert = async (...args) => {
+    active += 1;
+    peak = Math.max(peak, active);
+    await new Promise((resolve) => {
+      waiting.push(resolve);
+      if (waiting.length === 5) {
+        waves += 1;
+        for (const release of waiting.splice(0)) release();
+      }
+    });
+
+    const result = await insert(...args);
+    active -= 1;
+    return result;
+  };
+  const result = await syncWixCalendarBatch(f.bigquery, f.calendar, options);
+  assert.equal(result.synced, 25);
+  assert.equal(peak, 5);
+  assert.equal(waves, 5);
+  assert.equal(f.queries.length, 3);
+});
+
+test('quota and timeout failures stop new scheduling instead of attempting all 25 bookings', async () => {
+  for (const code of [429, 'ETIMEDOUT']) {
+    const f = fixture(Array.from({ length: 25 }, (_, i) => ({ ...booking, booking_id: `WIX-${i}` })));
+    let attempted = 0;
+    f.calendar.events.insert = async () => {
+      attempted += 1;
+      throw Object.assign(new Error('Calendar temporarily unavailable'), { code });
+    };
+    const result = await syncWixCalendarBatch(f.bigquery, f.calendar, options);
+    assert.equal(result.stopped, true);
+    assert.equal(result.synced, 0);
+    assert.equal(attempted, 5);
+    assert.equal(result.pending, 20);
+    assert.equal(result.errors.length, 5);
+    assert.ok(f.rows.every((row) => !row.calendar_event_id));
+  }
+});
+
+test('invalid bookings do not block valid bookings and exclusions are limited to the current run', async () => {
+  const f = fixture([
+    { ...booking, booking_id: 'WIX-bad', time: 'invalid' },
+    { ...booking, booking_id: 'WIX-good' },
+  ]);
+  const result = await syncWixCalendarBatch(f.bigquery, f.calendar, options);
+  assert.equal(result.synced, 1);
+  assert.equal(result.pending, 0);
+  assert.equal(result.stopped, undefined);
+  assert.equal(result.errors[0].bookingId, 'WIX-bad');
+  const skipped = await syncWixCalendarBatch(f.bigquery, f.calendar, { ...options, excludedIds: ['WIX-bad'] });
+  assert.deepEqual(skipped, { synced: 0, pending: 0, errors: [] });
+  f.rows[0].time = booking.time;
+  assert.equal((await syncWixCalendarBatch(f.bigquery, f.calendar, options)).synced, 1);
+});
+
+test('a concurrent booking change prevents linking the entire batch, and retry recovers without duplicates', async () => {
+  const f = fixture([{ ...booking, booking_id: 'WIX-1' }, { ...booking, booking_id: 'WIX-2' }]);
+  const insert = f.calendar.events.insert;
+  f.calendar.events.insert = async (...args) => {
+    const result = await insert(...args);
+    f.rows[0].time = '10:00 AM';
+    return result;
+  };
+  const result = await syncWixCalendarBatch(f.bigquery, f.calendar, options);
+  assert.equal(result.synced, 0);
+  assert.equal(result.stopped, true);
+  assert.equal(result.errors.length, 2);
+  assert.ok(f.rows.every((row) => !row.calendar_event_id));
+  assert.equal((await syncWixCalendarBatch(f.bigquery, f.calendar, options)).synced, 2);
+  assert.equal(f.events.size, 2);
+});
+
+test('slow batches stop scheduling new work after 15 seconds and leave it resumable', async (t) => {
+  const f = fixture(Array.from({ length: 25 }, (_, i) => ({ ...booking, booking_id: `WIX-${i}` })));
+  let now = 0;
+  t.mock.method(Date, 'now', () => now);
+  const insert = f.calendar.events.insert;
+  f.calendar.events.insert = async (...args) => {
+    const result = await insert(...args);
+    now = 15001;
+    return result;
+  };
+  const result = await syncWixCalendarBatch(f.bigquery, f.calendar, options);
+  assert.equal(result.synced, 5);
+  assert.equal(result.pending, 20);
+  assert.deepEqual(result.errors, []);
 });
 
 test('Calendar backfill endpoint enforces owner authentication, method, origin and no-store', async (t) => {
@@ -147,9 +257,15 @@ test('Calendar backfill endpoint enforces owner authentication, method, origin a
     },
   }));
   f.calendar.calendarList = { list: async () => ({ data: { items: [{ id: options.calendarId }] } }) };
-  f.calendar.events.list = async () => ({ data: { items: [...f.events.values()].map((event) => ({
+  const pages = [];
+  f.calendar.events.list = async ({ pageToken }) => {
+    pages.push(pageToken);
+    if (!pageToken) return { data: { items: [], nextPageToken: 'next-page' } };
+    assert.equal(pageToken, 'next-page');
+    return { data: { items: [...f.events.values()].map((event) => ({
     ...event, start: { dateTime: `${event.start.dateTime}-04:00` }, end: { dateTime: `${event.end.dateTime}-04:00` },
-  })) } });
+    })) } };
+  };
   t.mock.method(google, 'calendar', () => f.calendar);
   const { default: handler } = await import('../api/booking.js');
   let cookie;
@@ -169,6 +285,8 @@ test('Calendar backfill endpoint enforces owner authentication, method, origin a
   assert.equal((await request('owner-login', { body: { password: process.env.OWNER_ADMIN_PASSWORD } })).code, 200);
   assert.equal((await request('wix-calendar-sync', { method: 'GET' })).code, 405);
   assert.equal((await request('wix-calendar-sync', { origin: 'https://evil.example' })).code, 403);
+  assert.equal((await request('wix-calendar-sync', { body: { excludedIds: ['LIVE-test'] } })).code, 400);
+  assert.equal((await request('wix-calendar-sync', { body: { excludedIds: Array(101).fill('WIX-test') } })).code, 400);
   assert.equal(f.queries.length, 0);
   const synced = await request('wix-calendar-sync');
   assert.equal(synced.code, 200);
@@ -181,6 +299,7 @@ test('Calendar backfill endpoint enforces owner authentication, method, origin a
   assert.deepEqual(displayed.data.errors, []);
   assert.equal(displayed.data.events.length, 1);
   assert.equal(displayed.data.events[0].booking.id, booking.booking_id);
+  assert.deepEqual(pages, [undefined, 'next-page']);
   // Clearing database history must not re-create a booking from its retained Wix event.
   f.rows.length = 0;
   const cleared = await request('calendar', { method: 'GET' });
