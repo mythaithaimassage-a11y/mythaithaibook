@@ -7,6 +7,9 @@ import { BOOKING_TABLE_FIELDS } from '../lib/booking-schema.js';
 import { createPackageStore, historicalPackageVisit, readPackageUsage, packageReceiptDetails } from '../lib/packages.js';
 import { createBookingHistoryStore } from '../lib/booking-history.js';
 import { syncWixCalendarBatch } from '../lib/wix-calendar.js';
+import { sendGmailMessage } from '../lib/gmail.js';
+import { BOOKING_DEPOSIT_AMOUNT, validateBranchPaymentOptions, validateAppointmentTime } from '../lib/booking-options.js';
+import { validatePatientHistory, patientHistoryValues } from '../lib/patient-history.js';
 
 // Body parsing is done manually (see readRawBody/parseRequestBody below) so the Square
 // webhook handler can verify its HMAC signature against the exact raw request bytes;
@@ -65,7 +68,7 @@ const DEFAULT_BUSINESS_PROFILE = {
   taxRegistrationNumber: '',
   photoUrl: '',
 };
-const BRANCH_FIELDS = ['ID', 'Name', 'Address', 'City', 'Phone', 'Active', 'Updated At', 'Collects Deposit'];
+const BRANCH_FIELDS = ['ID', 'Name', 'Address', 'City', 'Phone', 'Active', 'Updated At', 'Collects Deposit', 'Allow Clinic Payment', 'Allow Deposit Payment', 'Allow Full Payment'];
 const DEFAULT_BRANCHES = [
   { id: 1, name: 'Mississauga Central', address: '4310 Sherwoodtowne Blvd', city: 'Mississauga, ON', phone: '+1 437 898 7424', active: true },
   { id: 2, name: 'Oakville Downtown', address: '123 Lakeshore Rd E', city: 'Oakville, ON', phone: '+1 437 898 7424', active: true },
@@ -1713,13 +1716,13 @@ async function ensureBranchesSheet(sheets) {
     ]);
     await sheets.spreadsheets.values.update({
       spreadsheetId,
-      range: 'Branches!A1:H1',
+      range: 'Branches!A1:K1',
       valueInputOption: 'RAW',
       requestBody: { values: [BRANCH_FIELDS] },
     });
     await sheets.spreadsheets.values.update({
       spreadsheetId,
-      range: `Branches!A2:H${seedRows.length + 1}`,
+      range: `Branches!A2:K${seedRows.length + 1}`,
       valueInputOption: 'RAW',
       requestBody: { values: seedRows },
     });
@@ -1738,6 +1741,7 @@ function validateBranches(input) {
     if (!Number.isFinite(id) || id <= 0) id = Date.now() + Math.floor(Math.random() * 1000);
     if (seenIds.has(id)) id = Date.now() + Math.floor(Math.random() * 1000) + seenIds.size;
     seenIds.add(id);
+    const paymentOptions = validateBranchPaymentOptions(branch);
     return {
       id,
       name,
@@ -1748,6 +1752,9 @@ function validateBranches(input) {
       // Branches collect a deposit unless explicitly opted out, so existing
       // branches keep their current behaviour.
       collectsDeposit: branch?.collectsDeposit !== false,
+      allowClinicPayment: paymentOptions.clinic,
+      allowDepositPayment: paymentOptions.deposit,
+      allowFullPayment: paymentOptions.full,
     };
   });
 }
@@ -1756,7 +1763,7 @@ async function getBranches(sheets) {
   await ensureBranchesSheet(sheets);
   const result = await sheets.spreadsheets.values.get({
     spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-    range: 'Branches!A2:H',
+    range: 'Branches!A2:K',
   });
   const rows = result.data.values || [];
   if (rows.length === 0) return DEFAULT_BRANCHES;
@@ -1770,6 +1777,9 @@ async function getBranches(sheets) {
       phone: row[4] || '',
       active: String(row[5] || 'TRUE').toUpperCase() !== 'FALSE',
       collectsDeposit: String(row[7] ?? 'TRUE').toUpperCase() !== 'FALSE',
+      allowClinicPayment: row[8] === undefined || row[8] === '' ? String(row[7] ?? 'TRUE').toUpperCase() === 'FALSE' : String(row[8]).toUpperCase() === 'TRUE',
+      allowDepositPayment: row[9] === undefined || row[9] === '' ? String(row[7] ?? 'TRUE').toUpperCase() !== 'FALSE' : String(row[9]).toUpperCase() === 'TRUE',
+      allowFullPayment: row[10] === undefined || row[10] === '' ? String(row[7] ?? 'TRUE').toUpperCase() !== 'FALSE' : String(row[10]).toUpperCase() === 'TRUE',
     }));
 }
 
@@ -1779,14 +1789,19 @@ async function saveBranches(sheets, branches) {
   const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
   const rows = validated.map((branch) => [
     branch.id, branch.name, branch.address, branch.city, branch.phone, branch.active ? 'TRUE' : 'FALSE', new Date().toISOString(), branch.collectsDeposit === false ? 'FALSE' : 'TRUE',
+    branch.allowClinicPayment ? 'TRUE' : 'FALSE', branch.allowDepositPayment ? 'TRUE' : 'FALSE', branch.allowFullPayment ? 'TRUE' : 'FALSE',
   ]);
+  await sheets.spreadsheets.values.update({
+    spreadsheetId, range: 'Branches!A1:K1', valueInputOption: 'RAW',
+    requestBody: { values: [BRANCH_FIELDS] },
+  });
   await sheets.spreadsheets.values.clear({
     spreadsheetId,
-    range: 'Branches!A2:H',
+    range: 'Branches!A2:K',
   });
   await sheets.spreadsheets.values.update({
     spreadsheetId,
-    range: `Branches!A2:H${rows.length + 1}`,
+    range: `Branches!A2:K${rows.length + 1}`,
     valueInputOption: 'RAW',
     requestBody: { values: rows },
   });
@@ -3702,6 +3717,7 @@ async function sendGmailConfirmation(gmail, payload) {
     .join('\r\n');
   const subject = `Your MY THAI THAI appointment is confirmed - ${payload.id}`;
   const manageUrl = String(payload.manageUrl || '');
+  const historyUrl = manageUrl.replace('?manage=1&', '?history=1&');
   // Customers who already paid online have money at stake, so the refund rule is
   // stated explicitly for them rather than in general terms.
   const paidOnline = Number(payload.paidAmount) > 0;
@@ -3732,6 +3748,11 @@ async function sendGmailConfirmation(gmail, payload) {
     '',
     'Your appointment has been added to the therapist calendar.',
     'Please keep your booking reference for your records.',
+    ...(payload.skipPatientHistory ? [
+      'MEDICAL HISTORY REQUIRED BEFORE TREATMENT',
+      'You chose to complete medical history later. Complete it before treatment using Medical history only on our booking page, or at the clinic.',
+      ...(historyUrl ? [historyUrl] : []),
+    ] : []),
     '',
     'CANCELLATION POLICY',
     ...policyLines,
@@ -3782,6 +3803,7 @@ async function sendGmailConfirmation(gmail, payload) {
           </td></tr>
           <tr><td style="padding:0 36px 30px;">
             <p style="margin:0 0 8px;color:#625f56;line-height:1.6;">Your visit has been added to the therapist calendar. Please keep your booking reference <strong>${escapeHtml(payload.id)}</strong> for your records.</p>
+            ${payload.skipPatientHistory ? `<p style="margin:12px 0;color:#7a5a12;line-height:1.6;"><strong>Medical history required before treatment.</strong> You chose to complete it later. Use Medical history only on our booking page or complete it at the clinic.${historyUrl ? ` <a href="${escapeHtml(historyUrl)}">Complete medical history</a>` : ''}</p>` : ''}
             <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:18px 0 0;background:#fdf6e7;border:1px solid #f0dfb5;border-radius:10px;">
               <tr><td style="padding:16px 18px;">
                 <p style="margin:0 0 8px;font-size:14px;font-weight:700;color:#7a5a12;">Cancellation policy</p>
@@ -3823,7 +3845,7 @@ async function sendGmailConfirmation(gmail, payload) {
     `--${boundary}--`,
   ].join('\r\n');
 
-  await gmail.users.messages.send({
+  await sendGmailMessage(gmail, {
     userId: 'me',
     requestBody: { raw: Buffer.from(message).toString('base64url') },
   });
@@ -7200,6 +7222,11 @@ export default async function handler(req, res) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(newDate) || !/^\d{1,2}:\d{2}\s*(AM|PM)$/i.test(newTime)) {
         return res.status(400).json({ message: 'Choose a valid new date and time.' });
       }
+      try {
+        validateAppointmentTime(newTime);
+      } catch (error) {
+        return res.status(400).json({ message: error.message });
+      }
       const bigquery = getBigQueryClient();
       const result = await bqFetchBookingRows(bigquery);
       const rows = result.data.values || [];
@@ -7404,7 +7431,43 @@ export default async function handler(req, res) {
       return res.status(200).json({ profile });
     }
 
+    if (req.method === 'POST' && view === 'submit-patient-history') {
+      if (!isSameOriginRequest(req)) return res.status(403).json({ message: 'Request origin is not allowed' });
+      res.setHeader('Cache-Control', 'no-store');
+      const bookingId = String(req.body?.bookingId || '').trim();
+      const email = String(req.body?.email || '').trim().toLowerCase();
+      if (!bookingId || bookingId.length > 100 || !email) {
+        return res.status(400).json({ message: 'A booking reference and the email used at booking are required.' });
+      }
+      let history;
+      try {
+        history = validatePatientHistory(req.body?.patientHistory);
+      } catch (error) {
+        return res.status(400).json({ message: error.message });
+      }
+      const bigquery = getBigQueryClient();
+      const result = await bqFetchBookingRows(bigquery);
+      const row = (result.data.values || []).find((candidate) => String(candidate[0]) === bookingId && String(candidate[3] || '').trim().toLowerCase() === email);
+      if (!row) return res.status(404).json({ message: 'We could not find a booking with that reference and email.' });
+      if (['Cancelled', 'No Show'].includes(row[24])) return res.status(409).json({ message: 'Medical history cannot be submitted for a cancelled or no-show appointment.' });
+      await bqAppendPatientHistory(bigquery, sheets, patientHistoryValues({
+        id: row[0], customerName: row[1], phone: row[2], email: row[3],
+      }, history));
+      return res.status(200).json({ patientHistorySaved: true, bookingId });
+    }
+
     const payload = req.body;
+    try {
+      validateAppointmentTime(payload.time);
+    } catch (error) {
+      return res.status(400).json({ message: error.message });
+    }
+    const selectedBranch = (await getBranches(sheets)).find((branch) => branch.active !== false && branch.name === payload.branchName);
+    if (!selectedBranch) return res.status(400).json({ message: 'Choose an active branch.' });
+    const paymentOptions = validateBranchPaymentOptions(selectedBranch);
+    if (!Object.hasOwn(paymentOptions, payload.paymentOption) || (!paymentOptions[payload.paymentOption] && !(payload.paymentOption === 'clinic' && getOwnerSession(req)))) {
+      return res.status(400).json({ message: 'This payment option is not available at the selected branch. Review the payment choices again.' });
+    }
     const subtotal = Number(payload.subtotalAmount);
     const taxRate = Number(payload.taxRate);
     if (!Number.isFinite(subtotal) || subtotal <= 0 || subtotal > 100000 || !Number.isFinite(taxRate) || taxRate < 0 || taxRate > 1) {
@@ -7456,14 +7519,22 @@ export default async function handler(req, res) {
     payload.membershipDiscountPercent = discountPercent;
     payload.membershipDiscountAmount = discountAmount.toFixed(2);
     payload.totalAmount = finalTotal.toFixed(2);
-    if (payload.paymentOption === 'full') payload.paidAmount = finalTotal.toFixed(2);
-    let patientHistory = payload.patientHistory || {};
-    if (patientHistory.reuseExisting) {
+    payload.paidAmount = (payload.paymentOption === 'clinic' ? 0 : payload.paymentOption === 'full' ? finalTotal : Math.min(BOOKING_DEPOSIT_AMOUNT, finalTotal)).toFixed(2);
+    const patientHistorySkipped = payload.skipPatientHistory === true;
+    let patientHistory = patientHistorySkipped ? null : payload.patientHistory;
+    if (patientHistory?.reuseExisting) {
       patientHistory = await findExistingPatientHistory(getBigQueryClient(), sheets, payload);
       if (!patientHistory) {
         return res.status(409).json({
           message: 'No existing patient history was found for this email or phone number. Please complete the health history form.',
         });
+      }
+    }
+    if (!patientHistorySkipped && !payload.patientHistory?.reuseExisting) {
+      try {
+        validatePatientHistory(patientHistory);
+      } catch (error) {
+        return res.status(400).json({ message: error.message });
       }
     }
     const isCoupleService = /couple/i.test(payload.serviceName || '');
@@ -7645,44 +7716,9 @@ export default async function handler(req, res) {
 
     let patientHistorySaved = false;
     let patientHistoryError = '';
-    try {
+    if (!patientHistorySkipped) try {
       const history = patientHistory;
-      await bqAppendPatientHistory(getBigQueryClient(), sheets, [
-        payload.id,
-        new Date().toISOString(),
-        payload.customerName,
-        history.dateOfBirth || '',
-        history.gender || '',
-        payload.phone,
-        payload.email,
-        history.address || '',
-        history.city || '',
-        history.postalCode || '',
-        history.heardAbout || '',
-        history.conditions?.heart || '',
-        history.conditions?.bloodPressure || '',
-        history.conditions?.diabetes || '',
-        history.conditions?.cancer || '',
-        history.conditions?.headaches || '',
-        history.conditions?.boneJoint || '',
-        history.conditions?.brokenBones || '',
-        history.conditions?.osteoporosis || '',
-        history.conditions?.allergies || '',
-        history.conditions?.surgeries || '',
-        history.conditions?.numbness || '',
-        history.conditions?.skinSensitivity || '',
-        history.conditions?.pregnant || '',
-        history.conditions?.medications || '',
-        history.details || '',
-        history.painAreas || '',
-        history.bodyAreas || '',
-        history.pressure || '',
-        history.consent ? 'Yes' : 'No',
-        history.signature || '',
-        history.signatureDate || '',
-        history.preCollectionConsent ? 'Yes' : 'No',
-        history.consentTimestamp || '',
-      ]);
+      await bqAppendPatientHistory(getBigQueryClient(), sheets, patientHistoryValues(payload, history));
       patientHistorySaved = true;
     } catch (error) {
       patientHistoryError = error.message || 'Patient history could not be saved';
@@ -7712,6 +7748,7 @@ export default async function handler(req, res) {
       membershipDiscountAmount: payload.membershipDiscountAmount,
       therapistName,
       patientHistorySaved,
+      patientHistorySkipped,
       patientHistoryError,
       loyaltyEnrollmentSaved,
       loyaltyEnrollmentError,

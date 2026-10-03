@@ -16,6 +16,9 @@ import WixBookings from './WixBookings';
 import PackageTracking from './PackageTracking';
 import ClearBookingHistory from './ClearBookingHistory';
 import WixCalendarSync from './WixCalendarSync';
+import { AVAILABLE_TIMES, BOOKING_DEPOSIT_AMOUNT, branchPaymentOptions, bookingCategories } from '../lib/booking-options.js';
+import { emptyPatientHistory } from '../lib/patient-history.js';
+import { anatomicalBodyParts } from '../lib/body-map.js';
 
 const MOCK_BRANCHES = [
   { id: 1, name: "Mississauga Central", address: "4310 Sherwoodtowne Blvd", city: "Mississauga, ON", phone: "+1 437 898 7424" },
@@ -111,18 +114,6 @@ const INTAKE_CONDITIONS = [
 ];
 const BLANK_INTAKE_CONDITIONS = Object.fromEntries(INTAKE_CONDITIONS.map(([field]) => [field, '']));
 
-// Bookable start times at 15-minute intervals, from 09:30 AM through 07:00 PM.
-const AVAILABLE_TIMES = (() => {
-  const slots = [];
-  for (let minutes = 9 * 60 + 30; minutes <= 19 * 60; minutes += 15) {
-    const hour24 = Math.floor(minutes / 60);
-    const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
-    slots.push(`${String(hour12).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')} ${hour24 < 12 ? 'AM' : 'PM'}`);
-  }
-  return slots;
-})();
-// Flat online amount charged to confirm a booking; the balance is paid at the clinic.
-const BOOKING_DEPOSIT_AMOUNT = 10;
 const THERAPIST_CALENDAR_COLORS = [
   { name: 'Emerald', event: 'bg-emerald-100 border-emerald-700', dot: 'bg-emerald-600', text: 'text-emerald-950' },
   { name: 'Blue', event: 'bg-blue-100 border-blue-700', dot: 'bg-blue-600', text: 'text-blue-950' },
@@ -306,7 +297,7 @@ async function sendBookingToGoogleSheets(apiUrl, bookingPayload) {
         emailReason: result.emailError || '',
         marketingConsentSaved: result.marketingConsentSaved !== false,
         marketingConsentReason: result.marketingConsentError || '',
-        patientHistorySaved: result.patientHistorySaved !== false,
+        patientHistorySaved: result.patientHistorySkipped === true || result.patientHistorySaved !== false,
         patientHistoryReason: result.patientHistoryError || '',
         loyaltyEnrollmentSaved: result.loyaltyEnrollmentSaved !== false,
         loyaltyEnrollmentReason: result.loyaltyEnrollmentError || '',
@@ -378,7 +369,7 @@ function buildAreaAnchors(bodyType) {
   const part = (id) => parts.find((item) => item.id === id);
   const pair = (prefix, dz = 0) => [-1, 1].map((side) => { const p = part(`${prefix}-${side}`); return { x: p.x, y: p.y, z: p.z + dz }; });
   return {
-    'Head / face': { candidates: [{ x: 0, y: 28, z: 0 }] },
+    'Head / face': { candidates: [{ x: 0, y: 18, z: 0 }] },
     Neck: { candidates: [{ x: 0, y: 59, z: 0 }] },
     Shoulders: { candidates: pair('shoulder') },
     'Upper back': { facing: 'back', candidates: [{ x: 0, y: 100, z: -20 }] },
@@ -427,7 +418,7 @@ function BodyAreaMap({ value = '', onChange, readOnly = false, gender = '' }) {
   const radians = (angle * Math.PI) / 180;
   const cos = Math.cos(radians);
   const sin = Math.sin(radians);
-  const parts = useMemo(() => buildBodyParts(bodyType), [bodyType]);
+  const parts = useMemo(() => anatomicalBodyParts(bodyType, angle), [bodyType, angle]);
   const anchors = useMemo(() => buildAreaAnchors(bodyType), [bodyType]);
 
   const isPartMarked = (part) => part.areas.some((area) => {
@@ -439,18 +430,7 @@ function BodyAreaMap({ value = '', onChange, readOnly = false, gender = '' }) {
     return true;
   });
 
-  const projectedParts = parts
-    .map((part) => {
-      const centre = rotatePoint(part, angle);
-      return {
-        ...part,
-        px: centre.x,
-        depth: centre.depth,
-        prx: Math.sqrt((part.rx * cos) ** 2 + (part.rz * sin) ** 2),
-        marked: isPartMarked(part),
-      };
-    })
-    .sort((a, b) => a.depth - b.depth);
+  const projectedParts = parts.map((part) => ({ ...part, marked: isPartMarked(part) }));
 
   const markers = BODY_AREA_OPTIONS.map(([area]) => {
     const anchor = anchors[area];
@@ -511,11 +491,12 @@ function BodyAreaMap({ value = '', onChange, readOnly = false, gender = '' }) {
               onPointerCancel={endDrag}
             >
               <defs>
-                <radialGradient id={`${gradientId}-skin`} cx="38%" cy="32%" r="75%">
-                  <stop offset="0%" stopColor="#ffffff" />
-                  <stop offset="55%" stopColor="#e2e8f0" />
-                  <stop offset="100%" stopColor="#94a3b8" />
-                </radialGradient>
+                <linearGradient id={`${gradientId}-skin`} x1="0%" y1="0%" x2="100%" y2="0%">
+                  <stop offset="0%" stopColor="#b78068" />
+                  <stop offset="30%" stopColor="#edc6ad" />
+                  <stop offset="65%" stopColor="#e3b89b" />
+                  <stop offset="100%" stopColor="#ae775f" />
+                </linearGradient>
                 <radialGradient id={`${gradientId}-marked`} cx="38%" cy="32%" r="75%">
                   <stop offset="0%" stopColor="#cffafe" />
                   <stop offset="50%" stopColor="#22d3ee" />
@@ -524,18 +505,23 @@ function BodyAreaMap({ value = '', onChange, readOnly = false, gender = '' }) {
               </defs>
               <ellipse cx="0" cy="366" rx="48" ry="8" fill="#0f172a" opacity="0.1" />
               {projectedParts.map((part) => (
-                <ellipse
+                <path
                   key={part.id}
-                  cx={part.px}
-                  cy={part.y}
-                  rx={Math.max(part.prx, 2)}
-                  ry={part.ry}
+                  d={part.path}
                   fill={`url(#${gradientId}-${part.marked ? 'marked' : 'skin'})`}
-                  stroke={part.marked ? '#0e7490' : '#94a3b8'}
-                  strokeOpacity="0.45"
-                  strokeWidth="0.8"
                 />
               ))}
+              {cos > 0.3 && (
+                <g transform={`translate(${17 * sin} 0) scale(${cos} 1)`} fill="none" stroke="#815c4d" strokeWidth="0.9" opacity={Math.min(0.65, cos)}>
+                  <path d="M -11 28 Q -7 26 -3 28 M 3 28 Q 7 26 11 28 M 0 29 L -2 35 Q 0 37 3 35 M -5 41 Q 0 43 5 41" />
+                  <path d="M -24 81 Q -15 77 -4 83 M 4 83 Q 15 77 24 81 M -16 110 Q -9 114 -3 111 M 3 111 Q 9 114 16 110 M 0 139 L 0 152" strokeOpacity="0.35" />
+                </g>
+              )}
+              {cos < -0.3 && (
+                <g transform={`scale(${-cos} 1)`} fill="none" stroke="#815c4d" strokeWidth="0.8" opacity="0.35">
+                  <path d="M 0 76 Q -2 110 0 150 M -7 86 Q -20 98 -17 116 M 7 86 Q 20 98 17 116 M 0 177 L 0 195" />
+                </g>
+              )}
               {leftLabel && <text x="-88" y="200" fontSize="11" fontWeight="700" fill="#94a3b8">{leftLabel}</text>}
               {rightLabel && <text x="80" y="200" fontSize="11" fontWeight="700" fill="#94a3b8">{rightLabel}</text>}
               {markers.map((marker) => (
@@ -2351,9 +2337,9 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
   const [manageDeepLink] = useState(() => {
     if (typeof window === 'undefined') return { open: false, ref: '' };
     const params = new URLSearchParams(window.location.search);
-    return { open: params.get('manage') === '1', ref: params.get('ref') || '' };
+    return { open: params.get('manage') === '1', history: params.get('history') === '1', ref: params.get('ref') || '' };
   });
-  const [portalMode, setPortalMode] = useState(manageDeepLink.open ? 'manage' : 'book'); // 'book' or 'manage'
+  const [portalMode, setPortalMode] = useState(manageDeepLink.history ? 'history' : manageDeepLink.open ? 'manage' : 'book');
   const { businessName, photoUrl, error: brandingError } = useBusinessBranding();
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -2368,6 +2354,13 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
   const [squareEnabled, setSquareEnabled] = useState(false);
   const [squareCheckoutLoading, setSquareCheckoutLoading] = useState(false);
   const [squareCheckoutError, setSquareCheckoutError] = useState('');
+  const [historyReference, setHistoryReference] = useState(manageDeepLink.ref);
+  const [historyEmail, setHistoryEmail] = useState('');
+  const [historyBooking, setHistoryBooking] = useState(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState('');
+  const [historySaved, setHistorySaved] = useState(false);
+  const bookingIntakeRef = useRef(null);
   
   const [bookingData, setBookingData] = useState({
     branch: branches[0],
@@ -2383,46 +2376,36 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
     companyId: '',
     guestTwoName: '',
     customer: { firstName: '', lastName: '', email: '', phone: '' },
-    intake: {
-      pressure: 'Medium',
-      focusAreas: '',
-      injuries: '',
-      agreeTerms: false,
-      dateOfBirth: '',
-      gender: '',
-      address: '',
-      city: '',
-      postalCode: '',
-      heardAbout: '',
-      conditions: { ...BLANK_INTAKE_CONDITIONS },
-      details: '',
-      painAreas: '',
-      bodyAreas: [],
-      signature: '',
-      signatureDate: new Date().toISOString().split('T')[0],
-      consent: false,
-      reuseExisting: false,
-      historyMode: 'new',
-      preCollectionConsent: false,
-      consentTimestamp: '',
-    },
+    intake: emptyPatientHistory(),
     paymentOption: 'deposit', // 'deposit' (flat $10 now, balance at clinic) or 'full'
     hotStoneAddOn: false,
     skipPayment: false,
     confirmationCode: ''
   });
 
+  useEffect(() => {
+    if (portalMode !== 'history' && bookingIntakeRef.current) {
+      const { intake, step: previousStep } = bookingIntakeRef.current;
+      bookingIntakeRef.current = null;
+      setBookingData((prev) => ({ ...prev, intake }));
+      setStep(previousStep);
+    }
+  }, [portalMode]);
+
   // Keep the selected branch in sync if the owner updates or removes branches while this page is open.
   useEffect(() => {
     if (branches.length === 0) return;
     setBookingData((prev) => {
-      const stillExists = branches.some((branch) => branch.id === prev.branch?.id);
-      return stillExists ? prev : { ...prev, branch: branches[0] };
+      const currentBranch = branches.find((branch) => branch.id === prev.branch?.id) || branches[0];
+      return currentBranch === prev.branch ? prev : { ...prev, branch: currentBranch };
     });
   }, [branches]);
 
 
-  const categories = ['All', 'Thai Traditional', 'Thai Combo Swedish', 'Hot Stone Combo', 'Add-On & Packages', 'RMT Healthcare'];
+  const categories = useMemo(() => bookingCategories(services), [services]);
+  useEffect(() => {
+    if (!categories.includes(selectedCategory)) setSelectedCategory('All');
+  }, [categories, selectedCategory]);
 
   useEffect(() => {
     let isCurrent = true;
@@ -2476,7 +2459,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
   );
 
   const filteredServices = useMemo(() => {
-    const bookable = services.filter((s) => !HOT_STONE_ADDON_PATTERN.test(s.name || ''));
+    const bookable = services.filter((s) => s.active !== false && !HOT_STONE_ADDON_PATTERN.test(s.name || ''));
     if (selectedCategory === 'All') return bookable;
     return bookable.filter(s => s.category === selectedCategory);
   }, [services, selectedCategory]);
@@ -2573,8 +2556,14 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
     }));
   };
 
-  const branchCollectsDeposit = bookingData.branch?.collectsDeposit !== false;
-  const paymentSkipped = bookingData.skipPayment || !branchCollectsDeposit;
+  const paymentOptions = branchPaymentOptions(bookingData.branch);
+  const paymentSkipped = (staffBooking && bookingData.skipPayment) || bookingData.paymentOption === 'clinic';
+  useEffect(() => {
+    if (!paymentOptions[bookingData.paymentOption]) {
+      const next = ['deposit', 'full', 'clinic'].find((option) => paymentOptions[option]);
+      if (next) setBookingData((prev) => ({ ...prev, paymentOption: next }));
+    }
+  }, [paymentOptions.clinic, paymentOptions.deposit, paymentOptions.full, bookingData.paymentOption]);
 
   const calculateFinancials = () => {
     const empty = {
@@ -2625,6 +2614,50 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
 
   const financials = calculateFinancials();
 
+  const medicalHistorySkipped = bookingData.intake.historyMode === 'skip';
+  const historyComplete = bookingData.intake.preCollectionConsent && bookingData.intake.consent
+    && bookingData.intake.signature.trim() && bookingData.intake.signatureDate;
+  const findHistoryBooking = async (event) => {
+    event.preventDefault();
+    setHistoryLoading(true);
+    setHistoryError('');
+    setHistorySaved(false);
+    setHistoryBooking(null);
+    try {
+      const response = await fetch(`/api/booking?view=find-booking&bookingId=${encodeURIComponent(historyReference.trim())}&email=${encodeURIComponent(historyEmail.trim())}`, { cache: 'no-store' });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Unable to find the booking.');
+      if (['Cancelled', 'No Show'].includes(data.booking.status)) throw new Error('Medical history cannot be submitted for a cancelled or no-show appointment.');
+      setHistoryBooking(data.booking);
+      if (!bookingIntakeRef.current) bookingIntakeRef.current = { intake: bookingData.intake, step };
+      setBookingData((prev) => ({
+        ...prev, intake: emptyPatientHistory(),
+      }));
+      setStep(3);
+    } catch (error) {
+      setHistoryError(error.message || 'Unable to find the booking.');
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+  const submitHistory = async () => {
+    setHistoryLoading(true);
+    setHistoryError('');
+    try {
+      const response = await fetch('/api/booking?view=submit-patient-history', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bookingId: historyBooking.id, email: historyBooking.email, patientHistory: bookingData.intake }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Medical history could not be saved.');
+      setHistorySaved(true);
+    } catch (error) {
+      setHistoryError(error.message || 'Medical history could not be saved.');
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
   const handleFinalSubmit = async (e) => {
     e.preventDefault();
     setIsSubmitting(true);
@@ -2669,12 +2702,13 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
       durationMinutes: bookingDurationMinutes,
       branchAddress: `${bookingData.branch.address}, ${bookingData.branch.city}`,
       intakeNotes: [
-        `Pressure: ${bookingData.intake.pressure}`,
-        bookingData.intake.focusAreas ? `Focus areas: ${bookingData.intake.focusAreas}` : '',
-        bookingData.intake.injuries ? `Injuries: ${bookingData.intake.injuries}` : '',
+        !medicalHistorySkipped ? `Pressure: ${bookingData.intake.pressure}` : '',
+        !medicalHistorySkipped && bookingData.intake.focusAreas ? `Focus areas: ${bookingData.intake.focusAreas}` : '',
+        !medicalHistorySkipped && bookingData.intake.injuries ? `Injuries: ${bookingData.intake.injuries}` : '',
         isCoupleService && bookingData.guestTwoName.trim() ? `Guest 2: ${bookingData.guestTwoName.trim()}` : '',
       ].filter(Boolean).join('; '),
-      patientHistory: {
+      skipPatientHistory: medicalHistorySkipped,
+      patientHistory: medicalHistorySkipped ? null : {
         ...bookingData.intake,
         conditions: bookingData.intake.conditions,
         signatureDate: bookingData.intake.signatureDate || new Date().toISOString().split('T')[0],
@@ -2759,6 +2793,13 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
             >
               {portalMode === 'manage' ? '← Back to booking' : 'Manage an existing booking (reschedule or cancel)'}
             </button>
+            <button
+              type="button"
+              onClick={() => { setPortalMode('history'); setHistoryBooking(null); setHistoryError(''); setHistorySaved(false); }}
+              className="rounded-xl border border-white/20 bg-white/10 px-3 py-2 font-bold text-white hover:bg-white/20"
+            >
+              Medical history only
+            </button>
           </div>
         </div>
       </div>
@@ -2767,8 +2808,27 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
         <ManageBookingPanel onBack={() => setPortalMode('book')} initialBookingId={manageDeepLink.ref} />
       ) : (
       <>
+      {portalMode === 'history' && (
+        <div className="p-5 space-y-4">
+          <h2 className="text-xl font-bold">Medical history for an existing appointment</h2>
+          <p className="text-sm text-stone-600">Use your booking reference and the email used at booking. This does not create an appointment or collect payment.</p>
+          <button type="button" onClick={() => { setPortalMode('book'); setStep(1); }} className="text-sm text-emerald-800 underline">Back to booking</button>
+          <form onSubmit={findHistoryBooking} className="grid gap-3 sm:grid-cols-3">
+            <label className="text-xs font-bold">Booking reference
+              <input required value={historyReference} onChange={(e) => { setHistoryReference(e.target.value); setHistoryBooking(null); setHistorySaved(false); }} placeholder="MTT-123456" className="mt-1 w-full p-3 rounded-xl border border-stone-300" />
+            </label>
+            <label className="text-xs font-bold">Booking email
+              <input required type="email" value={historyEmail} onChange={(e) => { setHistoryEmail(e.target.value); setHistoryBooking(null); setHistorySaved(false); }} className="mt-1 w-full p-3 rounded-xl border border-stone-300" />
+            </label>
+            <button disabled={historyLoading} className="self-end p-3 rounded-xl bg-emerald-800 text-white font-bold disabled:opacity-50">{historyLoading ? 'Loading...' : 'Find appointment'}</button>
+          </form>
+          {historyBooking && <p className="text-sm text-emerald-900">Appointment {historyBooking.id}: {historyBooking.customerName}, {historyBooking.date} at {historyBooking.time}</p>}
+          {historyError && <p role="alert" className="text-sm text-red-700">{historyError}</p>}
+          {historySaved && <p role="status" className="p-4 rounded-xl bg-emerald-50 text-emerald-900">Medical history saved to your appointment. No new booking or payment was created.</p>}
+        </div>
+      )}
       {/* 5-Step Progress Stepper */}
-      <div className="border-b border-slate-200 bg-white px-4 py-4 sm:px-8">
+      {portalMode === 'book' && <div className="border-b border-slate-200 bg-white px-4 py-4 sm:px-8">
         <div className="flex items-center justify-between text-xs sm:text-sm font-medium">
           {[
             { num: 1, label: "Branch & Service" },
@@ -2791,11 +2851,11 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
             </div>
           ))}
         </div>
-      </div>
+      </div>}
 
       <div className="bg-[#f1f3f7] p-4 sm:p-8">
         {/* STEP 1: Branch & Service */}
-        {step === 1 && (
+        {portalMode === 'book' && step === 1 && (
           <div className="space-y-6">
             <div>
               <h2 className="text-xl font-bold text-stone-900 mb-1">1. Choose Location</h2>
@@ -2875,7 +2935,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                           RMT Tax Exempt
                         </span>
                       ) : (
-                        <span className="text-stone-400 text-[11px]">${BOOKING_DEPOSIT_AMOUNT} to confirm</span>
+                        <span className="text-stone-400 text-[11px]">Payment options at checkout</span>
                       )}
                     </div>
                   </div>
@@ -2914,7 +2974,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
         )}
 
         {/* STEP 2: Therapist, Date & Time */}
-        {step === 2 && (
+        {portalMode === 'book' && step === 2 && (
           <div className="space-y-6">
             <div>
               <h2 className="text-xl font-bold text-stone-900 mb-1">Select Therapist{isCoupleService ? 's' : ''}</h2>
@@ -3069,9 +3129,15 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
         )}
 
         {/* STEP 3: Contact Details */}
-        {step === 3 && (
+        {((portalMode === 'book' && step === 3) || (portalMode === 'history' && historyBooking && !historySaved)) && (
           <div className="space-y-6">
-            {!bookingData.intake.preCollectionConsent && (
+            {portalMode === 'book' && (
+              <label className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                <input type="checkbox" checked={medicalHistorySkipped} onChange={(e) => updateIntake('historyMode', e.target.checked ? 'skip' : 'new')} className="mt-1" />
+                <span><strong>Skip medical history for now</strong><br />You must complete it before treatment. After booking, use “Medical history only” with your booking reference and email, or complete it at the clinic.</span>
+              </label>
+            )}
+            {!medicalHistorySkipped && !bookingData.intake.preCollectionConsent && (
               <div className="p-5 rounded-2xl bg-blue-50 border border-blue-200 space-y-4 max-h-[70vh] overflow-y-auto">
                 <h2 className="text-xl font-bold text-blue-950 text-center">Consent and Waiver Form</h2>
                 <p className="text-sm text-blue-900">
@@ -3102,9 +3168,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                   <input
                     type="checkbox"
                     checked={bookingData.intake.preCollectionConsent}
-                    onChange={(event) => updateIntake('preCollectionConsent', event.target.checked
-                      ? true
-                      : false)}
+                    onChange={(event) => setBookingData((prev) => ({ ...prev, intake: { ...prev.intake, preCollectionConsent: event.target.checked, consentTimestamp: event.target.checked ? new Date().toISOString() : '' } }))}
                     className="mt-0.5"
                   />
                   <span>I have read and understood this Consent and Waiver Form. I understand the nature of massage treatment and give my voluntary consent. I release the Massage Therapist from liability for complications that may arise from any undisclosed or inaccurate health information.</span>
@@ -3119,8 +3183,8 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                 </button>
               </div>
             )}
-            {bookingData.intake.preCollectionConsent && <>
-            <div>
+            {(medicalHistorySkipped || bookingData.intake.preCollectionConsent) && <>
+            {portalMode === 'book' && <div>
               <h2 className="text-xl font-bold text-stone-900 mb-1">Contact Information</h2>
               <p className="text-xs text-stone-500 mb-4">No registration or password required</p>
 
@@ -3265,18 +3329,18 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                 </div>
               )}
               {loyaltyProgramError && <p role="status" className="mt-2 text-xs text-amber-800">Rewards enrollment details are temporarily unavailable. You can still complete your booking.</p>}
-            </div>
+            </div>}
 
-            <div className="pt-4 border-t border-stone-200">
+            {!medicalHistorySkipped && <div className="pt-4 border-t border-stone-200">
               <h2 className="text-xl font-bold text-stone-900 mb-1">Patient Health History</h2>
               <p className="text-xs text-stone-500 mb-4">Please complete this confidential form so we can provide treatment safely.</p>
-              <button
+              {portalMode === 'book' && <button
                 type="button"
                 onClick={() => setShowExistingPatientChoice(true)}
                 className="w-full text-left p-3 rounded-xl bg-blue-50 border border-blue-200 text-xs text-blue-900 hover:bg-blue-100"
               >
                 <strong>Returning patient?</strong> Click here to choose whether to reuse your previous profile or review and update your medical information.
-              </button>
+              </button>}
 
               {bookingData.intake.historyMode !== 'reuse' && <div className="space-y-4">
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -3357,8 +3421,8 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                 </div>
                 <div className="border-t border-stone-200 pt-4">
                   <label className="block text-xs font-bold text-stone-700 mb-2">Preferred Pressure Level</label>
-                  <div className="grid grid-cols-4 gap-2">
-                    {['Light', 'Medium', 'Firm', 'Extra Firm'].map(p => (
+                  <div className="grid grid-cols-3 gap-2">
+                    {['Light', 'Medium', 'Firm'].map(p => (
                       <button
                         key={p}
                         type="button"
@@ -3390,23 +3454,23 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                   Your previous health history will be looked up securely when this booking is submitted. Make sure your email or phone number matches your previous profile.
                 </div>
               )}
-            </div>
+            </div>}
 
             <div className="flex justify-between pt-4">
               <button
                 type="button"
-                onClick={() => setStep(2)}
+                onClick={() => portalMode === 'history' ? setHistoryBooking(null) : setStep(2)}
                 className="px-5 py-2.5 border border-stone-300 font-semibold rounded-xl text-stone-600 hover:bg-stone-100 transition"
               >
                 Back
               </button>
               <button
                 type="button"
-                disabled={!bookingData.customer.firstName || !bookingData.customer.phone || (isCoupleService && !bookingData.guestTwoName.trim()) || (!bookingData.intake.preCollectionConsent || (bookingData.intake.historyMode !== 'reuse' && (!bookingData.intake.consent || !bookingData.intake.signature)))}
-                onClick={() => setStep(4)}
+                disabled={historyLoading || (portalMode === 'history' ? !historyComplete : !bookingData.customer.firstName || !bookingData.customer.lastName || !bookingData.customer.email || !bookingData.customer.phone || (isCoupleService && !bookingData.guestTwoName.trim()) || (!medicalHistorySkipped && bookingData.intake.historyMode !== 'reuse' && !historyComplete))}
+                onClick={() => portalMode === 'history' ? submitHistory() : setStep(4)}
                 className="px-6 py-2.5 bg-emerald-800 text-white font-semibold rounded-xl hover:bg-emerald-900 disabled:opacity-40 disabled:cursor-not-allowed transition shadow-sm flex items-center"
               >
-                Review Payment & Finalize <ChevronRight className="w-4 h-4 ml-1" />
+                {portalMode === 'history' ? (historyLoading ? 'Saving...' : 'Save medical history') : 'Review Payment & Finalize'} <ChevronRight className="w-4 h-4 ml-1" />
               </button>
             </div>
             </>}
@@ -3449,7 +3513,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
         )}
 
         {/* STEP 4: Review & Final Submit */}
-        {step === 4 && (
+        {portalMode === 'book' && step === 4 && (
           <form onSubmit={handleFinalSubmit} className="space-y-6">
             <div>
               <h2 className="text-xl font-bold text-stone-900 mb-3">Booking Summary</h2>
@@ -3524,52 +3588,59 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                 </label>
               )}
 
-              {!branchCollectsDeposit ? (
-                <div className="rounded-xl border border-stone-200 bg-stone-50 p-4 text-xs text-stone-700 flex items-start gap-2">
-                  <ShieldCheck className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
-                  <span>
-                    <span className="font-bold block text-stone-900">No deposit required at {bookingData.branch?.name}</span>
-                    This location does not collect payment online. Your booking is confirmed straight away and the full ${financials.total.toFixed(2)} is paid at the clinic.
-                  </span>
-                </div>
-              ) : paymentSkipped ? (
+              {staffBooking && bookingData.skipPayment ? (
                 <div className="rounded-xl border border-sky-200 bg-sky-50 p-4 text-xs text-sky-900">
                   Payment skipped — ${financials.total.toFixed(2)} is due at the clinic.
                 </div>
               ) : (
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div 
+              <div className="grid gap-3 sm:grid-cols-3" role="group" aria-label="Payment options">
+                {paymentOptions.clinic && <button
+                  type="button"
+                  aria-pressed={bookingData.paymentOption === 'clinic'}
+                  onClick={() => updateBooking('paymentOption', 'clinic')}
+                  className={`p-4 rounded-xl border text-left transition ${bookingData.paymentOption === 'clinic' ? 'border-emerald-600 bg-emerald-50 ring-2 ring-emerald-600/20' : 'border-stone-200 hover:border-emerald-300'}`}
+                >
+                  <div className="font-bold text-stone-900 text-sm">Pay at the clinic</div>
+                  <p className="text-xs text-stone-500 mt-1">No online deposit required</p>
+                  <div className="mt-3 text-xs font-bold text-emerald-800">$0.00 Online Due</div>
+                  <div className="text-[11px] text-stone-500 mt-1">${financials.total.toFixed(2)} due at clinic</div>
+                </button>}
+                {paymentOptions.deposit && <button
+                  type="button"
+                  aria-pressed={bookingData.paymentOption === 'deposit'}
                   onClick={() => updateBooking('paymentOption', 'deposit')}
-                  className={`p-4 rounded-xl border cursor-pointer transition ${
+                  className={`p-4 rounded-xl border text-left transition ${
                     bookingData.paymentOption === 'deposit'
                       ? 'border-emerald-600 bg-emerald-50 ring-2 ring-emerald-600/20'
                       : 'border-stone-200 hover:border-emerald-300'
                   }`}
                 >
-                  <div className="font-bold text-stone-900 text-sm">Option A: Pay ${BOOKING_DEPOSIT_AMOUNT} Now</div>
+                  <div className="font-bold text-stone-900 text-sm">Pay ${BOOKING_DEPOSIT_AMOUNT} deposit</div>
                   <p className="text-xs text-stone-500 mt-1">Confirm your slot online, pay the rest at the clinic</p>
                   <div className="mt-3 text-xs font-bold text-emerald-800">
-                    ${financials.deposit.toFixed(2)} Online Due
+                    ${Math.min(BOOKING_DEPOSIT_AMOUNT, financials.total).toFixed(2)} Online Due
                   </div>
                   <div className="text-[11px] text-stone-500 mt-1">
                     ${Math.max(0, financials.total - Math.min(BOOKING_DEPOSIT_AMOUNT, financials.total)).toFixed(2)} due at clinic
                   </div>
-                </div>
+                </button>}
 
-                <div 
+                {paymentOptions.full && <button
+                  type="button"
+                  aria-pressed={bookingData.paymentOption === 'full'}
                   onClick={() => updateBooking('paymentOption', 'full')}
-                  className={`p-4 rounded-xl border cursor-pointer transition ${
+                  className={`p-4 rounded-xl border text-left transition ${
                     bookingData.paymentOption === 'full'
                       ? 'border-emerald-600 bg-emerald-50 ring-2 ring-emerald-600/20'
                       : 'border-stone-200 hover:border-emerald-300'
                   }`}
                 >
-                  <div className="font-bold text-stone-900 text-sm">Option B: Pay Full Amount Online</div>
+                  <div className="font-bold text-stone-900 text-sm">Pay full amount online</div>
                   <p className="text-xs text-stone-500 mt-1">Pay 100% online in advance, nothing due at the clinic</p>
                   <div className="mt-3 text-xs font-bold text-emerald-800">
                     ${financials.total.toFixed(2)} Online Due
                   </div>
-                </div>
+                </button>}
               </div>
               )}
             </div>
@@ -3614,7 +3685,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
         )}
 
         {/* STEP 5: Confirmation Success */}
-        {step === 5 && (
+        {portalMode === 'book' && step === 5 && (
           <div className="text-center py-6 space-y-4">
             <div className="w-16 h-16 bg-emerald-100 text-emerald-800 rounded-full flex items-center justify-center mx-auto">
               <CheckCircle2 className="w-10 h-10" />
@@ -3694,6 +3765,20 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
               </div>
             )}
 
+            {medicalHistorySkipped && (
+              <div role="status" className="mx-auto max-w-md rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                Medical history still needs to be completed before treatment.
+                <button type="button" onClick={() => {
+                  setHistoryReference(bookingData.confirmationCode);
+                  setHistoryEmail(bookingData.customer.email);
+                  setHistoryBooking(null);
+                  setHistorySaved(false);
+                  setHistoryError('');
+                  setPortalMode('history');
+                }} className="mt-2 block font-bold underline">Complete medical history now</button>
+              </div>
+            )}
+
             <div className="bg-stone-50 border border-stone-200 rounded-2xl p-5 max-w-md mx-auto text-left space-y-2 text-xs sm:text-sm">
               <div className="flex justify-between border-b pb-2">
                 <span className="text-stone-500">Booking Reference:</span>
@@ -3731,12 +3816,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                     companyId: '',
                     guestTwoName: '',
                     customer: { firstName: '', lastName: '', email: '', phone: '' },
-                    intake: {
-                      pressure: 'Medium', focusAreas: '', injuries: '', agreeTerms: false,
-                      dateOfBirth: '', gender: '', address: '', city: '', postalCode: '',
-                      heardAbout: '', conditions: { ...BLANK_INTAKE_CONDITIONS }, details: '', painAreas: '', bodyAreas: [], signature: '',
-                      signatureDate: new Date().toISOString().split('T')[0], consent: false, reuseExisting: false,
-                    },
+                    intake: emptyPatientHistory(),
                     paymentOption: 'deposit',
                     hotStoneAddOn: false,
                     skipPayment: false,
@@ -6214,14 +6294,17 @@ function AdminPortal({
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
-                <label className="sm:col-span-12 pt-1 border-t border-stone-100 mt-1 flex items-center gap-1.5 text-[11px] font-semibold text-stone-600" title="When off, this branch confirms bookings without collecting any online deposit or payment.">
-                  <input
-                    type="checkbox"
-                    checked={branch.collectsDeposit !== false}
-                    onChange={(e) => updateBranchField(branch.id, 'collectsDeposit', e.target.checked)}
-                  />
-                  Collect deposit / payment online for this branch
-                </label>
+                <fieldset className="sm:col-span-12 pt-1 border-t border-stone-100 mt-1">
+                  <legend className="text-xs font-bold text-stone-700">Customer payment choices (enable at least one)</legend>
+                  <div className="flex flex-wrap gap-4 mt-2">
+                    {[['clinic', 'allowClinicPayment', 'Pay at clinic (no deposit)'], ['deposit', 'allowDepositPayment', '$10 deposit'], ['full', 'allowFullPayment', 'Pay in full online']].map(([option, field, label]) => (
+                      <label key={option} className="flex items-center gap-1.5 text-xs text-stone-600">
+                        <input type="checkbox" checked={branchPaymentOptions(branch)[option]} onChange={(e) => updateBranchField(branch.id, field, e.target.checked)} />
+                        {label}
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
               </div>
             ))}
           </div>

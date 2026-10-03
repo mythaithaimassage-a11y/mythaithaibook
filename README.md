@@ -520,6 +520,33 @@ configured audience and scopes. Without valid OAuth credentials and consent,
 Sheets and Calendar booking writes can still succeed while confirmation email
 delivery fails. The Calendar event does not invite attendees.
 
+### Recovering from Gmail `invalid_grant`
+
+This error means Google rejected the Gmail OAuth refresh token. It may have
+expired or been revoked, or it may belong to a different OAuth client.
+Changing Calendar credentials or retrying the booking will not repair Gmail
+authorization.
+
+1. Check the OAuth app's publishing status in Google Cloud. If an external app
+   is in **Testing**, configure it for ongoing use before generating the
+   replacement token; otherwise Gmail refresh tokens expire after seven days.
+2. Reauthorize the mailbox specified by `GOOGLE_GMAIL_SENDER_EMAIL` for
+   `https://www.googleapis.com/auth/gmail.send` using the OAuth Playground
+   procedure above. Enable **Use your own OAuth credentials** and use the exact
+   client ID and secret configured as `GOOGLE_OAUTH_CLIENT_ID` and
+   `GOOGLE_OAUTH_CLIENT_SECRET`. Request offline access and consent to obtain
+   a new refresh token.
+3. Replace `GOOGLE_OAUTH_REFRESH_TOKEN` in the Vercel environment serving the
+   failing deployment, then redeploy so the application loads the new token.
+   Keep all tokens and client secrets out of source code and support messages.
+4. Verify email delivery after redeploying. An already-saved booking remains
+   saved, but its failed confirmation email is not automatically resent.
+   Do not submit the same booking again just to retry email; contact the
+   customer separately about that appointment.
+
+Booking confirmation emails report this authorization failure with recovery
+guidance. Other email errors retain their original messages.
+
 The Admin Dashboard schedule loads live booking rows from `GET /api/booking`,
 which reads from the BigQuery `bookings` table (see "Booking records in
 BigQuery" below).
@@ -962,16 +989,46 @@ refund window is unambiguous. Bookings with no online payment get the generic
 wording instead. Step 4 of the booking flow shows the matching policy text
 before the customer submits.
 
-### Branch-specific deposit collection
+### Branch-specific payment choices
 
-Each branch row in the owner **Branches** editor has a **Collect deposit /
-payment online for this branch** checkbox, stored in column H
-(`Collects Deposit`) of the `Branches` sheet. Branches default to collecting a
-deposit, so existing rows are unchanged.
+Each branch row in the owner **Branches** editor has three independent toggles:
+**Pay at clinic (no deposit)**, **$10 deposit**, and **Pay in full online**.
+Enable at least one. Customers see only enabled options, and the API checks the
+selected option against the branch's saved settings. The deposit is $10 (or the
+appointment total if lower), not the service catalogue's legacy deposit field.
+Pay-at-clinic bookings skip Square checkout.
 
-When the checkbox is cleared, the booking portal hides the payment options for
-that branch, skips the Square panel on the confirmation step, and confirms the
-appointment with the full amount due at the clinic.
+These settings are stored in columns I-K of the `Branches` sheet: `Allow Clinic
+Payment`, `Allow Deposit Payment`, and `Allow Full Payment`. Legacy rows with
+blank values preserve their column H (`Collects Deposit`) behavior: online
+collection enables deposit and full payment; opting out enables clinic payment
+only. Saving branches writes the new columns and headers.
+
+### Booking hours, catalogue, and medical history
+
+Booking and rescheduling offer starts from **10:00 AM to 7:00 PM**, in 15-minute
+intervals. The API enforces the same start times. Previously saved appointments
+are not moved.
+
+Customer service categories come from active catalogue entries rather than a
+hard-coded list. RMT services remain bookable when active; the RMT Healthcare
+category appears only if active services use that category. Hot Stone add-ons
+remain a separate checkbox rather than a standalone appointment.
+
+New medical-history forms offer **Light**, **Medium**, and **Firm** pressure.
+Previously recorded Extra Firm preferences remain readable. The rotatable body
+map uses connected anatomical contours and warmer shading, while retaining
+front/back/side views, body types, keyboard-accessible area selection, and
+read-only patient summaries.
+
+Customers can choose **Skip medical history for now** during booking. This
+does not record medical consent or create an empty history row. They must
+complete their history before treatment. The separate **Medical history only**
+entry point requires an existing booking reference and matching booking email;
+it submits the same medical form without creating another appointment,
+Calendar event, payment, or confirmation email. Cancelled and no-show bookings
+cannot receive a new submission. The API validates consent and signature, and
+uses the saved booking's identity rather than client-supplied patient details.
 
 ### Walk-in bookings without payment
 
