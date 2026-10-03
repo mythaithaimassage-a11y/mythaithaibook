@@ -5371,9 +5371,11 @@ function AdminPortal({
     setIsLoadingCalendar(true);
     setCalendarLoadError('');
     try {
-      const branch = calendarBranch === 'all' ? '' : branches.find((item) => String(item.id) === calendarBranch)?.address || '';
+      const selectedBranch = calendarBranch === 'all' ? undefined : branches.find((item) => String(item.id) === calendarBranch);
+      const branch = selectedBranch?.address || '';
+      const branchName = selectedBranch?.name || '';
       const therapist = calendarTherapist === 'all' ? '' : therapists.find((item) => String(item.id) === calendarTherapist)?.name || '';
-      const response = await fetch(`/api/booking?view=calendar&date=${encodeURIComponent(calendarDate)}&branch=${encodeURIComponent(branch)}&therapist=${encodeURIComponent(therapist)}`, {
+      const response = await fetch(`/api/booking?view=calendar&date=${encodeURIComponent(calendarDate)}&branch=${encodeURIComponent(branch)}&branchName=${encodeURIComponent(branchName)}&therapist=${encodeURIComponent(therapist)}`, {
         signal: controller.signal, cache: 'no-store',
       });
       const data = await response.json();
@@ -5961,7 +5963,7 @@ function AdminPortal({
             )}
           </div>
           {calendarEvents.length === 0 && !isLoadingCalendar ? (
-            <p className="py-8 text-center text-sm text-stone-500">No appointments found for this date and branch.</p>
+            <p className="py-8 text-center text-sm text-stone-500">No appointments found for the selected date, branch and therapist. Sync covers all imported dates; select an appointment date or choose All branches and All therapists.</p>
           ) : (
             <div className="space-y-3">
               {calendarEvents.map((event) => (

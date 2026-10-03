@@ -6365,7 +6365,12 @@ export default async function handler(req, res) {
 
       if (req.query?.view === 'calendar') {
         const date = req.query.date || new Date().toISOString().slice(0, 10);
-        const branch = String(req.query.branch || '').toLowerCase();
+        const branch = String(req.query.branch || '').trim().toLowerCase();
+        const branchName = String(req.query.branchName || '').trim().toLowerCase();
+        const matchesBranchName = (name) => {
+          const normalized = String(name || '').trim().toLowerCase();
+          return Boolean(normalized && (normalized === branchName || normalized === branch));
+        };
         const therapist = String(req.query.therapist || '').toLowerCase();
         const bigquery = getBigQueryClient();
         const sheetResult = await bqFetchBookingRows(bigquery);
@@ -6416,7 +6421,8 @@ export default async function handler(req, res) {
               const eventTherapist = bookingRow?.[6] || parsedDescription.therapistName || getTherapistFromDescription(event.description);
               if (
                 localStart.date === date &&
-                (!branch || location.toLowerCase().includes(branch)) &&
+                ((!branch && !branchName) || matchesBranchName(bookingRow?.[4]) || matchesBranchName(location) ||
+                  (branch && [location, bookingRow?.[13]].some((address) => String(address || '').toLowerCase().includes(branch)))) &&
                 (!therapist || eventTherapist.toLowerCase() === therapist)
               ) {
                 let booking = bookingRow ? {
@@ -6523,7 +6529,7 @@ export default async function handler(req, res) {
 
         const unavailability = (await getUnavailabilityBlocks(sheets))
           .filter((block) => block.date === date)
-          .filter((block) => block.scope !== 'business' || !branch || !block.branchName || block.branchName.toLowerCase() === branch)
+          .filter((block) => block.scope !== 'business' || (!branch && !branchName) || !block.branchName || matchesBranchName(block.branchName))
           .filter((block) => block.scope !== 'therapist' || !therapist || block.therapistName.toLowerCase() === therapist)
           .map((block) => ({
             id: block.id,

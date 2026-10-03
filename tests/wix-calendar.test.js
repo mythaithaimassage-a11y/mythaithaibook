@@ -381,10 +381,17 @@ test('Calendar backfill endpoint enforces owner authentication, method, origin a
   t.mock.method(BigQuery.prototype, 'dataset', () => ({
     exists: async () => [true], table: () => ({ exists: async () => [true] }),
   }));
+  const blocks = [
+    ['central-block', 'business', 'Mississauga Central', '', booking.date, '09:00', '10:00', 'Closed'],
+    ['other-block', 'business', 'Other Clinic', '', booking.date, '09:00', '10:00', 'Closed'],
+    ['all-block', 'business', '', '', booking.date, '12:00', '13:00', 'Closed'],
+  ];
   t.mock.method(google, 'sheets', () => ({
     spreadsheets: {
       get: async () => ({ data: { sheets: [{ properties: { title: 'Unavailability' } }] } }),
-      values: { get: async ({ range }) => ({ data: { values: range === 'Unavailability!A1:J1' ? [['Block ID']] : [] } }) },
+      values: { get: async ({ range }) => ({ data: {
+        values: range === 'Unavailability!A1:J1' ? [['Block ID']] : range === 'Unavailability!A:J' ? blocks : [],
+      } }) },
     },
   }));
   f.calendar.calendarList = { list: async () => ({ data: { items: [{ id: options.calendarId }] } }) };
@@ -400,9 +407,9 @@ test('Calendar backfill endpoint enforces owner authentication, method, origin a
   t.mock.method(google, 'calendar', () => f.calendar);
   const { default: handler } = await import('../api/booking.js');
   let cookie;
-  async function request(view, { method = 'POST', origin = 'https://test.example', body = {} } = {}) {
+  async function request(view, { method = 'POST', origin = 'https://test.example', body = {}, query = {} } = {}) {
     const req = Readable.from([Buffer.from(JSON.stringify(body))]);
-    Object.assign(req, { method, query: { view, date: booking.date }, headers: { host: 'test.example', origin, cookie, 'content-type': 'application/json' } });
+    Object.assign(req, { method, query: { view, date: booking.date, ...query }, headers: { host: 'test.example', origin, cookie, 'content-type': 'application/json' } });
     const res = {
       headers: {},
       setHeader(key, value) { this.headers[key] = value; if (key === 'Set-Cookie') cookie = value.split(';')[0]; },
@@ -431,6 +438,30 @@ test('Calendar backfill endpoint enforces owner authentication, method, origin a
   assert.equal(displayed.data.events.length, 1);
   assert.equal(displayed.data.events[0].booking.id, booking.booking_id);
   assert.deepEqual(pages, [undefined, 'next-page']);
+  const branchFiltered = await request('calendar', {
+    method: 'GET', query: { branch: '123 Synthetic Street', branchName: 'Mississauga Central' },
+  });
+  assert.equal(branchFiltered.code, 200);
+  assert.equal(branchFiltered.data.events.length, 1);
+  assert.equal(branchFiltered.data.events[0].booking.id, booking.booking_id);
+  assert.deepEqual(branchFiltered.data.unavailability.map((block) => block.id), ['central-block', 'all-block']);
+  const nameOnly = await request('calendar', { method: 'GET', query: { branchName: ' mississauga central ' } });
+  assert.equal(nameOnly.data.events.length, 1);
+  const otherBranch = await request('calendar', {
+    method: 'GET', query: { branch: '456 Other Street', branchName: 'Other Clinic' },
+  });
+  assert.equal(otherBranch.data.events.length, 0);
+  assert.deepEqual(otherBranch.data.unavailability.map((block) => block.id), ['other-block', 'all-block']);
+  const wrongDate = await request('calendar', { method: 'GET', query: { date: '2026-09-30' } });
+  assert.equal(wrongDate.data.events.length, 0);
+  const wrongTherapist = await request('calendar', {
+    method: 'GET', query: { branchName: 'Mississauga Central', therapist: 'Another therapist' },
+  });
+  assert.equal(wrongTherapist.data.events.length, 0);
+  const event = [...f.events.values()][0];
+  event.location = '123 Synthetic Street';
+  const legacyAddress = await request('calendar', { method: 'GET', query: { branch: '123 Synthetic Street' } });
+  assert.equal(legacyAddress.data.events.length, 1);
   // Clearing database history must not re-create a booking from its retained Wix event.
   f.rows.length = 0;
   const cleared = await request('calendar', { method: 'GET' });

@@ -356,6 +356,12 @@ Calendar reads follow all event pages so busy days do not silently lose appointm
 Sync applies to
 all pending Wix dates/branches, not just the selected calendar filters. Select
 the historical appointment date to see its events in the day view.
+The dashboard sends both the selected branch name and address: imported Wix
+events use `Mississauga Central` as their location without a street address.
+Calendar filtering matches stored booking branch names as well as event/booking
+addresses, so synced imports remain visible when that branch is selected.
+The same branch-name matching applies to branch-specific business availability
+blocks. Date and therapist filters still apply independently.
 Progress and errors are explicit; an import can save database rows even when
 Calendar permissions or quotas prevent syncing. Fix the reported error and retry.
 Stable Calendar event IDs and ownership checks recover an event created before
