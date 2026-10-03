@@ -30,7 +30,10 @@ function fixture(rows = [{ ...booking }]) {
       const pending = rows.filter((row) => row.booking_id.startsWith('WIX-') && !row.calendar_event_id &&
         !['Cancelled', 'No Show'].includes(row.status) && !params.excludedIds?.includes(row.booking_id));
       if (query.startsWith('SELECT COUNT')) return [[{ pending: pending.length }]];
-      if (query.startsWith('SELECT')) return [pending.slice(0, 25).map((row) => ({ ...row }))];
+      if (query.startsWith('SELECT')) {
+        assert.match(query, /ORDER BY booking_id LIMIT 500$/);
+        return [pending.slice(0, 500).map((row) => ({ ...row }))];
+      }
       assert.match(query, /BEGIN TRANSACTION/);
       assert.match(query, /ASSERT/);
       assert.match(query, /ARRAY_LENGTH\(@links\)/);
@@ -76,15 +79,15 @@ test('Wix event uses clinic timezone, mapped therapist and correct midnight dura
 });
 
 test('bounded backfill only creates pending Wix events and saves existing schema links; retry skips them', async () => {
-  const rows = Array.from({ length: 27 }, (_, i) => ({ ...booking, booking_id: `WIX-${i}` }));
+  const rows = Array.from({ length: 502 }, (_, i) => ({ ...booking, booking_id: `WIX-${i}` }));
   rows.push({ ...booking, booking_id: 'LIVE-test' }, { ...booking, status: 'Cancelled' }, { ...booking, status: 'No Show' });
   const f = fixture(rows);
-  assert.deepEqual(await syncWixCalendarBatch(f.bigquery, f.calendar, options), { synced: 25, pending: 2, errors: [] });
+  assert.deepEqual(await syncWixCalendarBatch(f.bigquery, f.calendar, options), { synced: 500, pending: 2, errors: [] });
   assert.equal(f.queries.length, 3);
   assert.equal(f.queries.filter(({ query }) => query.startsWith('BEGIN')).length, 1);
   assert.deepEqual(await syncWixCalendarBatch(f.bigquery, f.calendar, options), { synced: 2, pending: 0, errors: [] });
   assert.deepEqual(await syncWixCalendarBatch(f.bigquery, f.calendar, options), { synced: 0, pending: 0, errors: [] });
-  assert.equal(f.events.size, 27);
+  assert.equal(f.events.size, 502);
   for (const write of f.writes) {
     assert.match(write.requestBody.id, /^a11[a-f0-9]{64}$/);
     assert.match(write.requestBody.id, /^[0-9a-v]{5,1024}$/);
@@ -137,8 +140,8 @@ test('conflicting or deleted deterministic events are not overwritten or linked'
   }
 });
 
-test('25 Calendar writes run in five bounded parallel waves with one database transaction', { timeout: 2000 }, async () => {
-  const f = fixture(Array.from({ length: 25 }, (_, i) => ({ ...booking, booking_id: `WIX-${i}` })));
+test('500 Calendar writes run in 100 bounded parallel waves with one database transaction', { timeout: 5000 }, async () => {
+  const f = fixture(Array.from({ length: 500 }, (_, i) => ({ ...booking, booking_id: `WIX-${i}` })));
   const insert = f.calendar.events.insert;
   let active = 0;
   let peak = 0;
@@ -160,15 +163,34 @@ test('25 Calendar writes run in five bounded parallel waves with one database tr
     return result;
   };
   const result = await syncWixCalendarBatch(f.bigquery, f.calendar, options);
-  assert.equal(result.synced, 25);
+  assert.equal(result.synced, 500);
   assert.equal(peak, 5);
-  assert.equal(waves, 5);
+  assert.equal(waves, 100);
   assert.equal(f.queries.length, 3);
 });
 
-test('quota and timeout failures stop new scheduling instead of attempting all 25 bookings', async () => {
+test('500 bookings can complete after the former 15-second deadline within the extended budget', async (t) => {
+  const f = fixture(Array.from({ length: 500 }, (_, i) => ({ ...booking, booking_id: `WIX-${i}` })));
+  let now = 0;
+  let written = 0;
+  t.mock.method(Date, 'now', () => now);
+  const insert = f.calendar.events.insert;
+  f.calendar.events.insert = async (...args) => {
+    const result = await insert(...args);
+    written += 1;
+    if (written % 5 === 0) now += 1000;
+    return result;
+  };
+  assert.deepEqual(await syncWixCalendarBatch(f.bigquery, f.calendar, options), {
+    synced: 500, pending: 0, errors: [],
+  });
+  assert.equal(now, 100000);
+  assert.equal(f.queries.length, 3);
+});
+
+test('quota and timeout failures stop new scheduling instead of attempting all 500 bookings', async () => {
   for (const code of [429, 'ETIMEDOUT']) {
-    const f = fixture(Array.from({ length: 25 }, (_, i) => ({ ...booking, booking_id: `WIX-${i}` })));
+    const f = fixture(Array.from({ length: 500 }, (_, i) => ({ ...booking, booking_id: `WIX-${i}` })));
     let attempted = 0;
     f.calendar.events.insert = async () => {
       attempted += 1;
@@ -178,7 +200,7 @@ test('quota and timeout failures stop new scheduling instead of attempting all 2
     assert.equal(result.stopped, true);
     assert.equal(result.synced, 0);
     assert.equal(attempted, 5);
-    assert.equal(result.pending, 20);
+    assert.equal(result.pending, 495);
     assert.equal(result.errors.length, 5);
     assert.ok(f.rows.every((row) => !row.calendar_event_id));
   }
@@ -217,19 +239,19 @@ test('a concurrent booking change prevents linking the entire batch, and retry r
   assert.equal(f.events.size, 2);
 });
 
-test('slow batches stop scheduling new work after 15 seconds and leave it resumable', async (t) => {
-  const f = fixture(Array.from({ length: 25 }, (_, i) => ({ ...booking, booking_id: `WIX-${i}` })));
+test('slow batches stop scheduling new work after 180 seconds and leave it resumable', async (t) => {
+  const f = fixture(Array.from({ length: 500 }, (_, i) => ({ ...booking, booking_id: `WIX-${i}` })));
   let now = 0;
   t.mock.method(Date, 'now', () => now);
   const insert = f.calendar.events.insert;
   f.calendar.events.insert = async (...args) => {
     const result = await insert(...args);
-    now = 15001;
+    now = 180001;
     return result;
   };
   const result = await syncWixCalendarBatch(f.bigquery, f.calendar, options);
   assert.equal(result.synced, 5);
-  assert.equal(result.pending, 20);
+  assert.equal(result.pending, 495);
   assert.deepEqual(result.errors, []);
 });
 

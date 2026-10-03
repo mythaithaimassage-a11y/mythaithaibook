@@ -325,10 +325,14 @@ be enabled. Original or owner-mapped therapist names appear in event description
 Cancelled/no-show bookings are not added. No attendees, email invitations, or
 reminders are created. Times use `GOOGLE_CALENDAR_TIME_ZONE`.
 
-The import starts a batch of up to 25 pending bookings, with at most five
+The import starts a batch of up to 500 pending bookings, with at most five
 Calendar writes in flight and one guarded BigQuery transaction per batch
 (rather than a database transaction per booking). Calendar writes have a
-10-second request timeout; batches stop starting new writes after 15 seconds.
+10-second request timeout; batches stop starting new writes after 180 seconds.
+The booking function has a 300-second deployment limit, leaving time for
+in-flight writes and database linking. The deployment must support this limit.
+Slow batches may return fewer than 500 synced bookings; the owner UI continues
+with the remaining bookings automatically.
 Permission/quota/network failures stop new work and are reported explicitly.
 Invalid individual bookings are reported without blocking other valid bookings;
 the current run excludes failed IDs from later batches, but retrying a new run
