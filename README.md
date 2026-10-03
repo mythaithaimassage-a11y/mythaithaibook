@@ -547,6 +547,28 @@ authorization.
 Booking confirmation emails report this authorization failure with recovery
 guidance. Other email errors retain their original messages.
 
+### Public booking and separate staff entry points
+
+The home page `/` is the public booking view and does not show owner-dashboard
+or therapist-login tabs. Staff access their existing authenticated views using
+these direct URLs on the same deployment:
+
+- Owner dashboard: `/owner`
+- Therapist sign-in: `/therapist`
+
+Both paths are explicitly rewritten to the app by Vercel and start on their
+respective sign-in views. Staff entry points retain the platform view switcher,
+including the owner's walk-in/phone booking workflow. Opening `/` in a separate
+tab always presents public booking, even when a staff session exists.
+Medical-history, manage-booking, company-portal, and payment-return links at
+the home page continue to work.
+
+Staff URLs have `X-Robots-Tag: noindex, nofollow` headers to discourage indexing.
+They are not secret URLs, separate private deployments, or network restrictions:
+the login pages remain publicly reachable. Server-side owner and therapist
+authentication still controls access to protected records. No new environment
+variables are needed.
+
 The Admin Dashboard schedule loads live booking rows from `GET /api/booking`,
 which reads from the BigQuery `bookings` table (see "Booking records in
 BigQuery" below).

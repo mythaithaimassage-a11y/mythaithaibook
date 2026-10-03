@@ -19,6 +19,7 @@ import WixCalendarSync from './WixCalendarSync';
 import { AVAILABLE_TIMES, BOOKING_DEPOSIT_AMOUNT, branchPaymentOptions, bookingCategories } from '../lib/booking-options.js';
 import { emptyPatientHistory } from '../lib/patient-history.js';
 import { anatomicalBodyParts } from '../lib/body-map.js';
+import { portalEntry } from '../lib/portal-entry.js';
 
 const MOCK_BRANCHES = [
   { id: 1, name: "Mississauga Central", address: "4310 Sherwoodtowne Blvd", city: "Mississauga, ON", phone: "+1 437 898 7424" },
@@ -620,6 +621,7 @@ function TherapistDonutCard({ title, subtitle, segments, centerValue, centerLabe
 }
 
 export default function App() {
+  const [entry] = useState(() => portalEntry(typeof window === 'undefined' ? '/' : window.location.pathname));
   const [companyPortalToken] = useState(() => {
     if (typeof window === 'undefined') return '';
     return new URLSearchParams(window.location.search).get('companyToken') || '';
@@ -642,7 +644,7 @@ export default function App() {
       window.history.replaceState({}, '', url.toString());
     }
   }, [squarePaymentComplete]);
-  const [viewMode, setViewMode] = useState('customer'); // 'customer' or 'admin'
+  const [viewMode, setViewMode] = useState(entry.mode);
   // Set when staff open the booking flow from the dashboard for a walk-in or phone
   // booking, which unlocks the option to take payment at the clinic instead.
   const [staffBooking, setStaffBooking] = useState(false);
@@ -757,7 +759,7 @@ export default function App() {
           <span className={`text-lg font-bold tracking-tight ${viewMode === 'therapist' ? 'text-white' : 'text-slate-950'}`}>MedBook</span>
           <span className={`hidden rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider sm:inline-flex ${viewMode === 'therapist' ? 'border border-slate-700 bg-slate-900 text-slate-300' : 'border border-emerald-100 bg-emerald-50 text-emerald-800'}`}>Practice platform</span>
         </div>
-        <nav aria-label="Platform views" className={`flex items-center gap-1 rounded-full p-1 ${viewMode === 'therapist' ? 'bg-slate-900' : 'bg-slate-100'}`}>
+        {entry.staffNavigation ? <nav aria-label="Staff platform views" className={`flex items-center gap-1 rounded-full p-1 ${viewMode === 'therapist' ? 'bg-slate-900' : 'bg-slate-100'}`}>
           {[
             { mode: 'customer', label: 'Booking', Icon: CalendarDays },
             { mode: 'admin', label: 'Dashboard', Icon: BarChart3 },
@@ -783,7 +785,9 @@ export default function App() {
               </button>
             );
           })}
-        </nav>
+        </nav> : <a href="/" aria-label="Public booking home" className="inline-flex items-center gap-1.5 rounded-full bg-emerald-950 px-3 py-2 text-xs font-semibold text-white">
+          <CalendarDays className="h-4 w-4" /> Booking
+        </a>}
       </header>
 
       {/* Main View Switcher */}

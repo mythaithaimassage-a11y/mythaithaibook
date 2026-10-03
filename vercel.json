@@ -3,7 +3,29 @@
   "outputDirectory": "dist",
   "rewrites": [
     { "source": "/privacy-policy", "destination": "/privacy-policy.html" },
-    { "source": "/terms-of-service", "destination": "/terms-of-service.html" }
+    { "source": "/terms-of-service", "destination": "/terms-of-service.html" },
+    { "source": "/owner", "destination": "/index.html" },
+    { "source": "/owner/", "destination": "/index.html" },
+    { "source": "/therapist", "destination": "/index.html" },
+    { "source": "/therapist/", "destination": "/index.html" }
+  ],
+  "headers": [
+    {
+      "source": "/owner",
+      "headers": [{ "key": "X-Robots-Tag", "value": "noindex, nofollow" }]
+    },
+    {
+      "source": "/owner/",
+      "headers": [{ "key": "X-Robots-Tag", "value": "noindex, nofollow" }]
+    },
+    {
+      "source": "/therapist",
+      "headers": [{ "key": "X-Robots-Tag", "value": "noindex, nofollow" }]
+    },
+    {
+      "source": "/therapist/",
+      "headers": [{ "key": "X-Robots-Tag", "value": "noindex, nofollow" }]
+    }
   ],
   "functions": {
     "api/booking.js": {
