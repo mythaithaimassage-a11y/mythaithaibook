@@ -13,10 +13,13 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
     BIGQUERY_DATASET: 'booking_system', GOOGLE_GMAIL_SENDER_EMAIL: 'test@example.com',
     GOOGLE_OAUTH_CLIENT_ID: 'synthetic-client', GOOGLE_OAUTH_CLIENT_SECRET: 'synthetic-secret',
     GOOGLE_OAUTH_REFRESH_TOKEN: 'synthetic-refresh-token',
-    OWNER_ADMIN_PASSWORD: 'synthetic-owner-password',
-    OWNER_ADMIN_EMAIL: 'owner@example.com',
+    OWNER_ADMIN_PASSWORD: '',
+    OWNER_ADMIN_EMAIL: '',
     OWNER_ADMIN_SESSION_SECRET: 'synthetic-session-secret-at-least-thirty-two-characters',
+    OWNER_INITIAL_SETUP_SECRET: 'synthetic-one-time-setup-secret-at-least-thirty-two',
   });
+  const ownerEmail = 'owner@example.com';
+  const ownerPassword = 'synthetic-owner-password';
   let branchRows = [[1, 'Test Branch', 'Address', 'City', '555', 'TRUE', '', 'TRUE', 'TRUE', 'TRUE', 'TRUE']];
   const headers = [];
   t.mock.method(google, 'sheets', () => ({
@@ -61,6 +64,9 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
     const dashboardAuthResult = handleDashboardChallengeQuery(query, params, dashboardChallenges);
     if (dashboardAuthResult) return dashboardAuthResult;
     if (query.includes('dashboard_users')) {
+      if (query.startsWith('SELECT id FROM') && query.includes("role = 'owner'")) {
+        return [dashboardUsers.filter((user) => user.role === 'owner').map(({ id }) => ({ id }))];
+      }
       if (query.startsWith('SELECT id, email, name, password_hash')) {
         return [dashboardUsers.filter((user) => user.email === params.email && user.status === 'active')];
       }
@@ -68,7 +74,12 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
         return [dashboardUsers.filter((user) => user.email === params.email).map(({ id }) => ({ id }))];
       }
       if (query.startsWith('INSERT INTO')) {
-        dashboardUsers.push({ ...params, status: 'active' });
+        dashboardUsers.push({
+          ...params,
+          role: params.role || (query.includes("'owner'") ? 'owner' : ''),
+          branch_ids: params.branch_ids || '[]',
+          status: 'active',
+        });
         return [[]];
       }
       if (query.startsWith('SELECT id, email, name, role')) return [dashboardUsers];
@@ -150,7 +161,28 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   assert.equal((await request('submit-patient-history', submission)).code, 500);
   assert.equal(histories.length, 1);
 
-  const login = await request('owner-login', { email: process.env.OWNER_ADMIN_EMAIL, password: process.env.OWNER_ADMIN_PASSWORD });
+  const setupStatus = await request('owner-session', null, { method: 'GET' });
+  assert.equal(setupStatus.code, 200);
+  assert.equal(setupStatus.data.setupAvailable, true);
+  assert.equal((await request('owner-setup', {
+    name: 'Practice Owner', email: ownerEmail, setupSecret: 'wrong-key',
+    password: ownerPassword, confirmPassword: ownerPassword,
+  })).code, 401);
+  assert.equal((await request('owner-setup', {
+    name: 'Practice Owner', email: ownerEmail, setupSecret: process.env.OWNER_INITIAL_SETUP_SECRET,
+    password: ownerPassword, confirmPassword: 'a-different-password',
+  })).code, 400);
+  const ownerCreated = await request('owner-setup', {
+    name: 'Practice Owner', email: ownerEmail, setupSecret: process.env.OWNER_INITIAL_SETUP_SECRET,
+    password: ownerPassword, confirmPassword: ownerPassword,
+  });
+  assert.equal(ownerCreated.code, 201, JSON.stringify(ownerCreated.data));
+  assert.equal((await request('owner-setup', {
+    name: 'Another Owner', email: 'another-owner@example.com',
+    setupSecret: process.env.OWNER_INITIAL_SETUP_SECRET,
+    password: ownerPassword, confirmPassword: ownerPassword,
+  })).code, 409, 'initial owner setup cannot be reused');
+  const login = await request('owner-login', { email: ownerEmail, password: ownerPassword });
   assert.equal(login.code, 200);
   assert.equal(login.data.otpRequired, true);
   const ownerOtp = readDashboardOtp(emails.at(-1));
@@ -211,7 +243,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   assert.equal(records.length, 5);
 
   const ownerLoginForAccounts = await request('owner-login', {
-    email: process.env.OWNER_ADMIN_EMAIL, password: process.env.OWNER_ADMIN_PASSWORD,
+    email: ownerEmail, password: ownerPassword,
   });
   assert.equal(ownerLoginForAccounts.code, 200);
   assert.equal((await request('owner-verify', {
@@ -237,7 +269,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   assert.equal((await request('mark-paid', { bookingId: 'MTT-not-found' })).code, 404);
 
   const ownerLoginAgain = await request('owner-login', {
-    email: process.env.OWNER_ADMIN_EMAIL, password: process.env.OWNER_ADMIN_PASSWORD,
+    email: ownerEmail, password: ownerPassword,
   });
   assert.equal(ownerLoginAgain.code, 200);
   assert.equal((await request('owner-verify', {

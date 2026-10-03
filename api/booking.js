@@ -48,6 +48,7 @@ const THERAPIST_ACCOUNTS = process.env.THERAPIST_ACCOUNTS || '[]';
 const OWNER_ADMIN_PASSWORD = process.env.OWNER_ADMIN_PASSWORD || '';
 const OWNER_ADMIN_EMAIL = (process.env.OWNER_ADMIN_EMAIL || '').trim().toLowerCase();
 const OWNER_ADMIN_SESSION_SECRET = process.env.OWNER_ADMIN_SESSION_SECRET || '';
+const OWNER_INITIAL_SETUP_SECRET = process.env.OWNER_INITIAL_SETUP_SECRET || '';
 const DASHBOARD_USERS_TABLE = 'dashboard_users';
 const DASHBOARD_LOGIN_CHALLENGES_TABLE = 'dashboard_login_challenges';
 const SQUARE_ACCESS_TOKEN = process.env.SQUARE_ACCESS_TOKEN || '';
@@ -1224,15 +1225,28 @@ function signOwnerSession(account) {
   return `${payload}.${signature}`;
 }
 
+function dashboardOtpConfigurationIssues() {
+  const issues = [];
+  if (OWNER_ADMIN_SESSION_SECRET.length < 32) issues.push('OWNER_ADMIN_SESSION_SECRET (at least 32 characters)');
+  if (!GOOGLE_OAUTH_CLIENT_ID) issues.push('GOOGLE_OAUTH_CLIENT_ID');
+  if (!GOOGLE_OAUTH_CLIENT_SECRET) issues.push('GOOGLE_OAUTH_CLIENT_SECRET');
+  if (!GOOGLE_OAUTH_REFRESH_TOKEN) issues.push('GOOGLE_OAUTH_REFRESH_TOKEN');
+  if (!/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(GOOGLE_GMAIL_SENDER_EMAIL)) issues.push('GOOGLE_GMAIL_SENDER_EMAIL (a valid email address)');
+  return issues;
+}
+
+function isDashboardOtpConfigured() {
+  return dashboardOtpConfigurationIssues().length === 0;
+}
+
 function isOwnerAuthConfigured() {
   return /^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(OWNER_ADMIN_EMAIL)
     && OWNER_ADMIN_PASSWORD.length >= 16
-    && OWNER_ADMIN_SESSION_SECRET.length >= 32
-    && Boolean(GOOGLE_OAUTH_CLIENT_ID && GOOGLE_OAUTH_CLIENT_SECRET && GOOGLE_OAUTH_REFRESH_TOKEN && GOOGLE_GMAIL_SENDER_EMAIL);
+    && isDashboardOtpConfigured();
 }
 
 async function getOwnerSession(req) {
-  if (!isOwnerAuthConfigured()) return null;
+  if (!isDashboardOtpConfigured()) return null;
   const value = parseCookies(req).mtt_owner_session || '';
   const [payload, signature] = value.split('.');
   if (!payload || !signature) return null;
@@ -1306,9 +1320,22 @@ async function ensureDashboardAuthTables(bigquery = getBigQueryClient()) {
   await dashboardAuthTablesPromise;
 }
 
+async function hasStoredDashboardOwner(bigquery = getBigQueryClient()) {
+  await ensureDashboardAuthTables(bigquery);
+  const [owners] = await bigquery.query({
+    query: `SELECT id FROM ${dashboardUsersTableRef()} WHERE role = 'owner' LIMIT 1`,
+  });
+  return owners.length > 0;
+}
+
+async function isInitialOwnerSetupAvailable(bigquery = getBigQueryClient()) {
+  if (OWNER_INITIAL_SETUP_SECRET.length < 32 || !isDashboardOtpConfigured() || isOwnerAuthConfigured()) return false;
+  return !await hasStoredDashboardOwner(bigquery);
+}
+
 async function findDashboardUser(email) {
   const normalizedEmail = String(email || '').trim().toLowerCase();
-  if (normalizedEmail === OWNER_ADMIN_EMAIL) {
+  if (isOwnerAuthConfigured() && normalizedEmail === OWNER_ADMIN_EMAIL) {
     return {
       id: 'env-owner',
       email: OWNER_ADMIN_EMAIL,
@@ -4156,20 +4183,88 @@ export default async function handler(req, res) {
     }
 
     if (req.query?.view === 'owner-session' && req.method === 'GET') {
-      if (!isOwnerAuthConfigured()) {
-        return res.status(503).json({ message: 'Configure the owner email, a password of at least 16 characters, a session secret of at least 32 characters, and Gmail OAuth before enabling dashboard sign-in.' });
-      }
       res.setHeader('Cache-Control', 'no-store');
+      const otpIssues = dashboardOtpConfigurationIssues();
+      if (otpIssues.length) {
+        const bootstrapIssues = [];
+        if (!/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(OWNER_ADMIN_EMAIL)) bootstrapIssues.push('OWNER_ADMIN_EMAIL (a valid email address)');
+        if (OWNER_ADMIN_PASSWORD.length < 16) bootstrapIssues.push('OWNER_ADMIN_PASSWORD (at least 16 characters)');
+        return res.status(200).json({
+          authenticated: false,
+          setupAvailable: false,
+          message: `Dashboard sign-in is not configured. Set these Vercel environment variables: ${[...otpIssues, ...bootstrapIssues].join(', ')}. Redeploy after changing them.`,
+        });
+      }
       const session = await getOwnerSession(req);
+      const setupAvailable = !session && await isInitialOwnerSetupAvailable();
+      const storedOwnerExists = !session && !isOwnerAuthConfigured() && !setupAvailable && await hasStoredDashboardOwner();
       return res.status(200).json({
         authenticated: Boolean(session),
         user: session ? { id: session.userId, email: session.email, name: session.name, role: session.role, branchIds: session.branchIds } : null,
+        setupAvailable,
+        message: setupAvailable || isOwnerAuthConfigured() || storedOwnerExists
+          ? ''
+          : `First-time owner setup is unavailable. Configure OWNER_ADMIN_EMAIL and OWNER_ADMIN_PASSWORD, or set OWNER_INITIAL_SETUP_SECRET (at least 32 characters) to enable guarded one-time setup.`,
       });
     }
 
+    if (req.query?.view === 'owner-setup' && req.method === 'POST') {
+      res.setHeader('Cache-Control', 'no-store');
+      if (!isSameOriginRequest(req)) return res.status(403).json({ message: 'Owner setup request origin is not allowed' });
+      const otpIssues = dashboardOtpConfigurationIssues();
+      if (otpIssues.length) {
+        return res.status(503).json({ message: `Email verification is not configured. Set these Vercel environment variables: ${otpIssues.join(', ')}. Redeploy after changing them.` });
+      }
+      if (OWNER_INITIAL_SETUP_SECRET.length < 32) {
+        return res.status(503).json({ message: 'First-time owner setup is disabled. Configure OWNER_INITIAL_SETUP_SECRET with at least 32 random characters in Vercel.' });
+      }
+      const providedSetupSecret = String(req.body?.setupSecret || '');
+      const expectedSetupSecret = Buffer.from(OWNER_INITIAL_SETUP_SECRET);
+      const providedSecret = Buffer.from(providedSetupSecret);
+      if (providedSecret.length !== expectedSetupSecret.length || !crypto.timingSafeEqual(providedSecret, expectedSetupSecret)) {
+        return res.status(401).json({ message: 'The one-time owner setup key is incorrect.' });
+      }
+      if (isOwnerAuthConfigured()) {
+        return res.status(409).json({ message: 'The configured environment owner is already the bootstrap account. Sign in using its exact email and password.' });
+      }
+      const email = String(req.body?.email || '').trim().toLowerCase();
+      const name = String(req.body?.name || '').trim();
+      const password = String(req.body?.password || '');
+      const confirmPassword = String(req.body?.confirmPassword || '');
+      if (!/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(email) || email === OWNER_ADMIN_EMAIL) {
+        return res.status(400).json({ message: 'Enter a valid owner email address that differs from any configured bootstrap email.' });
+      }
+      if (!name || name.length > 120 || password.length < 16 || password.length > 1024 || password !== confirmPassword) {
+        return res.status(400).json({ message: 'Enter the owner name, a password of at least 16 characters, and matching password confirmation.' });
+      }
+      const bigquery = getBigQueryClient();
+      if (!await isInitialOwnerSetupAvailable(bigquery)) {
+        return res.status(409).json({ message: 'An owner account already exists or first-time setup is no longer enabled.' });
+      }
+      const [existing] = await bigquery.query({
+        query: `SELECT id FROM ${dashboardUsersTableRef()} WHERE LOWER(email) = @email LIMIT 1`,
+        params: { email },
+      });
+      if (existing.length) return res.status(409).json({ message: 'An account already exists for this email.' });
+      const timestamp = new Date().toISOString();
+      await bigquery.query({
+        query: `INSERT INTO ${dashboardUsersTableRef()} (id, email, name, password_hash, role, branch_ids, status, created_at, updated_at) VALUES (@id, @email, @name, @password_hash, 'owner', '[]', 'active', @created_at, @updated_at)`,
+        params: {
+          id: crypto.randomUUID(),
+          email,
+          name,
+          password_hash: hashPassword(password),
+          created_at: timestamp,
+          updated_at: timestamp,
+        },
+      });
+      return res.status(201).json({ created: true, message: 'Owner account created. Sign in with this email and password, then verify the code sent to your email.' });
+    }
+
     if (req.query?.view === 'owner-login' && req.method === 'POST') {
-      if (!isOwnerAuthConfigured()) {
-        return res.status(503).json({ message: 'Configure the owner email, a password of at least 16 characters, a session secret of at least 32 characters, and Gmail OAuth before enabling dashboard sign-in.' });
+      const otpIssues = dashboardOtpConfigurationIssues();
+      if (otpIssues.length) {
+        return res.status(503).json({ message: `Email verification is not configured. Set these Vercel environment variables: ${otpIssues.join(', ')}. Redeploy after changing them.` });
       }
       if (!isSameOriginRequest(req)) {
         return res.status(403).json({ message: 'Sign-in request origin is not allowed' });
@@ -4218,8 +4313,9 @@ export default async function handler(req, res) {
     }
 
     if (req.query?.view === 'owner-verify' && req.method === 'POST') {
-      if (!isOwnerAuthConfigured()) {
-        return res.status(503).json({ message: 'Dashboard sign-in is not configured.' });
+      const otpIssues = dashboardOtpConfigurationIssues();
+      if (otpIssues.length) {
+        return res.status(503).json({ message: `Email verification is not configured. Set these Vercel environment variables: ${otpIssues.join(', ')}. Redeploy after changing them.` });
       }
       if (!isSameOriginRequest(req)) {
         return res.status(403).json({ message: 'Sign-in request origin is not allowed' });

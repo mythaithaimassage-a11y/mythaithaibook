@@ -41,6 +41,9 @@ Configure these Vercel environment variables before using it:
   use a unique password of at least 16 characters)
 - `OWNER_ADMIN_SESSION_SECRET` (at least 32 random characters used to sign
   dashboard sessions and OTP challenges)
+- `OWNER_INITIAL_SETUP_SECRET` (optional, temporary one-time key of at least
+  32 random characters for securely creating the first database-backed owner
+  account when environment-based owner credentials are not configured)
 - `THERAPIST_SESSION_SECRET` (long random secret used to sign HTTP-only
   therapist sessions)
 - `THERAPIST_ACCOUNTS` (JSON array of therapist accounts with scrypt password
@@ -583,6 +586,23 @@ allow at most five attempts; sessions expire after eight hours. Set
 `OWNER_ADMIN_EMAIL`, `OWNER_ADMIN_PASSWORD`, and `OWNER_ADMIN_SESSION_SECRET`
 in Vercel. Use a unique owner password of at least 16 characters and generate
 the session secret with `openssl rand -hex 32`.
+
+For first-time account setup instead of environment-based owner credentials,
+set `OWNER_INITIAL_SETUP_SECRET` to a separate random value of at least 32
+characters in Vercel (for example, generate it with `openssl rand -hex 32`).
+After deploying, open `/owner`, choose **First time
+here? Set up the owner account**, and enter that key with the owner name, email,
+and a password of at least 16 characters. Setup is only available before a
+database-backed owner account exists; it is not public self-registration. After
+creating the account, remove `OWNER_INITIAL_SETUP_SECRET` from Vercel and
+redeploy. Sign in with the owner email/password entered during setup, then
+complete Gmail OTP verification. This account is stored in BigQuery and does
+not need to match `OWNER_ADMIN_EMAIL` or `OWNER_ADMIN_PASSWORD`.
+
+If the sign-in page reports incomplete configuration, verify the exact missing
+Vercel variables in the message, ensure they are assigned to the production
+environment, and redeploy after saving changes. The login email must be an
+email address, not the owner's name.
 
 The owner can create accounts and assign branches in the **Dashboard access**
 section. Staff account password hashes and OTP challenges are stored in the

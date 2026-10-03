@@ -2240,6 +2240,14 @@ function AdminGate({ children }) {
   const [challengeId, setChallengeId] = useState('');
   const [otpCode, setOtpCode] = useState('');
   const [error, setError] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
+  const [setupAvailable, setSetupAvailable] = useState(false);
+  const [setupMode, setSetupMode] = useState(false);
+  const [setupName, setSetupName] = useState('');
+  const [setupEmail, setSetupEmail] = useState('');
+  const [setupSecret, setSetupSecret] = useState('');
+  const [setupPassword, setSetupPassword] = useState('');
+  const [setupPasswordConfirmation, setSetupPasswordConfirmation] = useState('');
 
   useEffect(() => {
     fetch('/api/booking?view=owner-session')
@@ -2247,6 +2255,8 @@ function AdminGate({ children }) {
         const data = await response.json();
         if (!response.ok) throw new Error(data.message || 'Owner sign-in is unavailable.');
         setDashboardUser(data.authenticated ? data.user : null);
+        setSetupAvailable(Boolean(data.setupAvailable));
+        if (data.message) setError(data.message);
       })
       .catch((requestError) => setError(requestError.message || 'Unable to verify owner session.'))
       .finally(() => setIsCheckingSession(false));
@@ -2263,6 +2273,8 @@ function AdminGate({ children }) {
       setEmail('');
       setPassword('');
       setError('');
+      setSuccessMessage('');
+      setSetupMode(false);
     } catch (requestError) {
       setError(requestError.message || 'Unable to sign out.');
     }
@@ -2300,22 +2312,43 @@ function AdminGate({ children }) {
           <Building className="h-6 w-6" />
         </div>
         <p className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-100">MY THAI THAI</p>
-        <h1 className="mt-2 text-2xl font-bold">Dashboard sign in</h1>
-        <p className="mt-2 text-sm leading-6 text-emerald-50/80">Sign in with your account and verify using a code sent to your email.</p>
+        <h1 className="mt-2 text-2xl font-bold">{setupMode ? 'Set up owner account' : 'Dashboard sign in'}</h1>
+        <p className="mt-2 text-sm leading-6 text-emerald-50/80">{setupMode ? 'Create the first owner account using the one-time setup key from your administrator.' : 'Sign in with your account and verify using a code sent to your email.'}</p>
       </div>
       <form onSubmit={async (event) => {
         event.preventDefault();
         setIsSigningIn(true);
         setError('');
+        setSuccessMessage('');
         try {
-          const response = await fetch(`/api/booking?view=${challengeId ? 'owner-verify' : 'owner-login'}`, {
+          const view = setupMode ? 'owner-setup' : challengeId ? 'owner-verify' : 'owner-login';
+          const body = setupMode
+            ? {
+              name: setupName,
+              email: setupEmail,
+              setupSecret,
+              password: setupPassword,
+              confirmPassword: setupPasswordConfirmation,
+            }
+            : challengeId ? { challengeId, code: otpCode } : { email, password };
+          const response = await fetch(`/api/booking?view=${view}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(challengeId ? { challengeId, code: otpCode } : { email, password }),
+            body: JSON.stringify(body),
           });
           const data = await response.json();
           if (!response.ok) throw new Error(data.message || 'Unable to sign in.');
-          if (data.otpRequired) {
+          if (data.created) {
+            setSetupAvailable(false);
+            setSetupMode(false);
+            setEmail(setupEmail);
+            setSetupName('');
+            setSetupEmail('');
+            setSetupSecret('');
+            setSetupPassword('');
+            setSetupPasswordConfirmation('');
+            setSuccessMessage(data.message);
+          } else if (data.otpRequired) {
             setChallengeId(data.challengeId);
             setPassword('');
           } else {
@@ -2330,9 +2363,21 @@ function AdminGate({ children }) {
         }
       }} className="space-y-4 p-8">
         {error && <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">{error}</p>}
-        {!challengeId ? <>
+        {successMessage && <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">{successMessage}</p>}
+        {setupMode ? <>
+          <label htmlFor="owner-setup-name" className="block text-sm font-semibold text-slate-700">Owner name</label>
+          <input id="owner-setup-name" value={setupName} onChange={(event) => setSetupName(event.target.value)} autoComplete="name" maxLength={120} required className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" placeholder="Your name" />
+          <label htmlFor="owner-setup-email" className="block text-sm font-semibold text-slate-700">Owner email</label>
+          <input id="owner-setup-email" type="email" value={setupEmail} onChange={(event) => setSetupEmail(event.target.value)} autoComplete="email" required className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" placeholder="you@example.com" />
+          <label htmlFor="owner-setup-secret" className="block text-sm font-semibold text-slate-700">One-time setup key</label>
+          <input id="owner-setup-secret" type="password" value={setupSecret} onChange={(event) => setSetupSecret(event.target.value)} autoComplete="off" required className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" />
+          <label htmlFor="owner-setup-password" className="block text-sm font-semibold text-slate-700">Owner password (at least 16 characters)</label>
+          <input id="owner-setup-password" type="password" value={setupPassword} onChange={(event) => setSetupPassword(event.target.value)} autoComplete="new-password" minLength={16} maxLength={1024} required className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" />
+          <label htmlFor="owner-setup-password-confirmation" className="block text-sm font-semibold text-slate-700">Confirm owner password</label>
+          <input id="owner-setup-password-confirmation" type="password" value={setupPasswordConfirmation} onChange={(event) => setSetupPasswordConfirmation(event.target.value)} autoComplete="new-password" minLength={16} maxLength={1024} required className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" />
+        </> : !challengeId ? <>
           <label htmlFor="dashboard-email" className="block text-sm font-semibold text-slate-700">Email</label>
-          <input id="dashboard-email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="username" required className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" placeholder="you@example.com" />
+          <input id="dashboard-email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="username" required className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" placeholder="name@example.com" />
           <label htmlFor="dashboard-password" className="block text-sm font-semibold text-slate-700">Password</label>
           <input id="dashboard-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" placeholder="Enter your password" />
         </> : <>
@@ -2342,9 +2387,18 @@ function AdminGate({ children }) {
           <button type="button" onClick={() => { setChallengeId(''); setOtpCode(''); setError(''); }} className="text-xs font-semibold text-emerald-800 underline">Back to email and password</button>
         </>}
         <button type="submit" disabled={isSigningIn} className="w-full rounded-xl bg-emerald-900 py-3 text-sm font-bold text-white shadow-lg shadow-emerald-950/15 transition hover:bg-emerald-800 disabled:cursor-wait disabled:opacity-60">
-          {isSigningIn ? 'Please wait…' : challengeId ? 'Verify and sign in' : 'Continue to email verification'}
+          {isSigningIn ? 'Please wait…' : setupMode ? 'Create owner account' : challengeId ? 'Verify and sign in' : 'Continue to email verification'}
         </button>
-        <p className="text-center text-xs leading-5 text-slate-500">Your secure session expires after 8 hours.</p>
+        {setupAvailable && !challengeId && (
+          <button
+            type="button"
+            onClick={() => { setSetupMode(!setupMode); setError(''); setSuccessMessage(''); }}
+            className="w-full text-center text-xs font-semibold text-emerald-800 underline"
+          >
+            {setupMode ? 'Return to dashboard sign in' : 'First time here? Set up the owner account'}
+          </button>
+        )}
+        <p className="text-center text-xs leading-5 text-slate-500">{setupMode ? 'Setup closes automatically after the first owner account is created.' : 'Your secure session expires after 8 hours.'}</p>
       </form>
     </div>
   );
