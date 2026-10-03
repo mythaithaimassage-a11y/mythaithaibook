@@ -989,6 +989,33 @@ refund window is unambiguous. Bookings with no online payment get the generic
 wording instead. Step 4 of the booking flow shows the matching policy text
 before the customer submits.
 
+### Public privacy policy and terms
+
+The booking footer links to public, login-free `/privacy-policy` and
+`/terms-of-service` pages. The medical-history consent panel and booking review
+also link to these pages in a new tab so customers do not lose their form.
+Content is maintained in `public/privacy-policy.html` and
+`public/terms-of-service.html`, with shared styling in `public/legal.css`.
+Vite copies these files into `dist`; explicit Vercel rewrites serve the clean
+URLs without running the booking API or requiring JavaScript.
+
+For the current production hostname, the Google OAuth Branding URLs are:
+
+- Home page: `https://mythaithaibook.vercel.app/`
+- Privacy policy: `https://mythaithaibook.vercel.app/privacy-policy`
+- Terms of service: `https://mythaithaibook.vercel.app/terms-of-service`
+
+Confirm these URLs load publicly after deployment before using them in Google
+Cloud. Publishing these documents does not publish or verify the Google OAuth
+app. Google may also require verified ownership of an authorized domain; use
+an owned custom domain if the shared `vercel.app` domain cannot be verified.
+
+These documents are initial policy drafts based on the implemented webapp.
+The operator must review them for actual business practices and applicable
+privacy, health-record, retention, and consumer obligations before adoption.
+Update the content and revision dates when practices change. They are not a
+legal-compliance certification.
+
 ### Branch-specific payment choices
 
 Each branch row in the owner **Branches** editor has three independent toggles:

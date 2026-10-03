@@ -826,6 +826,10 @@ export default function App() {
       {/* Footer */}
       <footer className={`${viewMode === 'customer' ? 'border-slate-800 bg-slate-950 text-slate-400' : 'border-stone-800 bg-stone-900 text-stone-400'} border-t px-6 py-4 text-center text-xs`}>
         <p>© 2026 MY THAI THAI MASSAGE AND WELLNESS INC. All rights reserved. • Toronto & Mississauga, Ontario</p>
+        <nav aria-label="Legal information" className="mt-2 flex flex-wrap justify-center gap-4">
+          <a href="/privacy-policy" className="underline underline-offset-4 hover:text-white">Privacy Policy</a>
+          <a href="/terms-of-service" className="underline underline-offset-4 hover:text-white">Terms of Service</a>
+        </nav>
       </footer>
     </div>
   );
@@ -3140,6 +3144,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
             {!medicalHistorySkipped && !bookingData.intake.preCollectionConsent && (
               <div className="p-5 rounded-2xl bg-blue-50 border border-blue-200 space-y-4 max-h-[70vh] overflow-y-auto">
                 <h2 className="text-xl font-bold text-blue-950 text-center">Consent and Waiver Form</h2>
+                <p className="text-xs text-blue-900">Read our <a href="/privacy-policy" target="_blank" rel="noopener noreferrer" className="font-semibold underline">Privacy Policy (opens in a new tab)</a> for how we handle booking details and medical history.</p>
                 <p className="text-sm text-blue-900">
                   I confirm that I have fully disclosed all known physical and medical conditions, as well as any medications I am currently taking, to my Massage Therapist. I agree to keep my Massage Therapist informed of any future changes in my health history.
                 </p>
@@ -3655,6 +3660,10 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                 A cancel/reschedule link is included in your confirmation email, or use the "Manage an existing booking" link above.
               </span>
             </div>
+
+            <p className="text-xs text-stone-600">
+              Please read our <a href="/terms-of-service" target="_blank" rel="noopener noreferrer" className="font-semibold text-emerald-800 underline">Terms of Service (opens in a new tab)</a> and <a href="/privacy-policy" target="_blank" rel="noopener noreferrer" className="font-semibold text-emerald-800 underline">Privacy Policy (opens in a new tab)</a> before submitting your booking.
+            </p>
 
             <div className="flex justify-between pt-2">
               <button
