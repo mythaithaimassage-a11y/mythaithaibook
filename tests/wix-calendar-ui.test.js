@@ -70,3 +70,10 @@ test('a server that ignores exclusions cannot cause an endless sync loop', async
   }, () => {}), /2 bookings synced.*Invalid date/);
   assert.equal(requests, 2);
 });
+
+test('persistent timeouts explain safe retry without requiring booking edits', async () => {
+  await assert.rejects(runWixCalendarSync(async () => ({
+    synced: 105, pending: 1518, stopped: true,
+    errors: [{ bookingId: 'WIX-test', message: 'network timeout at: https://www.googleapis.com/calendar/v3/calendars/test/events' }],
+  }), () => {}), /105 bookings synced.*Retry Wix Calendar sync to resume safely.*do not require booking edits/);
+});

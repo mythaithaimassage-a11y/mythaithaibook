@@ -3,7 +3,7 @@ import test from 'node:test';
 import { Readable } from 'node:stream';
 import { BigQuery } from '@google-cloud/bigquery';
 import { google } from 'googleapis';
-import { syncWixCalendarBatch, wixCalendarEvent } from '../lib/wix-calendar.js';
+import { isTransientCalendarError, retryCalendarOperation, syncWixCalendarBatch, wixCalendarEvent } from '../lib/wix-calendar.js';
 
 const options = {
   projectId: 'test-project', datasetId: 'booking_system', tableId: 'bookings',
@@ -188,7 +188,7 @@ test('500 bookings can complete after the former 15-second deadline within the e
   assert.equal(f.queries.length, 3);
 });
 
-test('quota and timeout failures stop new scheduling instead of attempting all 500 bookings', async () => {
+test('persistent quota and timeout failures stop new scheduling after bounded retries', async () => {
   for (const code of [429, 'ETIMEDOUT']) {
     const f = fixture(Array.from({ length: 500 }, (_, i) => ({ ...booking, booking_id: `WIX-${i}` })));
     let attempted = 0;
@@ -199,11 +199,120 @@ test('quota and timeout failures stop new scheduling instead of attempting all 5
     const result = await syncWixCalendarBatch(f.bigquery, f.calendar, options);
     assert.equal(result.stopped, true);
     assert.equal(result.synced, 0);
-    assert.equal(attempted, 5);
+    assert.equal(attempted, 15);
     assert.equal(result.pending, 495);
     assert.equal(result.errors.length, 5);
     assert.ok(f.rows.every((row) => !row.calendar_event_id));
   }
+});
+
+test('temporary Calendar errors are classified without retrying permission or validation failures', () => {
+  for (const error of [
+    { type: 'request-timeout', message: 'network timeout at: https://www.googleapis.com/calendar/v3/calendars/test/events' },
+    { message: 'network timeout at: https://www.googleapis.com/calendar/v3/calendars/test/events' },
+    { code: 'ECONNRESET' }, { cause: { code: 'ETIMEDOUT' } }, { response: { status: 503 } },
+    { response: { status: 403, data: { error: { errors: [{ reason: 'userRateLimitExceeded' }] } } } },
+  ]) assert.equal(isTransientCalendarError(error), true);
+  for (const error of [{ code: 403 }, { code: 400 }, { code: 409 }, { code: 404 }, new Error('Unknown failure')]) {
+    assert.equal(isTransientCalendarError(error), false);
+  }
+});
+
+test('retry backoff is bounded, honors Retry-After and refuses retries beyond the batch deadline', async () => {
+  const waits = [];
+  let attempts = 0;
+  const operation = async () => {
+    attempts += 1;
+    throw Object.assign(new Error('Temporary Google failure'), {
+      response: { status: 429, headers: { 'retry-after': '2' } },
+    });
+  };
+  await assert.rejects(retryCalendarOperation(operation, {
+    deadline: Date.now() + 180000, random: () => 0, pause: async (wait) => { waits.push(wait); },
+  }), /Temporary Google failure/);
+  assert.equal(attempts, 3);
+  assert.deepEqual(waits, [2000, 2000]);
+  attempts = 0;
+  waits.length = 0;
+  await assert.rejects(retryCalendarOperation(operation, {
+    deadline: Date.now() + 1000, pause: async (wait) => { waits.push(wait); },
+  }), /Temporary Google failure/);
+  assert.equal(attempts, 1);
+  assert.deepEqual(waits, []);
+  const delays = [];
+  let calls = 0;
+  const result = await retryCalendarOperation(async () => {
+    if (++calls < 3) throw Object.assign(new Error('Reset'), { code: 'ECONNRESET' });
+    return 'recovered';
+  }, { deadline: Date.now() + 180000, random: () => 0, pause: async (wait) => { delays.push(wait); } });
+  assert.equal(result, 'recovered');
+  assert.deepEqual(delays, [500, 1000]);
+});
+
+test('network timeout at the reported booking retries and continues the remaining queue', async () => {
+  const failedId = 'WIX-20260326-1130-17766cc64e45bc0b0d1a691f82a01ed5';
+  const f = fixture(Array.from({ length: 110 }, (_, i) => ({
+    ...booking, booking_id: i === 104 ? failedId : `WIX-${i}`,
+  })));
+  const insert = f.calendar.events.insert;
+  let attempts = 0;
+  f.calendar.events.insert = async (...args) => {
+    if (args[0].requestBody.extendedProperties.private.wixBookingId === failedId && ++attempts === 1) {
+      throw Object.assign(new Error('network timeout at: https://www.googleapis.com/calendar/v3/calendars/test/events?sendUpdates=none'), {
+        type: 'request-timeout',
+      });
+    }
+    return insert(...args);
+  };
+  assert.deepEqual(await syncWixCalendarBatch(f.bigquery, f.calendar, options), {
+    synced: 110, pending: 0, errors: [],
+  });
+  assert.equal(attempts, 2);
+  assert.equal(f.events.size, 110);
+});
+
+test('an insert accepted by Google before a timeout is recovered without duplicate events', async () => {
+  const f = fixture();
+  const insert = f.calendar.events.insert;
+  let attempts = 0;
+  f.calendar.events.insert = async (...args) => {
+    attempts += 1;
+    const result = await insert(...args);
+    if (attempts === 1) throw Object.assign(new Error('network timeout at: https://www.googleapis.com/calendar/v3/calendars/test/events'), {
+      type: 'request-timeout',
+    });
+    return result;
+  };
+  assert.deepEqual(await syncWixCalendarBatch(f.bigquery, f.calendar, options), {
+    synced: 1, pending: 0, errors: [],
+  });
+  assert.equal(attempts, 2);
+  assert.equal(f.events.size, 1);
+  assert.ok(f.rows[0].calendar_event_id);
+});
+
+test('temporary failures during conflict recovery retry both lookup and patch safely', async () => {
+  const f = fixture();
+  assert.equal((await syncWixCalendarBatch(f.bigquery, f.calendar, options)).synced, 1);
+  f.rows[0].calendar_event_id = '';
+  const get = f.calendar.events.get;
+  const patch = f.calendar.events.patch;
+  let gets = 0;
+  let patches = 0;
+  f.calendar.events.get = async (...args) => {
+    if (++gets === 1) throw Object.assign(new Error('Google unavailable'), { code: 503 });
+    return get(...args);
+  };
+  f.calendar.events.patch = async (...args) => {
+    if (++patches === 1) throw Object.assign(new Error('Connection reset'), { code: 'ECONNRESET' });
+    return patch(...args);
+  };
+  assert.deepEqual(await syncWixCalendarBatch(f.bigquery, f.calendar, options), {
+    synced: 1, pending: 0, errors: [],
+  });
+  assert.equal(gets, 3);
+  assert.equal(patches, 2);
+  assert.equal(f.events.size, 1);
 });
 
 test('invalid bookings do not block valid bookings and exclusions are limited to the current run', async () => {

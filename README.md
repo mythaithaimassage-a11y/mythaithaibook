@@ -333,7 +333,13 @@ The booking function has a 300-second deployment limit, leaving time for
 in-flight writes and database linking. The deployment must support this limit.
 Slow batches may return fewer than 500 synced bookings; the owner UI continues
 with the remaining bookings automatically.
-Permission/quota/network failures stop new work and are reported explicitly.
+Temporary network timeouts, connection failures, rate limits and retryable
+Google server errors receive up to two automatic retries with exponential
+backoff and jitter. Retries respect `Retry-After` (up to 10 seconds) and the
+batch time budget. A timed-out insert is recovered using the same stable event
+ID and ownership checks, even if Google created the event before timing out.
+Permission failures are not retried. Persistent failures stop new work and are
+reported explicitly; successful events are linked before the batch returns.
 Invalid individual bookings are reported without blocking other valid bookings;
 the current run excludes failed IDs from later batches, but retrying a new run
 checks them again. Remaining counts exclude these reported failures.

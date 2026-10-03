@@ -8,7 +8,7 @@ export async function runWixCalendarSync(requestBatch, onProgress, initial) {
     for (const issue of current.errors) failures.set(issue.bookingId, issue);
     await onProgress({ synced, pending: current.pending });
     if (failures.size && (current.stopped || repeatedFailure || current.pending === 0 || current.pending === null || failures.size >= 100)) {
-      throw new Error(`${synced} bookings synced. Bookings are saved, but ${failures.size} booking(s) could not sync: ${[...failures.values()].map((issue) => `${issue.bookingId}: ${issue.message}`).join('; ')} Correct the reported errors and Retry Wix Calendar sync to resume.`);
+      throw new Error(`${synced} bookings synced. Bookings are saved, but ${failures.size} booking(s) could not sync: ${[...failures.values()].map((issue) => `${issue.bookingId}: ${issue.message}`).join('; ')} Retry Wix Calendar sync to resume safely. Temporary connection failures do not require booking edits; permission or invalid-booking errors must be corrected if reported.`);
     }
     if (current.pending === 0) return { synced, pending: 0 };
     if (current.synced === 0 && current.errors.length === 0) throw new Error('Calendar sync made no progress. Refresh and retry Wix Calendar sync.');
