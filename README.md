@@ -1072,7 +1072,9 @@ read-only patient summaries.
 
 Customers can choose **Skip medical history for now** during booking. This
 does not record medical consent or create an empty history row. They must
-complete their history before treatment. The separate **Medical history only**
+complete their history before treatment; the confirmation email includes a
+direct link to fill it in. Customers using existing history are reminded in
+their confirmation email to check it and update any changes. The separate **Medical history only**
 entry point requires an existing booking reference and matching booking email;
 it submits the same medical form without creating another appointment,
 Calendar event, payment, or confirmation email. Cancelled and no-show bookings

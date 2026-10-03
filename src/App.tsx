@@ -791,7 +791,7 @@ export default function App() {
       </header>
 
       {/* Main View Switcher */}
-      <main className={`flex-1 w-full ${viewMode === 'admin' || viewMode === 'therapist' ? 'p-0' : 'mx-auto max-w-[1600px] p-4 sm:p-6 xl:p-8'}`}>
+      <main className={`flex-1 w-full ${viewMode === 'admin' || viewMode === 'therapist' ? 'p-0' : 'mx-auto max-w-[1600px] p-2.5 sm:p-6 xl:p-8'}`}>
         {viewMode === 'customer' ? (
           <CustomerPortal 
             branches={activeBranches} 
@@ -2770,9 +2770,9 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
   };
 
   return (
-    <div className="mx-auto my-2 max-w-6xl overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm sm:my-6">
+    <div className="mx-auto my-0 max-w-6xl overflow-hidden bg-white sm:my-6 sm:rounded-2xl sm:border sm:border-slate-200 sm:shadow-sm">
       {/* Clinic Header Banner */}
-      <div className="relative overflow-hidden bg-gradient-to-br from-slate-950 via-emerald-950 to-emerald-800 px-5 py-6 text-white sm:px-8 sm:py-8">
+      <div className="relative overflow-hidden bg-gradient-to-br from-slate-950 via-emerald-950 to-emerald-800 px-4 py-5 text-white sm:px-8 sm:py-8">
         <div aria-hidden="true" className="absolute -right-16 -top-28 h-72 w-72 rounded-full border border-white/10" />
         <div aria-hidden="true" className="absolute -right-2 -top-14 h-48 w-48 rounded-full border border-white/10" />
         <div className="relative z-10 flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
@@ -2785,26 +2785,27 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
             {brandingError && <p role="status" className="mt-2 text-xs text-amber-200">{brandingError}</p>}
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 text-xs sm:justify-end">
-            <a href="tel:+14378987424" className="inline-flex items-center rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-emerald-50 transition hover:bg-white/15">
+          <div className="grid grid-cols-2 items-stretch gap-2 text-xs sm:flex sm:flex-wrap sm:justify-end">
+            <a href="tel:+14378987424" className="inline-flex min-h-11 items-center justify-center rounded-xl border border-white/15 bg-white/10 px-2 py-2 text-center text-emerald-50 transition hover:bg-white/15 sm:px-3">
               <Phone className="mr-1.5 h-3.5 w-3.5 text-emerald-200" />
-              +1 437 898 7424
+              <span className="break-words">+1 437 898 7424</span>
             </a>
-            <a href="https://Mythaithaimassage.com" target="_blank" rel="noreferrer" className="inline-flex items-center rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-emerald-50 transition hover:bg-white/15">
+            <a href="https://Mythaithaimassage.com" target="_blank" rel="noreferrer" className="inline-flex min-h-11 items-center justify-center rounded-xl border border-white/15 bg-white/10 px-2 py-2 text-center text-emerald-50 transition hover:bg-white/15 sm:px-3">
               <Globe className="mr-1.5 h-3.5 w-3.5 text-emerald-200" />
-              Mythaithaimassage.com
+              <span className="break-all sm:break-normal">Mythaithaimassage.com</span>
             </a>
             <button
               type="button"
               onClick={() => setPortalMode(portalMode === 'manage' ? 'book' : 'manage')}
-              className="rounded-xl bg-white px-3 py-2 font-bold text-emerald-950 shadow-sm transition hover:bg-emerald-50"
+              className="col-span-2 min-h-11 rounded-xl bg-white px-3 py-2 font-bold text-emerald-950 shadow-sm transition hover:bg-emerald-50 sm:col-span-1"
             >
-              {portalMode === 'manage' ? '← Back to booking' : 'Manage an existing booking (reschedule or cancel)'}
+              <span className="sm:hidden">{portalMode === 'manage' ? '← Back to booking' : 'Manage booking'}</span>
+              <span className="hidden sm:inline">{portalMode === 'manage' ? '← Back to booking' : 'Manage an existing booking (reschedule or cancel)'}</span>
             </button>
             <button
               type="button"
               onClick={() => { setPortalMode('history'); setHistoryBooking(null); setHistoryError(''); setHistorySaved(false); }}
-              className="rounded-xl border border-white/20 bg-white/10 px-3 py-2 font-bold text-white hover:bg-white/20"
+              className="col-span-2 min-h-11 rounded-xl border border-white/20 bg-white/10 px-3 py-2 font-bold text-white hover:bg-white/20 sm:col-span-1"
             >
               Medical history only
             </button>
@@ -2817,7 +2818,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
       ) : (
       <>
       {portalMode === 'history' && (
-        <div className="p-5 space-y-4">
+        <div className="space-y-4 p-4 sm:p-5">
           <h2 className="text-xl font-bold">Medical history for an existing appointment</h2>
           <p className="text-sm text-stone-600">Use your booking reference and the email used at booking. This does not create an appointment or collect payment.</p>
           <button type="button" onClick={() => { setPortalMode('book'); setStep(1); }} className="text-sm text-emerald-800 underline">Back to booking</button>
@@ -2845,7 +2846,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
             { num: 4, label: "Payment & Review" },
             { num: 5, label: "Confirmed" }
           ].map((s) => (
-            <div key={s.num} className={`flex items-center space-x-1.5 ${step === s.num ? 'font-bold text-slate-950' : step > s.num ? 'text-emerald-800' : 'text-slate-400'}`}>
+            <div key={s.num} className={`flex min-w-0 items-center gap-1.5 ${step === s.num ? 'font-bold text-slate-950' : step > s.num ? 'text-emerald-800' : 'text-slate-400'}`}>
               <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ${
                 step === s.num 
                   ? 'bg-emerald-950 text-white ring-2 ring-emerald-100'
@@ -2855,13 +2856,13 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
               }`}>
                 {step > s.num ? <Check className="w-3.5 h-3.5" /> : s.num}
               </span>
-              <span className="hidden md:inline">{s.label}</span>
+              <span className={`${step === s.num ? 'inline' : 'hidden'} truncate text-[10px] sm:text-xs md:inline`}>{s.label}</span>
             </div>
           ))}
         </div>
       </div>}
 
-      <div className="bg-[#f1f3f7] p-4 sm:p-8">
+      <div className="bg-[#f1f3f7] p-3 sm:p-8">
         {/* STEP 1: Branch & Service */}
         {portalMode === 'book' && step === 1 && (
           <div className="space-y-6">
@@ -2917,7 +2918,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
               </div>
 
               {/* Service Cards Grid */}
-              <div className="grid gap-3 sm:grid-cols-2 max-h-[420px] overflow-y-auto pr-1">
+              <div className="grid gap-3 sm:grid-cols-2 sm:max-h-[420px] sm:overflow-y-auto sm:pr-1">
                 {filteredServices.map(s => (
                   <div
                     key={s.id}
@@ -4881,8 +4882,31 @@ function AdminPortal({
 
   const t = TRANSLATIONS[lang];
 
-  const totalRevenue = useMemo(() => bookings.reduce((sum, b) => sum + b.total, 0), [bookings]);
-  const hstCollected = useMemo(() => bookings.reduce((sum, b) => sum + (b.total - (b.total / 1.13)), 0), [bookings]);
+  const selectedBranchName = selectedBranchId === 'all'
+    ? ''
+    : branches.find((branch) => String(branch.id) === String(selectedBranchId))?.name || '';
+  const dashboardBookings = useMemo(
+    () => bookings.filter((booking) => !selectedBranchName || booking.branchName === selectedBranchName),
+    [bookings, selectedBranchName],
+  );
+  const dashboardTherapists = useMemo(
+    () => therapists.filter((therapist) => {
+      if (therapist.active === false) return false;
+      if (!selectedBranchName) return true;
+      const branchId = String(selectedBranchId);
+      return (therapist.branches || []).some((id) => String(id) === branchId)
+        || Object.values(therapist.schedule || {}).some((id) => String(id) === branchId);
+    }),
+    [therapists, selectedBranchId, selectedBranchName],
+  );
+  const totalRevenue = useMemo(
+    () => dashboardBookings.reduce((sum, booking) => sum + (Number(booking.total) || 0), 0),
+    [dashboardBookings],
+  );
+  const hstCollected = useMemo(
+    () => dashboardBookings.reduce((sum, booking) => sum + ((Number(booking.total) || 0) - ((Number(booking.total) || 0) / 1.13)), 0),
+    [dashboardBookings],
+  );
 
   const loadBookingsFromBackend = async () => {
     setIsLoadingBookings(true);
@@ -5826,22 +5850,22 @@ function AdminPortal({
         <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
           <div className="flex items-center justify-between"><div className="text-xs font-semibold text-slate-500">{t.revenueToday}</div><span className="rounded-xl bg-emerald-50 p-2 text-emerald-800"><TrendingUp className="h-4 w-4" /></span></div>
           <div className="mt-3 text-2xl font-bold tracking-tight text-emerald-900">${totalRevenue.toFixed(2)}</div>
-          <div className="mt-1 text-[11px] text-slate-400">Across current bookings</div>
+          <div className="mt-1 text-[11px] text-slate-400">{selectedBranchName || 'All branches'}</div>
         </div>
         <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
           <div className="flex items-center justify-between"><div className="text-xs font-semibold text-slate-500">{t.appointmentsToday}</div><span className="rounded-xl bg-blue-50 p-2 text-blue-800"><CalendarIcon className="h-4 w-4" /></span></div>
-          <div className="mt-3 text-2xl font-bold tracking-tight text-slate-900">{bookings.length}</div>
-          <div className="mt-1 text-[11px] text-slate-400">Appointments on record</div>
+          <div className="mt-3 text-2xl font-bold tracking-tight text-slate-900">{dashboardBookings.length}</div>
+          <div className="mt-1 text-[11px] text-slate-400">{selectedBranchName || 'All branches'}</div>
         </div>
         <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
           <div className="flex items-center justify-between"><div className="text-xs font-semibold text-slate-500">{t.activeStaff}</div><span className="rounded-xl bg-amber-50 p-2 text-amber-800"><Users className="h-4 w-4" /></span></div>
-          <div className="mt-3 text-2xl font-bold tracking-tight text-slate-900">{therapists.length}</div>
-          <div className="mt-1 text-[11px] text-slate-400">Therapists & practitioners</div>
+          <div className="mt-3 text-2xl font-bold tracking-tight text-slate-900">{dashboardTherapists.length}</div>
+          <div className="mt-1 text-[11px] text-slate-400">{selectedBranchName || 'All branches'}</div>
         </div>
         <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
           <div className="flex items-center justify-between"><div className="text-xs font-semibold text-slate-500">{t.hstCollected}</div><span className="rounded-xl bg-violet-50 p-2 text-violet-800"><DollarSign className="h-4 w-4" /></span></div>
           <div className="mt-3 text-2xl font-bold tracking-tight text-slate-900">${hstCollected.toFixed(2)}</div>
-          <div className="mt-1 text-[11px] text-slate-400">Estimated Ontario HST</div>
+          <div className="mt-1 text-[11px] text-slate-400">{selectedBranchName || 'All branches'} · Estimated Ontario HST</div>
         </div>
       </div>
 
@@ -7679,8 +7703,7 @@ function AdminPortal({
             </div>
           </div>
           {(() => {
-            const branchName = selectedBranchId === 'all' ? '' : branches.find((branch) => String(branch.id) === String(selectedBranchId))?.name || '';
-            const rows = bookings.filter((booking) => booking.date >= reportStartDate && booking.date <= reportEndDate && (!branchName || booking.branchName === branchName));
+            const rows = dashboardBookings.filter((booking) => booking.date >= reportStartDate && booking.date <= reportEndDate);
             const bookedSales = rows.reduce((sum, booking) => sum + (Number(booking.total) || 0), 0);
             const collected = rows.reduce((sum, booking) => sum + (Number(booking.paidAmount) || 0), 0);
             const outstanding = Math.max(0, bookedSales - collected);

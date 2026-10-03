@@ -56,6 +56,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   t.mock.method(BigQuery.prototype, 'query', async ({ query, params }) => {
     if (query.startsWith('SELECT * FROM `test-project.booking_system.bookings`')) return [records];
     if (query.startsWith('INSERT INTO `test-project.booking_system.bookings`')) { records.push(params); return [[]]; }
+    if (/FROM `test-project\.booking_system\.patient_history`/.test(query)) return [histories];
     if (query.startsWith('INSERT INTO `test-project.booking_system.patient_history`')) {
       if (failHistoryWrite) throw new Error('Synthetic medical storage outage');
       histories.push(params); return [[]];
@@ -100,7 +101,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   assert.equal(events.length, 3);
   const plainEmail = Buffer.from(emails[0].requestBody.raw, 'base64url').toString();
   const encodedBody = plainEmail.match(/Content-Type: text\/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n([\s\S]*?)\r\n--/)[1];
-  assert.match(Buffer.from(encodedBody.replace(/\s/g, ''), 'base64').toString(), /MEDICAL HISTORY REQUIRED BEFORE TREATMENT[\s\S]*\?history=1&ref=MTT-clinic/);
+  assert.match(Buffer.from(encodedBody.replace(/\s/g, ''), 'base64').toString(), /MEDICAL HISTORY REMINDER[\s\S]*required before treatment[\s\S]*fill it in[\s\S]*\?history=1&ref=MTT-clinic/);
 
   const history = { ...emptyPatientHistory(), consent: true, preCollectionConsent: true, signature: 'Test Patient', consentTimestamp: new Date().toISOString(), bodyAreas: ['Neck'] };
   const submission = { bookingId: 'MTT-clinic', email: 'test@example.com', customerName: 'Forged Name', phone: 'forged-phone', patientHistory: history };
@@ -157,4 +158,22 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   assert.equal(events.length, 4);
   assert.equal(emails.length, 4);
   assert.equal(records.length, 4);
+
+  const reused = await request('', {
+    ...base,
+    id: 'MTT-reused',
+    paymentOption: 'deposit',
+    skipPatientHistory: false,
+    patientHistory: { reuseExisting: true },
+  });
+  assert.equal(reused.code, 200, JSON.stringify(reused.data));
+  assert.equal(reused.data.patientHistorySaved, true);
+  const reusedEmail = Buffer.from(emails[4].requestBody.raw, 'base64url').toString();
+  const reusedText = reusedEmail.match(/Content-Type: text\/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n([\s\S]*?)\r\n--/)[1];
+  const reusedHtml = reusedEmail.match(/Content-Type: text\/html; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n([\s\S]*?)\r\n--/)[1];
+  assert.match(Buffer.from(reusedText.replace(/\s/g, ''), 'base64').toString(), /MEDICAL HISTORY REMINDER[\s\S]*check it before your appointment[\s\S]*update any information that has changed[\s\S]*\?history=1&ref=MTT-reused/);
+  assert.match(Buffer.from(reusedHtml.replace(/\s/g, ''), 'base64').toString(), /Check or update medical history/);
+  assert.equal(events.length, 5);
+  assert.equal(emails.length, 5);
+  assert.equal(records.length, 5);
 });

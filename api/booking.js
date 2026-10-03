@@ -3718,6 +3718,19 @@ async function sendGmailConfirmation(gmail, payload) {
   const subject = `Your MY THAI THAI appointment is confirmed - ${payload.id}`;
   const manageUrl = String(payload.manageUrl || '');
   const historyUrl = manageUrl.replace('?manage=1&', '?history=1&');
+  const historyReminder = payload.skipPatientHistory
+    ? {
+      text: 'Medical history is required before treatment. You chose to complete it later. Please fill it in using Medical history only on our booking page or at the clinic.',
+      html: '<strong>Medical history is required before treatment.</strong> You chose to complete it later. Please fill it in using Medical history only on our booking page or at the clinic.',
+      linkText: 'Complete medical history',
+    }
+    : payload.patientHistoryReused
+      ? {
+        text: 'You chose to use your existing medical history. Please check it before your appointment and update any information that has changed using Medical history only on our booking page or at the clinic.',
+        html: 'You chose to use your existing medical history. Please check it before your appointment and update any information that has changed using Medical history only on our booking page or at the clinic.',
+        linkText: 'Check or update medical history',
+      }
+      : null;
   // Customers who already paid online have money at stake, so the refund rule is
   // stated explicitly for them rather than in general terms.
   const paidOnline = Number(payload.paidAmount) > 0;
@@ -3748,9 +3761,9 @@ async function sendGmailConfirmation(gmail, payload) {
     '',
     'Your appointment has been added to the therapist calendar.',
     'Please keep your booking reference for your records.',
-    ...(payload.skipPatientHistory ? [
-      'MEDICAL HISTORY REQUIRED BEFORE TREATMENT',
-      'You chose to complete medical history later. Complete it before treatment using Medical history only on our booking page, or at the clinic.',
+    ...(historyReminder ? [
+      'MEDICAL HISTORY REMINDER',
+      historyReminder.text,
       ...(historyUrl ? [historyUrl] : []),
     ] : []),
     '',
@@ -3803,7 +3816,7 @@ async function sendGmailConfirmation(gmail, payload) {
           </td></tr>
           <tr><td style="padding:0 36px 30px;">
             <p style="margin:0 0 8px;color:#625f56;line-height:1.6;">Your visit has been added to the therapist calendar. Please keep your booking reference <strong>${escapeHtml(payload.id)}</strong> for your records.</p>
-            ${payload.skipPatientHistory ? `<p style="margin:12px 0;color:#7a5a12;line-height:1.6;"><strong>Medical history required before treatment.</strong> You chose to complete it later. Use Medical history only on our booking page or complete it at the clinic.${historyUrl ? ` <a href="${escapeHtml(historyUrl)}">Complete medical history</a>` : ''}</p>` : ''}
+            ${historyReminder ? `<p style="margin:12px 0;color:#7a5a12;line-height:1.6;">${historyReminder.html}${historyUrl ? ` <a href="${escapeHtml(historyUrl)}">${historyReminder.linkText}</a>` : ''}</p>` : ''}
             <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin:18px 0 0;background:#fdf6e7;border:1px solid #f0dfb5;border-radius:10px;">
               <tr><td style="padding:16px 18px;">
                 <p style="margin:0 0 8px;font-size:14px;font-weight:700;color:#7a5a12;">Cancellation policy</p>
@@ -7521,6 +7534,7 @@ export default async function handler(req, res) {
     payload.totalAmount = finalTotal.toFixed(2);
     payload.paidAmount = (payload.paymentOption === 'clinic' ? 0 : payload.paymentOption === 'full' ? finalTotal : Math.min(BOOKING_DEPOSIT_AMOUNT, finalTotal)).toFixed(2);
     const patientHistorySkipped = payload.skipPatientHistory === true;
+    const patientHistoryReused = !patientHistorySkipped && payload.patientHistory?.reuseExisting === true;
     let patientHistory = patientHistorySkipped ? null : payload.patientHistory;
     if (patientHistory?.reuseExisting) {
       patientHistory = await findExistingPatientHistory(getBigQueryClient(), sheets, payload);
@@ -7728,7 +7742,11 @@ export default async function handler(req, res) {
     let emailSent = false;
     let emailError = '';
     try {
-      await sendGmailConfirmation(createGmailApi(), { ...payload, manageUrl: getManageBookingUrl(req, payload.id) });
+      await sendGmailConfirmation(createGmailApi(), {
+        ...payload,
+        patientHistoryReused,
+        manageUrl: getManageBookingUrl(req, payload.id),
+      });
       emailSent = true;
     } catch (error) {
       emailError = error.message || 'Confirmation email failed';
