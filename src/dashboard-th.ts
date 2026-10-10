@@ -676,6 +676,7 @@ export const dashboardThai: Record<string, string> = {
   'Historical Wix bookings': 'การจองเดิมจาก Wix',
   'Disable dashboard access for {value0}?': 'ระงับสิทธิ์แผงควบคุมของ {value0}?',
   'Permanently remove booking {value0} and its calendar event? This cannot be undone.': 'ลบการจอง {value0} และกิจกรรมปฏิทินอย่างถาวร? ไม่สามารถย้อนกลับได้',
+  'Delete appointment {value0}': 'ลบนัดหมาย {value0}',
   'Send “{value0}” to {value1} opted-in recipients?\n\nAudience: {value2}\n\nThis sends immediately from {value3}.': 'ส่ง “{value0}” ถึงผู้รับที่ยินยอม {value1} คน?\n\nกลุ่มผู้รับ: {value2}\n\nจะส่งทันทีจาก {value3}',
   'Permanently clear the medical history on file for {value0}? This cannot be undone.': 'ล้างประวัติสุขภาพของ {value0} อย่างถาวร? ไม่สามารถย้อนกลับได้',
   'Reject the therapist account request from {value0}?': 'ปฏิเสธคำขอบัญชีผู้ให้บริการจาก {value0}?',

@@ -281,6 +281,16 @@ test('daily calendar, agenda and appointment details display the shared start-en
   assert.match(app, /const hourEvents = visibleCalendarEvents\.filter\(\(event\) => Number\(event\.localTime/);
 });
 
+test('owner can delete calendar appointments from hover- and focus-revealed controls', () => {
+  const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  assert.equal((app.match(/aria-label=\{tr\("Delete appointment \{value0\}"/g) || []).length, 2);
+  assert.equal((app.match(/group-hover:opacity-100 group-focus-within:opacity-100/g) || []).length, 2);
+  assert.equal((app.match(/dashboardUser\.role === 'owner' && event\.booking\?\.id && <button/g) || []).length, 2);
+  const deleteBooking = app.slice(app.indexOf('const deleteBooking ='), app.indexOf('const issueReceipt ='));
+  assert.match(deleteBooking, /view=delete-booking/);
+  assert.match(deleteBooking, /setCalendarEvents\(\(prev\) => prev\.filter\(\(event\) => event\.booking\?\.id !== bookingId\)\)/);
+});
+
 test('manual discount entry is removed while historical discounts remain visible on receipts', () => {
   const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
   assert.doesNotMatch(app, /Manual discount \(\$\) — optional|manualReceiptDiscount/);

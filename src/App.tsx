@@ -5241,6 +5241,8 @@ function AdminPortal({
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
       setBookings((prev) => prev.filter((b) => b.id !== bookingId));
+      setCalendarEvents((prev) => prev.filter((event) => event.booking?.id !== bookingId));
+      setSelectedCalendarEvent((current) => current?.booking?.id === bookingId ? null : current);
     } catch (error) {
       setDeleteBookingError(error.message || 'Unable to delete booking');
     } finally {
@@ -6346,6 +6348,7 @@ function AdminPortal({
               </button>}
           </div>
           {quickBookingNotice && <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">{tr(quickBookingNotice)}</p>}
+          {deleteBookingError && <div role="alert" className="p-3 bg-red-50 border border-red-200 text-red-800 rounded-xl text-xs">{tr(deleteBookingError)}</div>}
           {calendarLoadError && <div className="p-3 bg-red-50 border border-red-200 text-red-800 rounded-xl text-xs">{tr(calendarLoadError)}</div>}
           <div className="flex flex-wrap gap-3 text-xs text-stone-600">
             {calendarBusinessBranches.map((branch) => {
@@ -6401,15 +6404,27 @@ function AdminPortal({
                         </div>
                       ))}
                       {hourEvents.map((event) => (
-                        <button key={event.id} type="button" onClick={() => { setSelectedCalendarEvent(event); setIssuedReceipt(null); setReceiptError(''); setReceiptNotice(''); }} className={`block w-full rounded-lg border-l-4 px-3 py-2 text-left text-xs transition hover:brightness-95 ${getTherapistCalendarColor(event.therapistName, therapists).event}`}>
-                          <div className={`font-bold flex items-center gap-1.5 ${getTherapistCalendarColor(event.therapistName, therapists).text}`}>
-                            {event.isCouple && <Users className="w-3 h-3 shrink-0" aria-label={tr("Couple massage")} />}
-                            <span className="truncate">{event.summary}</span>
-                            {event.booking?.status === 'Cancelled' && <span className="shrink-0 text-[9px] font-bold uppercase tracking-wide text-red-700 bg-red-100 px-1.5 py-0.5 rounded-full">{tr("Cancelled")}</span>}
-                          </div>
-                          <div className={getTherapistCalendarColor(event.therapistName, therapists).text}>{formatTime(event.timeRange || event.localTime)} · {event.therapistName || event.calendarName.replace(' - MY THAI THAI', '')}</div>
-                          {event.booking?.bookingNote && <div className="mt-1 whitespace-pre-wrap text-[11px]">{tr("Team note:")} {event.booking.bookingNote}</div>}
-                        </button>
+                        <div key={event.id} className="group relative">
+                          <button type="button" onClick={() => { setSelectedCalendarEvent(event); setIssuedReceipt(null); setReceiptError(''); setReceiptNotice(''); }} className={`block w-full rounded-lg border-l-4 px-3 py-2 pr-10 text-left text-xs transition hover:brightness-95 ${getTherapistCalendarColor(event.therapistName, therapists).event}`}>
+                            <div className={`font-bold flex items-center gap-1.5 ${getTherapistCalendarColor(event.therapistName, therapists).text}`}>
+                              {event.isCouple && <Users className="w-3 h-3 shrink-0" aria-label={tr("Couple massage")} />}
+                              <span className="truncate">{event.summary}</span>
+                              {event.booking?.status === 'Cancelled' && <span className="shrink-0 text-[9px] font-bold uppercase tracking-wide text-red-700 bg-red-100 px-1.5 py-0.5 rounded-full">{tr("Cancelled")}</span>}
+                            </div>
+                            <div className={getTherapistCalendarColor(event.therapistName, therapists).text}>{formatTime(event.timeRange || event.localTime)} · {event.therapistName || event.calendarName.replace(' - MY THAI THAI', '')}</div>
+                            {event.booking?.bookingNote && <div className="mt-1 whitespace-pre-wrap text-[11px]">{tr("Team note:")} {event.booking.bookingNote}</div>}
+                          </button>
+                          {dashboardUser.role === 'owner' && event.booking?.id && <button
+                            type="button"
+                            onClick={() => deleteBooking(event.booking.id)}
+                            disabled={deletingBookingId === event.booking.id}
+                            aria-label={tr("Delete appointment {value0}", { value0: event.booking.id })}
+                            title={tr("Delete appointment {value0}", { value0: event.booking.id })}
+                            className="absolute right-2 top-2 rounded-md p-1.5 text-red-700 opacity-0 transition-opacity hover:bg-white/70 hover:text-red-900 focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100 disabled:cursor-wait disabled:opacity-50"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>}
+                        </div>
                       ))}
                     </div>
                   </div>
@@ -6440,7 +6455,7 @@ function AdminPortal({
           ) : (
             <div className="space-y-3">
               {visibleCalendarEvents.map((event) => (
-                <div key={event.id} className={`p-4 rounded-xl border border-stone-200 ${getTherapistCalendarColor(event.therapistName, therapists).event}`}>
+                <div key={event.id} className={`group relative py-4 pl-4 pr-12 rounded-xl border border-stone-200 ${getTherapistCalendarColor(event.therapistName, therapists).event}`}>
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <button type="button" onClick={() => { setSelectedCalendarEvent(event); setIssuedReceipt(null); setReceiptError(''); setReceiptNotice(''); }} className="min-w-0 text-left">
                       <span className="font-bold text-stone-900 inline-flex items-center gap-1.5">
@@ -6456,6 +6471,16 @@ function AdminPortal({
                       <button type="button" onClick={() => { setSelectedCalendarEvent(event); setIssuedReceipt(null); setReceiptError(''); setReceiptNotice(''); }} className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-white px-2.5 py-1.5 text-[11px] font-bold text-emerald-900 transition hover:bg-emerald-50"><ReceiptText className="h-3.5 w-3.5" />{tr("Open appointment")}</button>
                     </div>
                   </div>
+                  {dashboardUser.role === 'owner' && event.booking?.id && <button
+                    type="button"
+                    onClick={() => deleteBooking(event.booking.id)}
+                    disabled={deletingBookingId === event.booking.id}
+                    aria-label={tr("Delete appointment {value0}", { value0: event.booking.id })}
+                    title={tr("Delete appointment {value0}", { value0: event.booking.id })}
+                    className="absolute right-3 top-3 rounded-md p-1.5 text-red-700 opacity-0 transition-opacity hover:bg-white/70 hover:text-red-900 focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100 disabled:cursor-wait disabled:opacity-50"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>}
                 </div>
               ))}
             </div>
