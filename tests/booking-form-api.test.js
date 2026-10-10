@@ -85,6 +85,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
     }),
   }));
   const records = [];
+  const customerSearches = [];
   const histories = [];
   const dashboardChallenges = createDashboardChallengeStore();
   const dashboardUsers = [];
@@ -92,6 +93,10 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   t.mock.method(BigQuery.prototype, 'query', async ({ query, params }) => {
     const dashboardAuthResult = handleDashboardChallengeQuery(query, params, dashboardChallenges);
     if (dashboardAuthResult) return dashboardAuthResult;
+    if (query.startsWith('WITH customers AS')) {
+      customerSearches.push({ query, params });
+      return [[{ name: 'Existing Client', email: 'client@example.com', phone: '+1 (437) 898-7424' }]];
+    }
     if (query.includes('dashboard_users')) {
       if (query.startsWith('SELECT id FROM') && query.includes("role = 'owner'")) {
         return [dashboardUsers.filter((user) => user.role === 'owner').map(({ id }) => ({ id }))];
@@ -159,8 +164,11 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
     const req = Readable.from(body ? [Buffer.from(JSON.stringify(body))] : []);
     Object.assign(req, { method, query: { view, ...query }, headers: { host: 'test.example', origin, 'content-type': 'application/json', cookie } });
     const res = {
-      code: 200, data: null,
-      setHeader(name, value) { if (name === 'Set-Cookie') cookie = String(value).split(';')[0]; },
+      code: 200, data: null, headers: {},
+      setHeader(name, value) {
+        this.headers[name] = value;
+        if (name === 'Set-Cookie') cookie = String(value).split(';')[0];
+      },
       status(code) { this.code = code; return this; }, json(data) { this.data = data; return this; },
     };
     await handler(req, res);
@@ -355,7 +363,19 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   };
   cookie = '';
   assert.equal((await request('manual-booking', manual)).code, 401);
+  assert.equal((await request('customer-search', null, { method: 'GET', query: { search: 'Client' } })).code, 401);
   cookie = receptionistCookie;
+  assert.equal((await request('customer-search', null, { method: 'GET', origin: 'https://untrusted.example', query: { search: 'Client' } })).code, 403);
+  assert.equal((await request('customer-search', {}, { method: 'POST' })).code, 405);
+  assert.equal((await request('customer-search', null, { method: 'GET', query: { search: '' } })).code, 400);
+  const customerSearch = await request('customer-search', null, { method: 'GET', query: { search: 'Client' } });
+  assert.equal(customerSearch.code, 200);
+  assert.equal(customerSearch.headers['Cache-Control'], 'no-store');
+  assert.equal(customerSearch.data.customers[0].email, 'client@example.com');
+  assert.deepEqual(customerSearches.at(-1).params.branchNames, ['test branch']);
+  assert.doesNotMatch(customerSearches.at(-1).query, /wix_contacts/);
+  assert.equal((await request('customer-search', null, { method: 'GET', origin: '', query: { search: 'Client' } })).code, 200,
+    'Same-origin browser GET requests do not normally include an Origin header');
   assert.equal((await request('manual-booking', manual, { origin: 'https://untrusted.example' })).code, 403);
   const eventCount = events.length;
   const historyCount = histories.length;
@@ -368,6 +388,8 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
     { therapistId: '4' }, { therapistId: '' }, { serviceId: '3', therapistId: '1' },
     { serviceId: '2', therapistId2: '1' }, { serviceId: '2', therapistId2: '' },
     { bookingNote: 'x'.repeat(2001) }, { bookingNote: { text: 'invalid' } },
+    { email: 'invalid@email' }, { phone: '123' }, { email: 'client@example.com', phone: 'different phone' },
+    { phone: '+1 555 555 0100' },
   ]) {
     const result = await request('manual-booking', { ...manual, ...invalid });
     assert.equal(result.code, 400, JSON.stringify({ invalid, data: result.data }));
@@ -401,13 +423,13 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   assert.doesNotMatch(events.at(-1).requestBody.description, /Internal team reference/);
   assert.equal(histories.length, historyCount);
   assert.equal(emails.length, emailCount, 'Phone-only bookings do not attempt email delivery');
-  const emailBooking = await request('manual-booking', { ...manual, contact: 'Client@Example.com', serviceId: '2', therapistId2: '2' });
+  const emailBooking = await request('manual-booking', { ...manual, contact: 'Client@Example.com', email: 'client@example.com', phone: manual.contact, serviceId: '2', therapistId2: '2' });
   assert.equal(emailBooking.code, 200, JSON.stringify(emailBooking.data));
   assert.equal(emailBooking.data.emailSkipped, false);
   assert.equal(emailBooking.data.emailSent, true);
   assert.equal(emailBooking.data.therapistName, 'Test Therapist, Second Therapist');
   assert.equal(records.at(-1).email, 'client@example.com');
-  assert.equal(records.at(-1).phone, '');
+  assert.equal(records.at(-1).phone, manual.contact);
   const bookingRecord = records.at(-1);
   const noteRequest = { bookingId: bookingRecord.booking_id, note: 'Changed shared note', expectedNote: manual.bookingNote };
   const beforeEditTotal = bookingRecord.total;

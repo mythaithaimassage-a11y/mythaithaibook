@@ -176,11 +176,11 @@ export default function WixBookings({ onViewBookings }: { onViewBookings: () => 
   const summary = result || preview;
   return (
     <section className="space-y-5 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-      <h2 className="text-lg font-bold text-slate-900">{tr('Import historical Wix bookings')}</h2>
+      <h2 className="text-lg font-bold text-slate-900">{tr('Import Wix bookings')}</h2>
       <p className="text-sm text-slate-600">{tr('Destination: the existing BigQuery bookings table, for')}{' '}<strong>Mississauga Central</strong>{tr('. No tables or schema changes are created. Bookings receive stable Wix-prefixed IDs. Re-imports can fill zero-amount Wix records without receipts; existing recorded payments and receipts are preserved.')}</p>
       <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
         <p>{tr('The CSV has no payment amounts. Map each Wix service to a current catalogue service, review the tax-inclusive prices, and confirm that these amounts may be used for the paid records and receipts. These are owner-approved current prices, not historical amounts verified by Wix. Original Wix details remain in notes. Each CSV row represents one booking; prices are not multiplied by spots filled. Four-session package visits use one-quarter of the package subtotal; register and link a verified package in Package tracking to deduct sessions.')}</p>
-        <p>{tr('Session times are interpreted in the clinic timezone. Future session dates are skipped. Staff names and original Wix fields are preserved; mapped service labels are used for receipts. Imports automatically sync to the primary Google Calendar in batches. Cancelled/no-show bookings are not added. No invitation emails, reminders, receipts, charges, or loyalty points are generated. Keep this page open until syncing finishes; retry/backfill resumes unsynced bookings without duplicates.')}</p>
+        <p>{tr('Session times are interpreted in the clinic timezone. Past and future session dates are included. Staff names and original Wix fields are preserved; mapped service labels are used for receipts. Imports automatically sync to the primary Google Calendar in batches. Cancelled/no-show bookings are not added. No invitation emails, reminders, receipts, charges, or loyalty points are generated. Keep this page open until syncing finishes; retry/backfill resumes unsynced bookings without duplicates.')}</p>
       </div>
       <button type="button" disabled={busy} onClick={() => void backfillCalendar()} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold disabled:opacity-50">{tr('Sync existing Wix bookings to Calendar')}</button>
       {calendarMessage && <p role="status" className="text-sm text-slate-700">{tr(calendarMessage)}</p>}
@@ -190,11 +190,11 @@ export default function WixBookings({ onViewBookings }: { onViewBookings: () => 
         event.target.value = '';
         void selectFile(file);
       }} />
-      {busy && <p role="status" className="text-sm text-slate-600">{tr('Processing historical bookings...')}</p>}
+      {busy && <p role="status" className="text-sm text-slate-600">{tr('Processing Wix bookings...')}</p>}
       {error && <p role="alert" className="text-sm text-red-700">{tr(error)}</p>}
       {catalogueError && <p role="alert" className="text-sm text-red-700">{tr('{error} Reload this page to retry loading the catalogue.', { error: tr(catalogueError) })}</p>}
       {summary && <div className="space-y-3 text-sm">
-        <p className="font-semibold">{tr('{filename}: {rows} rows, {valid} unique valid bookings, {duplicates} duplicates, {invalid} invalid rows and {future} future sessions skipped.', { filename, rows: summary.totalRows, valid: summary.validBookings, duplicates: summary.duplicates, invalid: summary.invalidRows, future: summary.futureRows })}</p>
+        <p className="font-semibold">{tr('{filename}: {rows} rows, {valid} unique valid bookings including {future} future sessions, {duplicates} duplicates and {invalid} invalid rows skipped.', { filename, rows: summary.totalRows, valid: summary.validBookings, duplicates: summary.duplicates, invalid: summary.invalidRows, future: summary.futureRows })}</p>
         <p className="text-slate-600">{summary.branchName} | {summary.timeZone} | {tr('Through {date}.', { date: summary.throughDate })}{' '}{summary.earliestDate && tr('Import range: {start} to {end}.', { start: summary.earliestDate, end: summary.latestDate })}</p>
         {summary.warnings > 0 && <p className="text-amber-800">{tr('{count} bookings have missing names or invalid contact/registration values; originals retained in notes.', { count: summary.warnings })}</p>}
         {summary.issues.length > 0 && <ul className="list-inside list-disc text-xs text-amber-800">{summary.issues.map((issue, index) => <li key={`${issue.row}-${index}`}>{tr('CSV record {row}: {message}', { row: issue.row, message: tr(issue.message) })}</li>)}</ul>}

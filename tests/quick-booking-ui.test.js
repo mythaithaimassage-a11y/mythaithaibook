@@ -40,6 +40,160 @@ const props = {
 };
 const render = (overrides = {}) => renderToStaticMarkup(React.createElement(QuickBooking, { ...props, ...overrides }));
 
+function customerHarness(fetch) {
+  let stateIndex = 0, effectIndex = 0, refIndex = 0;
+  const states = [], effects = [], refs = [], pendingEffects = [], timers = new Map();
+  let timerId = 0;
+  const hooks = {
+    ...React,
+    useState(initial) {
+      const index = stateIndex++;
+      if (!(index in states)) states[index] = typeof initial === 'function' ? initial() : initial;
+      return [states[index], (value) => { states[index] = typeof value === 'function' ? value(states[index]) : value; }];
+    },
+    useRef(initial) { const index = refIndex++; return refs[index] ||= { current: initial }; },
+    useEffect(callback, deps) {
+      const index = effectIndex++;
+      if (!effects[index] || deps.some((value, key) => value !== effects[index].deps[key])) {
+        pendingEffects.push(() => {
+          effects[index]?.cleanup?.();
+          effects[index] = { deps, cleanup: callback() };
+        });
+      }
+    },
+  };
+  const testModule = { exports: {} };
+  vm.runInNewContext(compiled, {
+    exports: testModule.exports, fetch, URLSearchParams, AbortController,
+    setTimeout(callback, delay) { assert.equal(delay, 250); timers.set(++timerId, callback); return timerId; },
+    clearTimeout(id) { timers.delete(id); },
+    require(specifier) {
+      if (specifier === 'react') return hooks;
+      if (specifier === './localization') return {
+        useTranslation: () => ({ translate: (value) => value, formatTime: (value) => value }),
+        message: (key, values) => ({ key, values }),
+      };
+      return createRequire(import.meta.url)(specifier);
+    },
+  });
+  const walk = (node, predicate) => {
+    if (!node || typeof node !== 'object') return undefined;
+    if (Array.isArray(node)) return node.map((child) => walk(child, predicate)).find(Boolean);
+    return predicate(node) ? node : walk(node.props?.children, predicate);
+  };
+  const ui = {
+    render() {
+      stateIndex = effectIndex = refIndex = 0;
+      const tree = testModule.exports.default(props);
+      pendingEffects.splice(0).forEach((effect) => effect());
+      return tree;
+    },
+    find(predicate) { return walk(ui.render(), predicate); },
+    input() { return ui.find((node) => node.props?.role === 'combobox'); },
+    async search(value) {
+      ui.input().props.onChange({ target: { value } });
+      ui.render();
+      await ui.flushTimers();
+      return ui.render();
+    },
+    async flushTimers() {
+      const callbacks = [...timers.values()];
+      timers.clear();
+      await Promise.all(callbacks.map((callback) => callback()));
+    },
+  };
+  return ui;
+}
+
+test('client name searches by name, email or formatted phone and selection autofills both contact details', async () => {
+  const customer = { name: 'Alice Smith', email: 'alice@example.com', phone: '+1 (437) 898-7424' };
+  const requests = [];
+  const ui = customerHarness(async (url, options) => {
+    requests.push({ url, options });
+    return { ok: true, json: async () => options?.method === 'POST' ? { bookingId: 'MTT-test', emailSent: true } : { customers: [customer] } };
+  });
+  for (const value of ['Alice', 'alice@example.com', '+1 (437) 898-7424']) {
+    const tree = await ui.search(value);
+    assert.equal(new URL(requests.at(-1).url, 'https://test.example').searchParams.get('search'), value);
+    assert.match(renderToStaticMarkup(tree), /Alice Smith/);
+    assert.match(renderToStaticMarkup(tree), /alice@example.com/);
+    ui.find((node) => node.props?.role === 'option').props.onClick();
+    assert.equal(ui.input().props.value, 'Alice Smith');
+    assert.equal(ui.input().props['aria-expanded'], false);
+    assert.equal(ui.find((node) => node.type === 'input' && node.props.maxLength === 254).props.value, customer.email);
+  }
+  await ui.find((node) => node.type === 'form').props.onSubmit({ preventDefault() {} });
+  const payload = JSON.parse(requests.at(-1).options.body);
+  assert.equal(payload.customerName, customer.name);
+  assert.equal(payload.contact, customer.email);
+  assert.equal(payload.email, customer.email);
+  assert.equal(payload.phone, customer.phone);
+  assert.equal(payload.date, props.date);
+  assert.equal(payload.branchId, props.branchId);
+});
+
+test('customer suggestions support keyboard selection, phone-only contacts and Escape without closing the appointment', async () => {
+  const customers = [{ name: 'Phone Client', email: '', phone: '437-898-7424' }];
+  const ui = customerHarness(async () => ({ ok: true, json: async () => ({ customers }) }));
+  await ui.search('437898');
+  let prevented = false;
+  ui.input().props.onKeyDown({ key: 'ArrowDown', preventDefault() { prevented = true; } });
+  assert.equal(prevented, true);
+  assert.equal(ui.input().props['aria-activedescendant'], 'quick-booking-customer-0');
+  ui.input().props.onKeyDown({ key: 'Enter', preventDefault() {} });
+  assert.equal(ui.input().props.value, 'Phone Client');
+  assert.equal(ui.find((node) => node.type === 'input' && node.props.maxLength === 254).props.value, '437-898-7424');
+  await ui.search('Phone');
+  let stopped = false;
+  ui.input().props.onKeyDown({ key: 'Escape', preventDefault() {}, stopPropagation() { stopped = true; } });
+  assert.equal(stopped, true);
+  assert.equal(ui.input().props['aria-expanded'], false);
+});
+
+test('search failures and no matches are explicit and manual client entry remains available', async () => {
+  let failure = true;
+  const requests = [];
+  const ui = customerHarness(async (url, options) => {
+    requests.push({ url, options });
+    return { ok: !failure, json: async () => failure ? { message: 'Storage unavailable' } : { customers: [] } };
+  });
+  assert.match(renderToStaticMarkup(await ui.search('New Client')), /role="alert"[^>]*>Storage unavailable/);
+  failure = false;
+  assert.match(renderToStaticMarkup(await ui.search('New Client 2')), /No matching customers/);
+  ui.find((node) => node.type === 'input' && node.props.maxLength === 254).props.onChange({ target: { value: 'new@example.com' } });
+  await ui.find((node) => node.type === 'form').props.onSubmit({ preventDefault() {} });
+  const payload = JSON.parse(requests.at(-1).options.body);
+  assert.equal(payload.customerName, 'New Client 2');
+  assert.equal(payload.contact, 'new@example.com');
+  assert.equal(payload.email, undefined);
+  assert.equal(payload.phone, undefined);
+});
+
+test('debouncing cancels old requests and stale results cannot replace the current customer search', async () => {
+  const requests = [];
+  const ui = customerHarness((url, options) => new Promise((resolve) => requests.push({ url, options, resolve })));
+  ui.input().props.onChange({ target: { value: 'Ali' } });
+  ui.render();
+  ui.input().props.onChange({ target: { value: 'Alice' } });
+  ui.render();
+  const first = ui.flushTimers();
+  assert.equal(requests.length, 1);
+  ui.input().props.onChange({ target: { value: 'Bob' } });
+  ui.render();
+  assert.equal(requests[0].options.signal.aborted, true);
+  const second = ui.flushTimers();
+  requests[1].resolve({ ok: true, json: async () => ({ customers: [{ name: 'Bob', email: 'bob@example.com', phone: '' }] }) });
+  await second;
+  requests[0].resolve({ ok: true, json: async () => ({ customers: [{ name: 'Alice', email: 'alice@example.com', phone: '' }] }) });
+  await first;
+  assert.match(renderToStaticMarkup(ui.render()), /bob@example.com/);
+  assert.doesNotMatch(renderToStaticMarkup(ui.render()), /alice@example.com/);
+  ui.input().props.onChange({ target: { value: '' } });
+  ui.render();
+  await ui.flushTimers();
+  assert.equal(requests.length, 2);
+});
+
 test('quick booking renders name, one contact input, therapist and time dropdowns without payment or intake fields', () => {
   const html = render();
   assert.match(html, /<dialog[^>]*aria-labelledby="quick-booking-title"/);

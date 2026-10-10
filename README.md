@@ -85,7 +85,14 @@ Calendar with the selected branch. Use **Add > Appointment** or the daily
 calendar's **Book** buttons there to open the quick booking form.
 
 Staff enter a client name and **either an email address or a phone number**,
-then select a therapist and time. Date and branch default from the calendar;
+then select a therapist and time. Typing a name, email or phone number in
+**Client name** searches existing booking customers; owners can also find
+imported Wix contacts. Select a suggestion (or use arrow keys and Enter) to
+fill the client's name and contact, preserving both email and phone when
+available. Phone searches ignore formatting. Searches are dashboard-only,
+limited to eight suggestions and respect staff assigned-branch access.
+New clients can still be entered manually; search failures are displayed.
+Date and branch default from the calendar;
 staff can adjust them and select the service. Couple services require two
 different therapists. The server checks the active catalogue, therapist
 qualifications/branch schedule, existing appointments, and availability blocks.
@@ -375,8 +382,11 @@ identical appointments cannot be distinguished and imported appointments
 cannot automatically be matched to existing non-Wix booking IDs.
 
 The export's session times are clinic-local (`GOOGLE_CALENDAR_TIME_ZONE`,
-default `America/Toronto`), not UTC. Only session dates through the clinic's
-current date are accepted; future dates are reported/skipped. Confirmed rows
+default `America/Toronto`), not UTC. Past, current and future session dates
+are accepted; the preview counts future appointments among valid bookings.
+Future appointments also sync to Calendar under the same duplicate and
+cancelled/no-show protections. Payment review and confirmation are unchanged.
+Confirmed rows
 with unspecified attendance stay **Confirmed**, not assumed attended because
 their date is in the past. Cancelled rows become **Cancelled**, explicit
 attended rows **Completed**, and explicit no-shows **No Show**. Unsupported

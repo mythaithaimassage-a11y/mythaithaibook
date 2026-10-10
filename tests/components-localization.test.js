@@ -98,7 +98,7 @@ const screens = [
   ['BookingNote', { bookingId: 'B1', initialNote: 'Keep this English note', async onSaved() {} }, 'Shared internal booking note', 'บันทึกภายในเกี่ยวกับการจองสำหรับทีม'],
   ['AppointmentCheckIn', { bookingId: 'B1', checkedInAt: '', checkedInBy: '', receiptIssued: false, cancelled: false, async onChanged() {} }, 'Check in client', 'เช็กอินลูกค้า'],
   ['WixCalendarSync', { async onSynced() {} }, 'Sync Wix bookings', 'ซิงค์การจอง Wix'],
-  ['WixBookings', { onViewBookings() {} }, 'Import historical Wix bookings', 'นำเข้าประวัติการจองจาก Wix'],
+  ['WixBookings', { onViewBookings() {} }, 'Import Wix bookings', 'นำเข้าการจองจาก Wix'],
   ['WixContacts', {}, 'Historical Wix contacts', 'รายชื่อติดต่อเดิมจาก Wix'],
   ['PackageTracking', { onViewBookings() {} }, 'Four-session package tracking', 'ติดตามแพ็กเกจ 4 ครั้ง'],
   ['ClearBookingHistory', { async onCleared() {} }, 'Clear past booking history', 'ลบประวัติการจองที่ผ่านมา'],
@@ -159,6 +159,21 @@ test('Thai quick-booking confirmation translates messages without changing reque
   const ui = harness('QuickBooking', 'th-TH', { 0: 'Alice Smith', 1: 'alice@example.com', 2: 'Please keep Tanya' }, async (_url, options) => {
     body = JSON.parse(options.body);
     return { ok: true, async json() { return { bookingId: 'B123', emailSkipped: true }; } };
+  });
+
+  test('quick booking customer suggestions and search failures render in Thai without translating personal details', () => {
+    const customer = { name: 'Alice Smith', email: 'alice@example.com', phone: '437-898-7424' };
+    const ui = harness('QuickBooking', 'th-TH', { 0: 'Alice', 11: [customer], 12: true });
+    const output = html(ui.render(quickProps));
+    assert.match(output, /ค้นหาลูกค้าเดิมด้วยชื่อ อีเมล หรือหมายเลขโทรศัพท์/);
+    assert.match(output, /ลูกค้าที่มีอยู่/);
+    assert.match(output, /Alice Smith/);
+    assert.match(output, /alice@example.com/);
+    assert.match(output, /437-898-7424/);
+    ui.states.set(11, []);
+    assert.match(html(ui.render(quickProps)), /ไม่พบลูกค้าที่ตรงกัน/);
+    ui.states.set(14, 'Unable to search customers. You can still enter a new client manually.');
+    assert.match(html(ui.render(quickProps)), /ไม่สามารถค้นหาลูกค้าได้/);
   });
   const element = ui.render({ ...quickProps, async onSaved(value) { saved = value; } });
   await find(element, (node) => node.type === 'form').props.onSubmit({ preventDefault() {} });
@@ -234,9 +249,9 @@ test('Wix calendar progress translates placeholder counts and selected scope', a
 
 test('Wix booking review translates totals and confirmations while preserving staff and branch names', () => {
   const preview = {
-    totalRows: 2, validBookings: 2, duplicates: 0, invalidRows: 0, futureRows: 0,
-    branchName: 'Mississauga Central', timeZone: 'America/Toronto', throughDate: '2026-10-10',
-    earliestDate: '2026-10-01', latestDate: '2026-10-09', warnings: 0, issues: [],
+    totalRows: 2, validBookings: 2, duplicates: 0, invalidRows: 0, futureRows: 1,
+    branchName: 'Mississauga Central', timeZone: 'America/Toronto', throughDate: '2027-01-01',
+    earliestDate: '2026-10-01', latestDate: '2027-01-01', warnings: 0, issues: [],
     approvedTotal: 203.4, mappedTherapistBookings: 2,
     therapistGroups: [{ sourceName: 'Tanya', count: 2 }], priceGroups: [],
     sample: [{ booking_id: 'WIX1', customer_name: 'Alice', date: '2026-10-01', time: '10:00 AM', service_name: 'Thai Massage', therapist_name: 'Tanya', duration_minutes: 60, status: 'Completed', total: 101.7, paid_amount: 101.7 }],
@@ -247,12 +262,15 @@ test('Wix booking review translates totals and confirmations while preserving st
     assert.match(output, /Tanya/);
     assert.match(output, /Mississauga Central/);
     if (locale === 'th-TH') {
+      assert.match(output, /รวมถึงนัดหมายในอนาคต 1 รายการ/);
       assert.match(output, /ยอดรวมภาษีสำหรับ CSV นี้: \$203.40/);
       assert.match(output, /ฉันยืนยันว่าการจองย้อนหลังเหล่านี้ชำระเงินแล้ว/);
       assert.match(output, /60 นาที/);
       assert.match(output, /เสร็จสิ้น/);
       assert.match(output, /10:00 น\./);
     } else {
+      assert.match(output, /including 1 future sessions/);
+      assert.doesNotMatch(output, /future sessions skipped|Future session dates are skipped/);
       assert.match(output, /Tax-inclusive total for this CSV: \$203.40/);
       assert.match(output, /I confirm these historical bookings were paid/);
       assert.match(output, /10:00 AM/);

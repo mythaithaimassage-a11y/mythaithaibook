@@ -95,6 +95,25 @@ test('date ranges require both real dates in order and allow inclusive single-da
   }
 });
 
+test('future confirmed and pending appointments sync once, excluding cancelled and no-show bookings', async () => {
+  const f = fixture(['Confirmed', 'Pending', 'Cancelled', 'No Show'].map((status, index) => ({
+    ...booking, booking_id: `WIX-future-${index}`, date: '2099-01-01', status,
+  })));
+  const result = await syncWixCalendarBatch(f.bigquery, f.calendar, options);
+  assert.equal(result.synced, 2);
+  assert.equal(result.pending, 0);
+  assert.deepEqual(result.errors, []);
+  for (const write of f.writes) {
+    assert.equal(write.requestBody.start.dateTime, '2099-01-01T23:30:00');
+    assert.equal(write.requestBody.end.dateTime, '2099-01-02T01:00:00');
+    assert.equal(write.sendUpdates, 'none');
+  }
+  assert.equal(f.rows[2].calendar_event_id, '');
+  assert.equal(f.rows[3].calendar_event_id, '');
+  assert.equal((await syncWixCalendarBatch(f.bigquery, f.calendar, options)).synced, 0);
+  assert.equal(f.writes.length, 2);
+});
+
 test('inclusive date range appends only missing bookings and keeps pending counts scoped across batches', async () => {
   const rows = [
     { ...booking, booking_id: 'WIX-before', date: '2026-09-30' },

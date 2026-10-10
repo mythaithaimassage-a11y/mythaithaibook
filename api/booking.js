@@ -10,6 +10,7 @@ import { applyBookingDiscount, bookingDiscount, bookingEditVersion, normalizeBoo
 import { createPackageStore, historicalPackageVisit, readPackageUsage, packageReceiptDetails } from '../lib/packages.js';
 import { createBookingHistoryStore } from '../lib/booking-history.js';
 import { syncWixCalendarBatch } from '../lib/wix-calendar.js';
+import { searchBookingCustomers } from '../lib/customer-search.js';
 import { sendGmailMessage } from '../lib/gmail.js';
 import { BOOKING_DEPOSIT_AMOUNT, validateBranchPaymentOptions, validateAppointmentTime } from '../lib/booking-options.js';
 import { validatePatientHistory, patientHistoryValues } from '../lib/patient-history.js';
@@ -4440,7 +4441,7 @@ export default async function handler(req, res) {
     const historyViews = ['booking-history-preview', 'clear-booking-history'];
     const wixCalendarViews = ['wix-calendar-sync'];
     const validGetViews = ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'business-name', 'square-config', 'google-reviews', 'branches', 'services', 'therapists', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal', 'company-join', 'find-booking', 'availability', 'unavailability', 'campaign-log', 'campaign-audience-options', 'review-request-audience', 'therapist-accounts', 'wix-contacts', 'dashboard-users'];
-    if (req.method === 'GET' && !validGetViews.includes(view) && !['wix-contacts-import', 'wix-bookings-import', ...packageViews, ...historyViews, ...wixCalendarViews].includes(view)) {
+    if (req.method === 'GET' && !validGetViews.includes(view) && !['customer-search', 'wix-contacts-import', 'wix-bookings-import', ...packageViews, ...historyViews, ...wixCalendarViews].includes(view)) {
       return res.status(404).json({ message: 'Unknown booking view' });
     }
     const ownerOnlyRequest =
@@ -4454,6 +4455,13 @@ export default async function handler(req, res) {
       res.setHeader('Cache-Control', 'no-store');
       if (!dashboardSession) return res.status(401).json({ message: 'Dashboard sign-in required' });
       if (!isSameOriginRequest(req)) return res.status(403).json({ message: 'Request origin is not allowed' });
+    }
+    if (view === 'customer-search') {
+      res.setHeader('Cache-Control', 'no-store');
+      if (!dashboardSession) return res.status(401).json({ message: 'Dashboard sign-in required' });
+      if ((req.method !== 'GET' || req.headers.origin) && !isSameOriginRequest(req)) {
+        return res.status(403).json({ message: 'Request origin is not allowed' });
+      }
     }
     if (ownerOnlyRequest && dashboardSession?.role !== 'owner') {
       return res.status(dashboardSession ? 403 : 401).json({ message: dashboardSession ? 'Owner role required' : 'Dashboard sign-in required' });
@@ -4645,6 +4653,16 @@ export default async function handler(req, res) {
 
     const sheets = google.sheets({ version: 'v4', auth });
     const calendarApi = google.calendar({ version: 'v3', auth });
+    if (view === 'customer-search') {
+      if (req.method !== 'GET') return res.status(405).json({ message: 'Method Not Allowed' });
+      const bigquery = getBigQueryClient();
+      const branchNames = await getDashboardBranchNames(sheets, dashboardSession);
+      return res.status(200).json(await searchBookingCustomers(bigquery, {
+        projectId: BIGQUERY_PROJECT_ID, datasetId: BIGQUERY_DATASET_ID, tableId: BIGQUERY_BOOKINGS_TABLE,
+        wixContactsTableId: process.env.BIGQUERY_WIX_CONTACTS_TABLE || 'wix_contacts',
+        branchNames, search: req.query?.search,
+      }));
+    }
     if (view === 'booking-note') {
       res.setHeader('Cache-Control', 'no-store');
       if (req.method !== 'POST') return res.status(405).json({ message: 'Method Not Allowed' });
@@ -8316,6 +8334,13 @@ export default async function handler(req, res) {
         : contact.length > 40 || !/^\+?[\d\s().-]+$/.test(contact) || contact.replace(/\D/g, '').length < 7 || contact.replace(/\D/g, '').length > 15) {
         return res.status(400).json({ message: 'Enter a valid email address or phone number.' });
       }
+      const email = payload.email === undefined ? (isEmail ? contact.toLowerCase() : '') : String(payload.email).trim().toLowerCase();
+      const phone = payload.phone === undefined ? (isEmail ? '' : contact) : String(payload.phone).trim();
+      if ((email && (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) ||
+          (phone && (phone.length > 40 || !/^\+?[\d\s().-]+$/.test(phone) || phone.replace(/\D/g, '').length < 7 || phone.replace(/\D/g, '').length > 15)) ||
+          (isEmail ? email !== contact.toLowerCase() : phone !== contact)) {
+        return res.status(400).json({ message: 'Enter valid customer contact details matching the email or phone number.' });
+      }
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== date) {
         return res.status(400).json({ message: 'Choose a valid appointment date.' });
       }
@@ -8336,7 +8361,7 @@ export default async function handler(req, res) {
       }
       payload = {
         id: `MTT-${crypto.randomUUID()}`, customerName,
-        email: isEmail ? contact.toLowerCase() : '', phone: isEmail ? '' : contact,
+        email, phone,
         branchName: branch.name, branchAddress: branch.address,
         serviceName: service.name, durationMinutes: service.duration,
         subtotalAmount: service.price, taxRate: service.taxRate,

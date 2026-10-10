@@ -208,7 +208,7 @@ test('sorts chronologically, creates stable IDs across row orders/split files an
   assert.equal(corrected.paid_amount, 0);
 });
 
-test('validates dates/times/durations/status, skips future rows and retains invalid source values with warnings', () => {
+test('validates dates/times/durations/status, includes future rows and retains invalid source values with warnings', () => {
   const { bookings, summary } = prepare([
     { 'Session date': '2025-02-30' }, { 'Start time': '24:00' }, { Duration: '0h, 0m' },
     { Duration: '1h, 60m' }, { 'Booking status': 'Unexpected' },
@@ -218,13 +218,40 @@ test('validates dates/times/durations/status, skips future rows and retains inva
   assert.equal(summary.invalidRows, 5);
   assert.equal(summary.futureRows, 1);
   assert.equal(summary.warnings, 2);
-  assert.equal(bookings.length, 2);
+  assert.equal(bookings.length, 3);
+  assert.equal(bookings.at(-1).date, '2026-10-03');
   const blankContact = bookings.find((booking) => booking.email === '');
   assert.equal(blankContact.phone, '');
   assert.equal(blankContact.created_at, '');
   assert.equal(JSON.parse(blankContact.intake_notes).sourceFields['Booking contact email'], 'bad');
   assert.throws(() => prepareWixBookings('First Name,Email 1\nJane,a@example.com'), /Missing Wix booking column/);
   assert.throws(() => prepareWixBookings(headers.join(',')), /no booking rows/);
+});
+
+test('imports today and future appointments with stable IDs, reviewed prices and duplicate protection', async () => {
+  const records = [
+    { 'Session date': '2026-10-02' },
+    { 'Session date': '2026-10-03' },
+    { 'Session date': '2027-01-01', 'Booking status': 'Pending' },
+    { 'Session date': '2026-10-03' },
+  ];
+  const prepared = prepare(records);
+  assert.equal(prepared.summary.validBookings, 3);
+  assert.equal(prepared.summary.futureRows, 2);
+  assert.equal(prepared.summary.duplicates, 1);
+  assert.equal(prepared.summary.throughDate, '2027-01-01');
+  assert.equal(prepared.summary.latestDate, '2027-01-01');
+  assert.deepEqual(prepared.bookings.map(({ status }) => status), ['Confirmed', 'Confirmed', 'Pending']);
+  const later = prepareWixBookings(csv(records), { today: '2027-01-02' });
+  assert.deepEqual(later.bookings.map(({ booking_id }) => booking_id), prepared.bookings.map(({ booking_id }) => booking_id));
+  const futureOnly = prepare([records[2]]);
+  assert.equal(futureOnly.summary.validBookings, 1);
+  assert.equal(futureOnly.summary.futureRows, 1);
+  const priced = applyWixCataloguePrices(prepared, catalogue, mapping(prepared), true);
+  const mock = mockBigQuery();
+  assert.deepEqual(await importWixBookings(mock.bigquery, priced.bookings, { ...config, reviewedPaid: true }), { imported: 3, updated: 0 });
+  assert.deepEqual(await importWixBookings(mock.bigquery, priced.bookings, { ...config, reviewedPaid: true }), { imported: 0, updated: 0 });
+  assert.equal(mock.stored.size, 3);
 });
 
 test('normalizes cancelled/attended/no-show status without assuming past sessions were attended', () => {
@@ -352,6 +379,14 @@ test('booking import API enforces owner/origin, previews without backend writes 
   assert.equal(preview.data.sample[0].branch_name, 'Mississauga Central');
   assert.equal(preview.data.imported, undefined);
   assert.equal(preview.data.priceGroups.length, 1);
+  const futurePreview = await request('wix-bookings-import', {
+    cookie, body: { csv: csv([{ 'Session date': '2099-01-01' }]), preview: true },
+  });
+  assert.equal(futurePreview.code, 200);
+  assert.equal(futurePreview.data.validBookings, 1);
+  assert.equal(futurePreview.data.futureRows, 1);
+  assert.equal(futurePreview.data.sample[0].date, '2099-01-01');
+  assert.equal(futurePreview.data.sample[0].status, 'Confirmed');
   assert.equal((await request('wix-bookings-import', { cookie, body: { csv: csv([{}]) } })).code, 400);
   assert.equal((await request('loyalty-award', { cookie, body: { bookingId: preview.data.sample[0].booking_id } })).code, 409);
   assert.equal((await request('wix-bookings-import', { cookie, body: { csv: 'x'.repeat(4 * 1024 * 1024) } })).code, 413);

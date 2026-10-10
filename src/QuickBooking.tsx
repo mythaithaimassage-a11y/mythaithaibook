@@ -5,6 +5,7 @@ import { message, useTranslation, type TranslationMessage } from './localization
 type Branch = { id: number; name: string; active?: boolean };
 type Service = { id: number; name: string; active?: boolean; isRmt?: boolean };
 type Therapist = { id: number; name: string; active?: boolean; rmtCertified?: boolean };
+type Customer = { name: string; email: string; phone: string };
 type Props = {
   branches: Branch[];
   services: Service[];
@@ -32,6 +33,12 @@ export default function QuickBooking(props: Props) {
   const [time, setTime] = useState(props.time || props.times[0] || '');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState('');
+  const [activeCustomer, setActiveCustomer] = useState(-1);
+  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const dialog = useRef<HTMLDialogElement>(null);
   const submitting = useRef(false);
   const service = props.services.find((item) => String(item.id) === serviceId);
@@ -47,6 +54,38 @@ export default function QuickBooking(props: Props) {
     return () => element?.close();
   }, []);
 
+  useEffect(() => {
+    if (!searchOpen || !name.trim()) return;
+    const controller = new AbortController();
+    const timer = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const response = await fetch(`/api/booking?${new URLSearchParams({ view: 'customer-search', search: name.trim() })}`, { signal: controller.signal });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message || 'Unable to search customers. You can still enter a new client manually.');
+        if (!Array.isArray(data.customers) || !data.customers.every((customer: Customer) => customer &&
+            typeof customer.name === 'string' && typeof customer.email === 'string' && typeof customer.phone === 'string')) {
+          throw new Error('Unable to search customers. You can still enter a new client manually.');
+        }
+        if (!controller.signal.aborted) setCustomers(data.customers);
+      } catch (failure) {
+        if (!controller.signal.aborted) setSearchError(failure instanceof Error ? failure.message : 'Unable to search customers. You can still enter a new client manually.');
+      } finally {
+        if (!controller.signal.aborted) setSearching(false);
+      }
+    }, 250);
+    return () => { clearTimeout(timer); controller.abort(); };
+  }, [name, searchOpen]);
+
+  const selectCustomer = (customer: Customer) => {
+    setName(customer.name);
+    setContact(customer.email || customer.phone);
+    setSelectedCustomer(customer);
+    setSearchOpen(false);
+    setCustomers([]);
+    setActiveCustomer(-1);
+  };
+
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (submitting.current) return;
@@ -57,7 +96,7 @@ export default function QuickBooking(props: Props) {
       const response = await fetch('/api/booking?view=manual-booking', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ customerName: name, contact, branchId, serviceId, therapistId: validTherapistId, therapistId2: couple ? validTherapistId2 : '', date, time, bookingNote }),
+        body: JSON.stringify({ customerName: name, contact, ...(selectedCustomer ? { email: selectedCustomer.email, phone: selectedCustomer.phone } : {}), branchId, serviceId, therapistId: validTherapistId, therapistId2: couple ? validTherapistId2 : '', date, time, bookingNote }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || 'Unable to save this appointment.');
@@ -84,8 +123,57 @@ export default function QuickBooking(props: Props) {
         <span className="mt-1 block font-normal text-stone-500">{tr('Shared with authorized staff and the assigned therapist. Not included in customer emails or receipts. Do not enter medical information here.')}</span>
       </label>
       <form onSubmit={submit} className="space-y-4 p-5">
-        <label className="block text-xs font-bold text-stone-700">{tr('Client name')}<input autoFocus required maxLength={150} value={name} onChange={(event) => setName(event.target.value)} autoComplete="name" className={inputClass} /></label>
-        <label className="block text-xs font-bold text-stone-700">{tr('Email or phone number')}<input required maxLength={254} value={contact} onChange={(event) => setContact(event.target.value)} placeholder={tr('client@example.com or +1 437 898 7424')} className={inputClass} /></label>
+        <div className="relative" onBlur={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget)) setSearchOpen(false);
+        }}>
+          <label className="block text-xs font-bold text-stone-700">{tr('Client name')}<input autoFocus required maxLength={150} value={name} onChange={(event) => {
+            setName(event.target.value);
+            setCustomers([]);
+            setSearchError('');
+            setSearching(Boolean(event.target.value.trim()));
+            setActiveCustomer(-1);
+            setSelectedCustomer(null);
+            setSearchOpen(true);
+          }} onFocus={() => {
+            if (!selectedCustomer && name.trim()) {
+              setSearchError('');
+              setSearching(true);
+              setSearchOpen(true);
+            }
+          }} onKeyDown={(event) => {
+            if (event.key === 'Escape' && searchOpen) {
+              event.preventDefault();
+              event.stopPropagation();
+              setSearchOpen(false);
+            } else if (searchOpen && customers.length && ['ArrowDown', 'ArrowUp'].includes(event.key)) {
+              event.preventDefault();
+              setActiveCustomer((current) => event.key === 'ArrowDown' ? (current + 1) % customers.length : (current <= 0 ? customers.length - 1 : current - 1));
+            } else if (event.key === 'Enter' && searchOpen && activeCustomer >= 0 && customers[activeCustomer]) {
+              event.preventDefault();
+              selectCustomer(customers[activeCustomer]);
+            }
+          }} role="combobox" aria-autocomplete="list" aria-expanded={searchOpen && Boolean(name.trim())}
+            aria-controls={searchOpen && name.trim() ? 'quick-booking-customers' : undefined} aria-activedescendant={searchOpen && activeCustomer >= 0 ? `quick-booking-customer-${activeCustomer}` : undefined}
+            autoComplete="off" placeholder={tr('Search existing customers by name, email or phone')} className={inputClass} /></label>
+          {searchOpen && name.trim() && <div className="absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-lg border border-stone-200 bg-white p-1 shadow-lg">
+            {searching && <p role="status" className="p-2 text-xs text-stone-500">{tr('Searching customers...')}</p>}
+            {searchError && <p role="alert" className="p-2 text-xs text-red-700">{tr(searchError)}</p>}
+            {!searching && !searchError && customers.length === 0 && <p role="status" className="p-2 text-xs text-stone-500">{tr('No matching customers. Enter a new client name and contact details.')}</p>}
+            <div id="quick-booking-customers" role="listbox" aria-label={tr('Existing customers')}>
+              {customers.map((customer, index) => <button key={`${customer.email}-${customer.phone}`} id={`quick-booking-customer-${index}`} type="button" role="option"
+                aria-selected={activeCustomer === index} onMouseDown={(event) => event.preventDefault()} onClick={() => selectCustomer(customer)}
+                className={`block w-full rounded-md px-3 py-2 text-left text-sm hover:bg-blue-50 ${activeCustomer === index ? 'bg-blue-50' : ''}`}>
+                <span className="block font-semibold text-stone-900">{customer.name || customer.email || customer.phone}</span>
+                <span className="block text-xs text-stone-500">{[customer.email, customer.phone].filter(Boolean).join(' / ')}</span>
+              </button>)}
+            </div>
+          </div>}
+        </div>
+        <label className="block text-xs font-bold text-stone-700">{tr('Email or phone number')}<input required maxLength={254} value={contact} onChange={(event) => {
+          setContact(event.target.value);
+          setSelectedCustomer(null);
+        }} placeholder={tr('client@example.com or +1 437 898 7424')} className={inputClass} /></label>
+        {selectedCustomer?.email && selectedCustomer.phone && <p className="text-xs text-stone-500">{selectedCustomer.email} / {selectedCustomer.phone}</p>}
         <div className="grid grid-cols-2 gap-3">
           <label className="text-xs font-bold text-stone-700">{tr('Therapist')}<select required value={validTherapistId} onChange={(event) => setTherapistId(event.target.value)} className={inputClass}><option value="">{tr('Choose therapist')}</option>{therapists.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
           <label className="text-xs font-bold text-stone-700">{tr('Time')}<select required value={time} onChange={(event) => setTime(event.target.value)} className={inputClass}>{props.times.map((value) => <option key={value} value={value}>{formatTime(value)}</option>)}</select></label>
