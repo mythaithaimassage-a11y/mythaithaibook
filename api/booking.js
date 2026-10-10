@@ -4464,14 +4464,14 @@ export default async function handler(req, res) {
     if (req.method === 'POST' && ['wix-contacts-import', 'wix-bookings-import', ...packageViews, ...wixCalendarViews].includes(view) && !isSameOriginRequest(req)) {
       return res.status(403).json({ message: 'Wix import origin is not allowed' });
     }
-    const syncWixCalendar = (excludedIds = []) => {
+    const syncWixCalendar = (excludedIds = [], startDate = '', endDate = '') => {
       const calendarAuth = new google.auth.GoogleAuth({
         credentials: { client_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL, private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n') },
         scopes: ['https://www.googleapis.com/auth/calendar'],
       });
       return syncWixCalendarBatch(getBigQueryClient(), google.calendar({ version: 'v3', auth: calendarAuth }), {
         projectId: BIGQUERY_PROJECT_ID, datasetId: BIGQUERY_DATASET_ID, tableId: BIGQUERY_BOOKINGS_TABLE,
-        calendarId: PRIMARY_CALENDAR_ID, timeZone: CALENDAR_TIME_ZONE, excludedIds,
+        calendarId: PRIMARY_CALENDAR_ID, timeZone: CALENDAR_TIME_ZONE, excludedIds, startDate, endDate,
       });
     };
     if (wixCalendarViews.includes(view)) {
@@ -4481,7 +4481,7 @@ export default async function handler(req, res) {
           excludedIds.some((id) => typeof id !== 'string' || !id.startsWith('WIX-') || id.length > 100)) {
         return res.status(400).json({ message: 'Calendar sync exclusions must contain at most 100 valid Wix booking IDs.' });
       }
-      return res.status(200).json(await syncWixCalendar(excludedIds));
+      return res.status(200).json(await syncWixCalendar(excludedIds, req.body?.startDate, req.body?.endDate));
     }
     if (packageViews.includes(view)) {
       if ((view === 'packages' && req.method !== 'GET') || (view !== 'packages' && req.method !== 'POST')) return res.status(405).json({ message: 'Method Not Allowed' });

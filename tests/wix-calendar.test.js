@@ -3,7 +3,7 @@ import test from 'node:test';
 import { Readable } from 'node:stream';
 import { BigQuery } from '@google-cloud/bigquery';
 import { google } from 'googleapis';
-import { isTransientCalendarError, retryCalendarOperation, syncWixCalendarBatch, wixCalendarEvent } from '../lib/wix-calendar.js';
+import { isTransientCalendarError, retryCalendarOperation, syncWixCalendarBatch, validateWixSyncDateRange, wixCalendarEvent } from '../lib/wix-calendar.js';
 import { createDashboardChallengeStore, handleDashboardChallengeQuery, readDashboardOtp } from './helpers/dashboard-auth.js';
 
 const options = {
@@ -29,7 +29,9 @@ function fixture(rows = [{ ...booking }]) {
       assert.match(query, /NOT IN \('Cancelled', 'No Show'\)/);
       assert.doesNotMatch(query, /CREATE|ALTER|DELETE|INSERT|paid_amount =|total =/);
       const pending = rows.filter((row) => row.booking_id.startsWith('WIX-') && !row.calendar_event_id &&
-        !['Cancelled', 'No Show'].includes(row.status) && !params.excludedIds?.includes(row.booking_id));
+        !['Cancelled', 'No Show'].includes(row.status) && !params.excludedIds?.includes(row.booking_id) &&
+        (!params.startDate || row.date >= params.startDate && row.date <= params.endDate));
+      if (params.startDate) assert.match(query, /date >= @startDate AND date <= @endDate/);
       if (query.startsWith('SELECT COUNT')) return [[{ pending: pending.length }]];
       if (query.startsWith('SELECT')) {
         assert.match(query, /ORDER BY booking_id LIMIT 500$/);
@@ -77,6 +79,61 @@ test('Wix event uses clinic timezone, mapped therapist and correct midnight dura
   for (const changes of [{ date: '2026-02-30' }, { time: '13:00 PM' }, { duration_minutes: 0 }]) {
     assert.throws(() => wixCalendarEvent({ ...booking, ...changes }, options.timeZone), /invalid date, time or duration/);
   }
+});
+
+test('date ranges require both real dates in order and allow inclusive single-day sync', () => {
+  validateWixSyncDateRange();
+  validateWixSyncDateRange('2026-10-01', '2026-10-01');
+  validateWixSyncDateRange('2024-02-29', '2026-10-01');
+  for (const [start, end] of [
+    ['2026-10-01', ''], ['', '2026-10-01'], ['2026-10-02', '2026-10-01'],
+    ['2026-02-30', '2026-10-01'], ['2026-02-29', '2026-10-01'],
+    ['10/01/2026', '2026-10-01'], [null, null], [20261001, '2026-10-01'],
+  ]) {
+    assert.throws(() => validateWixSyncDateRange(start, end), (error) => error.statusCode === 400);
+  }
+});
+
+test('inclusive date range appends only missing bookings and keeps pending counts scoped across batches', async () => {
+  const rows = [
+    { ...booking, booking_id: 'WIX-before', date: '2026-09-30' },
+    ...Array.from({ length: 501 }, (_, index) => ({
+      ...booking, booking_id: `WIX-range-${String(index).padStart(3, '0')}`,
+      date: index % 2 ? '2026-10-01' : '2026-10-02',
+    })),
+    { ...booking, booking_id: 'WIX-after', date: '2026-10-03' },
+    { ...booking, booking_id: 'WIX-linked', calendar_event_id: 'existing-id', calendar_id: options.calendarId },
+    { ...booking, booking_id: 'WIX-cancelled', status: 'Cancelled' },
+    { ...booking, booking_id: 'WIX-no-show', status: 'No Show' },
+  ];
+  const f = fixture(rows);
+  f.events.set('existing-id', { summary: 'Existing calendar appointment' });
+  const range = { ...options, startDate: '2026-10-01', endDate: '2026-10-02' };
+  const first = await syncWixCalendarBatch(f.bigquery, f.calendar, range);
+  assert.equal(first.synced, 500);
+  assert.equal(first.pending, 1);
+  const second = await syncWixCalendarBatch(f.bigquery, f.calendar, range);
+  assert.equal(second.synced, 1);
+  assert.equal(second.pending, 0, 'Out-of-range bookings do not keep the selected run active');
+  assert.equal((await syncWixCalendarBatch(f.bigquery, f.calendar, range)).synced, 0);
+  assert.deepEqual(f.events.get('existing-id'), { summary: 'Existing calendar appointment' });
+  assert.equal(f.rows.find((row) => row.booking_id === 'WIX-before').calendar_event_id, '');
+  assert.equal(f.rows.find((row) => row.booking_id === 'WIX-after').calendar_event_id, '');
+  for (const { query, params } of f.queries.filter(({ query }) => query.startsWith('SELECT'))) {
+    assert.match(query, /date >= @startDate AND date <= @endDate/);
+    assert.equal(params.startDate, range.startDate);
+    assert.equal(params.endDate, range.endDate);
+    assert.ok(!query.includes("'2026-10-01'"), 'Dates use query parameters');
+  }
+  assert.equal((await syncWixCalendarBatch(f.bigquery, f.calendar, { ...options, startDate: '2026-10-03', endDate: '2026-10-03' })).synced, 1);
+  assert.equal((await syncWixCalendarBatch(f.bigquery, f.calendar, options)).synced, 1, 'Unfiltered sync still appends other missing dates');
+});
+
+test('invalid date ranges fail before database reads or calendar writes', async () => {
+  const f = fixture();
+  await assert.rejects(syncWixCalendarBatch(f.bigquery, f.calendar, { ...options, startDate: '2026-10-02', endDate: '2026-10-01' }), (error) => error.statusCode === 400);
+  assert.equal(f.queries.length, 0);
+  assert.equal(f.writes.length, 0);
 });
 
 test('bounded backfill only creates pending Wix events and saves existing schema links; retry skips them', async () => {
@@ -443,8 +500,19 @@ test('Calendar backfill endpoint enforces owner authentication, method, origin a
   assert.equal((await request('wix-calendar-sync', { origin: 'https://evil.example' })).code, 403);
   assert.equal((await request('wix-calendar-sync', { body: { excludedIds: ['LIVE-test'] } })).code, 400);
   assert.equal((await request('wix-calendar-sync', { body: { excludedIds: Array(101).fill('WIX-test') } })).code, 400);
+  for (const body of [
+    { startDate: '2026-10-02', endDate: '2026-10-01' },
+    { startDate: '2026-02-30', endDate: '2026-10-01' },
+    { startDate: '2026-10-01' },
+    { startDate: null, endDate: null },
+  ]) {
+    assert.equal((await request('wix-calendar-sync', { body })).code, 400);
+  }
   assert.equal(f.queries.length, 0);
-  const synced = await request('wix-calendar-sync');
+  const outsideRange = await request('wix-calendar-sync', { body: { startDate: '2026-10-02', endDate: '2026-10-03' } });
+  assert.equal(outsideRange.data.synced, 0);
+  assert.equal(outsideRange.data.pending, 0);
+  const synced = await request('wix-calendar-sync', { body: { startDate: booking.date, endDate: booking.date } });
   assert.equal(synced.code, 200);
   assert.equal(synced.data.synced, 1);
   assert.equal(synced.headers['Cache-Control'], 'no-store');

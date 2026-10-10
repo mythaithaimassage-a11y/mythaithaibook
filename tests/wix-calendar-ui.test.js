@@ -1,6 +1,32 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
 import { runWixCalendarSync } from '../src/runWixCalendarSync.js';
+
+test('calendar sync offers inclusive date controls and sends a fixed range on every batch', () => {
+  const source = readFileSync(new URL('../src/WixCalendarSync.tsx', import.meta.url), 'utf8');
+  assert.match(source, /<option value="all">All dates<\/option>/);
+  assert.match(source, /<option value="range">Selected date range<\/option>/);
+  assert.match(source, /Start date/);
+  assert.match(source, /End date \(inclusive\)/);
+  assert.equal((source.match(/type="date" required disabled=\{busy\}/g) || []).length, 2);
+  assert.match(source, /startDate > endDate/);
+  assert.match(source, /const dateRange = scope === 'range' \? \{ startDate, endDate \} : \{\}/);
+  assert.match(source, /JSON\.stringify\(\{ excludedIds, \.\.\.dateRange \}\)/);
+  assert.match(source, /Existing synced appointments are unchanged/);
+});
+
+test('date-filtered batch requests retain the range while excluding failures and finishing at scoped zero pending', async () => {
+  const dateRange = { startDate: '2026-10-01', endDate: '2026-10-31' };
+  const requests = [];
+  const batches = [{ synced: 500, pending: 2, errors: [] }, { synced: 2, pending: 0, errors: [] }];
+  const result = await runWixCalendarSync(async (excludedIds = []) => {
+    requests.push({ excludedIds, ...dateRange });
+    return batches.shift();
+  }, () => {});
+  assert.equal(result.synced, 502);
+  assert.deepEqual(requests, [{ excludedIds: [], ...dateRange }, { excludedIds: [], ...dateRange }]);
+});
 
 test('shared dashboard/import sync continues batches, reports cumulative progress, and finishes only at zero pending', async () => {
   const batches = [

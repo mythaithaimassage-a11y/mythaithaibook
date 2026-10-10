@@ -391,8 +391,19 @@ calendar and booking list during sync (at most once every 10 seconds), as well
 as after completion or partial failure. The visible calendar tab also reloads
 every 15 seconds and when returning to the tab, without overlapping poll requests.
 Calendar reads follow all event pages so busy days do not silently lose appointments.
-Sync applies to
-all pending Wix dates/branches, not just the selected calendar filters. Select
+The Booking Calendar sync panel offers **All dates** or **Selected date range**.
+Choose inclusive **Start date** and **End date** to append only missing Wix
+appointments in that period, across all branches. The same range applies to
+every batch and remaining count. Already-synced events are left unchanged;
+cancelled/no-show bookings are skipped. Repeat the range safely, or select a
+different period to append more appointments. No existing calendar events or
+booking records are removed. Both dates are required for a range, and the end
+must not precede the start.
+
+The owner-only POST `view=wix-calendar-sync` accepts optional `startDate` and
+`endDate` (`YYYY-MM-DD`); omit both for the existing all-dates behavior.
+Automatic syncing after a CSV import continues to use all pending dates.
+Sync scope is independent of the visible calendar's date/branch filters. Select
 the historical appointment date to see its events in the day view.
 The dashboard sends both the selected branch name and address: imported Wix
 events use `Mississauga Central` as their location without a street address.
