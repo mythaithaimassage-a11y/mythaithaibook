@@ -4383,6 +4383,11 @@ export default async function handler(req, res) {
       (req.method === 'POST' && ['branches', 'services', 'therapists', 'unavailability'].includes(view));
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
     const dashboardSession = await getOwnerSession(req);
+    if (view === 'manual-booking') {
+      res.setHeader('Cache-Control', 'no-store');
+      if (!dashboardSession) return res.status(401).json({ message: 'Dashboard sign-in required' });
+      if (!isSameOriginRequest(req)) return res.status(403).json({ message: 'Request origin is not allowed' });
+    }
     if (ownerOnlyRequest && dashboardSession?.role !== 'owner') {
       return res.status(dashboardSession ? 403 : 401).json({ message: dashboardSession ? 'Owner role required' : 'Dashboard sign-in required' });
     }
@@ -7904,7 +7909,48 @@ export default async function handler(req, res) {
       return res.status(200).json({ patientHistorySaved: true, bookingId });
     }
 
-    const payload = req.body;
+    let payload = req.body;
+    if (view === 'manual-booking') {
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return res.status(400).json({ message: 'Appointment details are required.' });
+      const customerName = String(payload.customerName || '').trim();
+      const contact = String(payload.contact || '').trim();
+      const date = String(payload.date || '');
+      const parsedDate = new Date(`${date}T12:00:00Z`);
+      if (!customerName || customerName.length > 150) return res.status(400).json({ message: 'Enter a client name (up to 150 characters).' });
+      const isEmail = contact.includes('@');
+      if (isEmail ? contact.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact)
+        : contact.length > 40 || !/^\+?[\d\s().-]+$/.test(contact) || contact.replace(/\D/g, '').length < 7 || contact.replace(/\D/g, '').length > 15) {
+        return res.status(400).json({ message: 'Enter a valid email address or phone number.' });
+      }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== date) {
+        return res.status(400).json({ message: 'Choose a valid appointment date.' });
+      }
+      const [branches, services, therapists] = await Promise.all([getBranches(sheets), getServices(sheets), getTherapists(sheets)]);
+      const branch = branches.find((item) => item.active !== false && String(item.id) === String(payload.branchId));
+      const service = services.find((item) => item.active !== false && String(item.id) === String(payload.serviceId));
+      if (!branch || !service) return res.status(400).json({ message: 'Choose an active branch and service.' });
+      if (!Number.isFinite(service.duration) || service.duration <= 0) return res.status(400).json({ message: 'This service has an invalid duration. Update the service catalogue before booking.' });
+      if (dashboardSession.role !== 'owner' && !dashboardSession.branchIds.includes(String(branch.id))) {
+        return res.status(403).json({ message: 'You can only create bookings for your assigned branches.' });
+      }
+      const eligible = therapists.filter((item) => item.active !== false && isTherapistScheduledAtBranch(item, branch.id, date) && (!service.isRmt || item.rmtCertified));
+      const therapist = eligible.find((item) => String(item.id) === String(payload.therapistId));
+      const couple = /couple/i.test(service.name);
+      const therapist2 = couple ? eligible.find((item) => String(item.id) === String(payload.therapistId2)) : null;
+      if (!therapist || (couple && (!therapist2 || therapist2.id === therapist.id))) {
+        return res.status(400).json({ message: 'Choose a scheduled, qualified therapist (two different therapists for a couple session).' });
+      }
+      payload = {
+        id: `MTT-${crypto.randomUUID()}`, customerName,
+        email: isEmail ? contact.toLowerCase() : '', phone: isEmail ? '' : contact,
+        branchName: branch.name, branchAddress: branch.address,
+        serviceName: service.name, durationMinutes: service.duration,
+        subtotalAmount: service.price, taxRate: service.taxRate,
+        therapistName: therapist.name, therapistName2: therapist2?.name || '',
+        therapistCandidates: [], date, time: payload.time,
+        paymentOption: 'clinic', skipPatientHistory: true,
+      };
+    }
     try {
       validateAppointmentTime(payload.time);
     } catch (error) {
@@ -8179,7 +8225,8 @@ export default async function handler(req, res) {
 
     let emailSent = false;
     let emailError = '';
-    try {
+    const emailSkipped = view === 'manual-booking' && !payload.email;
+    if (!emailSkipped) try {
       await sendGmailConfirmation(createGmailApi(), {
         ...payload,
         patientHistoryReused,
@@ -8193,9 +8240,11 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       status: 'success',
+      bookingId: payload.id,
       calendarId,
       calendarEventId: calendarEvent.data.id,
       emailSent,
+      emailSkipped,
       emailError,
       paidAmount: payload.paidAmount,
       totalAmount: payload.totalAmount,

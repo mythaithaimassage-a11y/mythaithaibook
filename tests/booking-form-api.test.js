@@ -21,15 +21,31 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   const ownerEmail = 'owner@example.com';
   const ownerPassword = 'synthetic-owner-password';
   let branchRows = [[1, 'Test Branch', 'Address', 'City', '555', 'TRUE', '', 'TRUE', 'TRUE', 'TRUE', 'TRUE']];
+  let busyEvents = [];
+  let blockRows = [['Block ID']];
+  const serviceRows = [
+    [1, 'Massage', 'Thai', 60, 100, 10, 'FALSE', 0.13, '', 'TRUE'],
+    [2, 'Couple Massage', 'Thai', 60, 180, 10, 'FALSE', 0.13, '', 'TRUE'],
+    [3, 'RMT Massage', 'RMT', 60, 120, 10, 'TRUE', 0, '', 'TRUE'],
+    [4, 'Inactive Massage', 'Thai', 60, 100, 10, 'FALSE', 0.13, '', 'FALSE'],
+  ];
+  const therapistRows = [
+    [1, 'Test Therapist', '', 5, 'TRUE', 'FALSE', '1', '{}', 'TRUE'],
+    [2, 'Second Therapist', '', 5, 'TRUE', 'TRUE', '1', '{}', 'TRUE'],
+    [3, 'Off Duty', '', 5, 'TRUE', 'TRUE', '1', '{"sun":2}', 'TRUE'],
+    [4, 'Inactive Therapist', '', 5, 'TRUE', 'TRUE', '1', '{}', 'FALSE'],
+  ];
   const headers = [];
   t.mock.method(google, 'sheets', () => ({
     spreadsheets: {
-      get: async () => ({ data: { sheets: ['Branches', 'Unavailability'].map((title) => ({ properties: { title } })) } }),
+      get: async () => ({ data: { sheets: ['Branches', 'Unavailability', 'Services', 'Therapists'].map((title) => ({ properties: { title } })) } }),
       values: {
         get: async ({ range }) => {
           if (range === 'Branches!A2:K') return { data: { values: branchRows } };
           if (range === 'Unavailability!A1:J1') return { data: { values: [['Block ID']] } };
-          if (range === 'Unavailability!A:J') return { data: { values: [['Block ID']] } };
+          if (range === 'Unavailability!A:J') return { data: { values: blockRows } };
+          if (range === 'Services!A2:K') return { data: { values: serviceRows } };
+          if (range === 'Therapists!A2:J') return { data: { values: therapistRows } };
           throw new Error(`Unexpected sheets read: ${range}`);
         },
         update: async ({ range, requestBody }) => {
@@ -43,7 +59,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   }));
   const events = [];
   t.mock.method(google, 'calendar', () => ({ events: {
-    list: async () => ({ data: { items: [] } }),
+    list: async () => ({ data: { items: busyEvents } }),
     insert: async (options) => { events.push(options); return { data: { id: `event-${events.length}` } }; },
   } }));
   const emails = [];
@@ -264,6 +280,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
     challengeId: managerLogin.data.challengeId, code: readDashboardOtp(emails.at(-1)),
   });
   assert.equal(managerVerified.code, 200);
+  const managerCookie = cookie;
   assert.equal((await request('patient-history', null, { method: 'GET' })).code, 403);
   assert.equal((await request('dashboard-users', null, { method: 'GET' })).code, 403);
   assert.equal((await request('mark-paid', { bookingId: 'MTT-not-found' })).code, 404);
@@ -279,6 +296,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
     email: 'reception@example.com', name: 'Branch Receptionist', password: 'synthetic-reception-password',
     role: 'branch_receptionist', branchIds: ['1'],
   });
+  const ownerCookie = cookie;
   assert.equal(receptionistCreated.code, 201, JSON.stringify(receptionistCreated.data));
   const receptionistLogin = await request('owner-login', {
     email: receptionistCreated.data.user.email, password: 'synthetic-reception-password',
@@ -290,4 +308,78 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   assert.equal((await request('patient-history', null, { method: 'GET' })).code, 403);
   assert.equal((await request('mark-paid', { bookingId: 'MTT-not-found' })).code, 403);
   assert.equal((await request('dashboard-users', null, { method: 'GET' })).code, 403);
+
+  const receptionistCookie = cookie;
+  const manual = {
+    customerName: '  Walk-in Client  ', contact: '+1 (437) 898-7424',
+    branchId: '1', serviceId: '1', therapistId: '1', date: '2026-11-01', time: '10:00 AM',
+    paidAmount: '999', paymentOption: 'full', subtotalAmount: 1, taxRate: 0, skipPatientHistory: false,
+  };
+  cookie = '';
+  assert.equal((await request('manual-booking', manual)).code, 401);
+  cookie = receptionistCookie;
+  assert.equal((await request('manual-booking', manual, { origin: 'https://untrusted.example' })).code, 403);
+  const eventCount = events.length;
+  const historyCount = histories.length;
+  const emailCount = emails.length;
+  for (const invalid of [
+    { customerName: ' ' }, { customerName: 'x'.repeat(151) }, { contact: '' },
+    { contact: 'invalid@email' }, { contact: 'not a phone' }, { contact: '123' },
+    { date: '2026-02-30' }, { date: '' }, { time: '09:45 AM' },
+    { serviceId: '404' }, { serviceId: '4' }, { therapistId: '3' },
+    { therapistId: '4' }, { therapistId: '' }, { serviceId: '3', therapistId: '1' },
+    { serviceId: '2', therapistId2: '1' }, { serviceId: '2', therapistId2: '' },
+  ]) {
+    const result = await request('manual-booking', { ...manual, ...invalid });
+    assert.equal(result.code, 400, JSON.stringify({ invalid, data: result.data }));
+  }
+  branchRows.push([2, 'Unassigned Branch', '', '', '', 'TRUE', '', 'TRUE', 'TRUE', 'TRUE', 'TRUE']);
+  assert.equal((await request('manual-booking', { ...manual, branchId: '2' })).code, 403);
+  busyEvents = [{ start: { dateTime: '2026-11-01T10:00:00-04:00' }, end: { dateTime: '2026-11-01T11:00:00-04:00' }, description: 'Therapist: Test Therapist' }];
+  assert.equal((await request('manual-booking', manual)).code, 409);
+  busyEvents = [];
+  blockRows.push(['block-1', 'business', 'Test Branch', '', manual.date, '10:00', '11:00', 'Closed']);
+  assert.equal((await request('manual-booking', manual)).code, 409);
+  blockRows = [['Block ID'], ['block-2', 'therapist', '', 'Test Therapist', manual.date, '10:00', '11:00', 'Break']];
+  assert.equal((await request('manual-booking', manual)).code, 409);
+  blockRows = [['Block ID']];
+  assert.equal(events.length, eventCount, 'Invalid or unavailable bookings do not create events');
+  const phoneBooking = await request('manual-booking', manual);
+  assert.equal(phoneBooking.code, 200, JSON.stringify(phoneBooking.data));
+  assert.match(phoneBooking.data.bookingId, /^MTT-/);
+  assert.equal(phoneBooking.data.emailSkipped, true);
+  assert.equal(phoneBooking.data.emailSent, false);
+  assert.equal(phoneBooking.data.emailError, '');
+  assert.equal(phoneBooking.data.patientHistorySkipped, true);
+  assert.equal(phoneBooking.data.patientHistorySaved, false);
+  assert.equal(phoneBooking.data.paidAmount, '0.00');
+  assert.equal(phoneBooking.data.totalAmount, '113.00', 'Price comes from the catalogue, not the request');
+  assert.equal(records.at(-1).customer_name, 'Walk-in Client');
+  assert.equal(records.at(-1).email, '');
+  assert.equal(records.at(-1).phone, manual.contact);
+  assert.equal(records.at(-1).payment_option, 'clinic');
+  assert.equal(histories.length, historyCount);
+  assert.equal(emails.length, emailCount, 'Phone-only bookings do not attempt email delivery');
+  const emailBooking = await request('manual-booking', { ...manual, contact: 'Client@Example.com', serviceId: '2', therapistId2: '2' });
+  assert.equal(emailBooking.code, 200, JSON.stringify(emailBooking.data));
+  assert.equal(emailBooking.data.emailSkipped, false);
+  assert.equal(emailBooking.data.emailSent, true);
+  assert.equal(emailBooking.data.therapistName, 'Test Therapist, Second Therapist');
+  assert.equal(records.at(-1).email, 'client@example.com');
+  assert.equal(records.at(-1).phone, '');
+  assert.equal(histories.length, historyCount);
+  assert.equal(events.length, eventCount + 2);
+  cookie = managerCookie;
+  assert.equal((await request('manual-booking', { ...manual, time: '11:00 AM' })).code, 200, 'Managers can book their assigned branch');
+  cookie = ownerCookie;
+  t.mock.method(google, 'gmail', () => ({ users: { messages: { send: async () => { throw new Error('Synthetic confirmation delivery failure'); } } } }));
+  const recordsBeforeEmailFailure = records.length;
+  const savedWithoutEmail = await request('manual-booking', { ...manual, contact: 'owner-client@example.com', time: '12:00 PM' });
+  assert.equal(savedWithoutEmail.code, 200, JSON.stringify(savedWithoutEmail.data));
+  assert.equal(savedWithoutEmail.data.emailSent, false);
+  assert.equal(savedWithoutEmail.data.emailSkipped, false);
+  assert.match(savedWithoutEmail.data.emailError, /Synthetic confirmation delivery failure/);
+  assert.equal(records.length, recordsBeforeEmailFailure + 1, 'Confirmation failures do not discard the saved appointment');
+  assert.equal(events.length, eventCount + 4);
+  assert.equal(histories.length, historyCount);
 });

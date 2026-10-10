@@ -16,6 +16,7 @@ import WixBookings from './WixBookings';
 import PackageTracking from './PackageTracking';
 import ClearBookingHistory from './ClearBookingHistory';
 import WixCalendarSync from './WixCalendarSync';
+import QuickBooking from './QuickBooking';
 import { AVAILABLE_TIMES, BOOKING_DEPOSIT_AMOUNT, branchPaymentOptions, bookingCategories } from '../lib/booking-options.js';
 import { emptyPatientHistory } from '../lib/patient-history.js';
 import { anatomicalBodyParts } from '../lib/body-map.js';
@@ -4380,6 +4381,13 @@ function AdminPortal({
   const [calendarUrl, setCalendarUrl] = useState('');
   const [calendarWarnings, setCalendarWarnings] = useState([]);
   const [calendarUnavailability, setCalendarUnavailability] = useState([]);
+  const [calendarViewMode, setCalendarViewMode] = useState('daily');
+  const [calendarSearch, setCalendarSearch] = useState('');
+  const [calendarFiltersOpen, setCalendarFiltersOpen] = useState(false);
+  const [calendarAutoRefresh, setCalendarAutoRefresh] = useState(true);
+  const [calendarShowLegend, setCalendarShowLegend] = useState(true);
+  const [quickBooking, setQuickBooking] = useState(null);
+  const [quickBookingNotice, setQuickBookingNotice] = useState('');
   const calendarRequest = useRef<AbortController | null>(null);
   const [unavailabilityBlocks, setUnavailabilityBlocks] = useState([]);
   const [isLoadingUnavailability, setIsLoadingUnavailability] = useState(false);
@@ -5653,11 +5661,22 @@ function AdminPortal({
     }
   };
 
+  const visibleCalendarEvents = calendarEvents.filter((event) => {
+    const search = calendarSearch.trim().toLowerCase();
+    return !search || [event.summary, event.therapistName, event.location, event.booking?.customerName, event.booking?.email, event.booking?.phone]
+      .some((value) => String(value || '').toLowerCase().includes(search));
+  });
+
+  const openQuickBooking = (time = '') => {
+    setQuickBookingNotice('');
+    setQuickBooking({ date: calendarDate, branchId: calendarBranch, therapistId: calendarTherapist, time });
+  };
+
   useEffect(() => {
     if (activeTab !== 'calendar') return;
     void loadCalendar();
     const refresh = () => {
-      if (!document.hidden && !calendarRequest.current) void loadCalendar();
+      if (calendarAutoRefresh && !document.hidden && !calendarRequest.current) void loadCalendar();
     };
     const interval = window.setInterval(refresh, 15000);
     document.addEventListener('visibilitychange', refresh);
@@ -5666,7 +5685,7 @@ function AdminPortal({
       document.removeEventListener('visibilitychange', refresh);
       calendarRequest.current?.abort();
     };
-  }, [activeTab, calendarDate, calendarBranch, calendarTherapist]);
+  }, [activeTab, calendarDate, calendarBranch, calendarTherapist, calendarAutoRefresh]);
 
   const loadUnavailability = async () => {
     setIsLoadingUnavailability(true);
@@ -6116,7 +6135,7 @@ function AdminPortal({
                   : <><Database className="w-3.5 h-3.5" /> Refresh from database</>}
               </button>
               <button
-              onClick={onNavigateToBookingPortal}
+              onClick={() => openQuickBooking()}
               className="px-4 py-2 bg-emerald-800 text-white rounded-xl text-xs font-bold hover:bg-emerald-900 transition flex items-center"
               >
                 <Plus className="w-4 h-4 mr-1" /> {t.addBooking}
@@ -6193,33 +6212,78 @@ function AdminPortal({
         <div className="bg-white rounded-2xl p-6 border border-stone-200 shadow-sm space-y-4">
           <div className="flex flex-wrap items-end justify-between gap-3">
             <div>
-              <h2 className="text-lg font-bold text-stone-900">Live Google Calendar</h2>
-              <p className="text-xs text-stone-500">Google Calendar view and live appointment list.</p>
+              <h2 className="text-lg font-bold text-stone-900">Booking Calendar</h2>
+              <p className="text-xs text-stone-500">Live appointments and quick manual booking.</p>
             </div>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="relative"><span className="sr-only">Search appointments</span><Search className="absolute left-3 top-2.5 h-4 w-4 text-blue-600" /><input type="search" value={calendarSearch} onChange={(event) => setCalendarSearch(event.target.value)} placeholder="Search appointments" className="h-9 w-48 rounded-full border border-blue-200 pl-9 pr-3 text-xs" /></label>
+              <label><span className="sr-only">Calendar view</span><select value={calendarViewMode} onChange={(event) => setCalendarViewMode(event.target.value)} className="h-9 rounded-full border border-blue-200 bg-white px-4 text-xs text-blue-700"><option value="daily">Daily</option><option value="agenda">Agenda</option></select></label>
+              <button type="button" aria-label="Calendar filters" aria-expanded={calendarFiltersOpen} onClick={() => setCalendarFiltersOpen(!calendarFiltersOpen)} className="rounded-full border border-blue-200 p-2 text-blue-600"><Filter className="h-4 w-4" /></button>
+              <details className="relative">
+                <summary aria-label="Calendar settings" className="cursor-pointer list-none rounded-full border border-blue-200 p-2 text-blue-600"><Settings className="h-4 w-4" /></summary>
+                <div className="absolute right-0 z-20 mt-2 w-56 space-y-3 rounded-xl border border-stone-200 bg-white p-4 text-xs shadow-lg">
+                  <label className="flex items-center gap-2"><input type="checkbox" checked={calendarAutoRefresh} onChange={(event) => setCalendarAutoRefresh(event.target.checked)} />Auto-refresh every 15 seconds</label>
+                  <label className="flex items-center gap-2"><input type="checkbox" checked={calendarShowLegend} onChange={(event) => setCalendarShowLegend(event.target.checked)} />Show therapist legend</label>
+                </div>
+              </details>
+              <details className="relative">
+                <summary className="cursor-pointer list-none rounded-full border border-blue-200 px-4 py-2 text-xs font-semibold text-blue-600">Manage ▾</summary>
+                <div className="absolute right-0 z-20 mt-2 w-48 rounded-xl border border-stone-200 bg-white p-2 text-sm shadow-lg">
+                  <button type="button" onClick={() => setActiveTab('schedule')} className="w-full rounded-lg px-3 py-2 text-left hover:bg-blue-50">Appointments</button>
+                  {dashboardUser.role === 'owner' && <>
+                    <button type="button" onClick={() => setActiveTab('availability')} className="w-full rounded-lg px-3 py-2 text-left hover:bg-blue-50">Staff availability</button>
+                    <button type="button" onClick={() => setActiveTab('services')} className="w-full rounded-lg px-3 py-2 text-left hover:bg-blue-50">Services</button>
+                  </>}
+                </div>
+              </details>
+              <details className="relative">
+                <summary className="cursor-pointer list-none rounded-full bg-blue-600 px-5 py-2 text-xs font-bold text-white hover:bg-blue-700">Add ▾</summary>
+                <div className="absolute right-0 z-20 mt-2 w-56 rounded-xl border border-stone-200 bg-white p-2 text-sm shadow-lg">
+                  <button type="button" onClick={(event) => { event.currentTarget.closest('details').open = false; openQuickBooking(); }} className="w-full rounded-lg px-4 py-3 text-left hover:bg-blue-50">Quick Sale <span className="block text-[10px] text-stone-500">Quick appointment · no payment</span></button>
+                  <button type="button" onClick={(event) => { event.currentTarget.closest('details').open = false; openQuickBooking(); }} className="w-full border-t border-stone-100 px-4 py-3 text-left hover:bg-blue-50">Appointment</button>
+                  {dashboardUser.role === 'owner' && <>
+                    <button type="button" onClick={() => {
+                      setUnavailabilityForm((current) => ({
+                        ...current, scope: calendarTherapist === 'all' ? 'business' : 'therapist',
+                        therapistName: therapists.find((item) => String(item.id) === calendarTherapist)?.name || '',
+                        branchName: branches.find((item) => String(item.id) === calendarBranch)?.name || '',
+                        date: calendarDate,
+                      }));
+                      setActiveTab('availability');
+                    }} className="w-full px-4 py-3 text-left hover:bg-blue-50">Blocked staff time</button>
+                    <button type="button" onClick={() => { addServiceRow(); setActiveTab('services'); }} className="w-full border-t border-stone-100 px-4 py-3 text-left hover:bg-blue-50">Create New Service</button>
+                  </>}
+                </div>
+              </details>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-end gap-2 border-t-2 border-blue-600 pt-4">
               <label className="text-xs font-semibold text-stone-600">
                 Date
                 <input type="date" value={calendarDate} onChange={(event) => setCalendarDate(event.target.value)} className="block mt-1 p-2 rounded-lg border border-stone-300" />
               </label>
-              <label className="text-xs font-semibold text-stone-600">
+              {calendarFiltersOpen && <label className="text-xs font-semibold text-stone-600">
                 Branch
                 <select value={calendarBranch} onChange={(event) => setCalendarBranch(event.target.value)} className="block mt-1 p-2 rounded-lg border border-stone-300">
                   <option value="all">All branches</option>
                   {dashboardBranches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
                 </select>
-              </label>
-              <label className="text-xs font-semibold text-stone-600">
+              </label>}
+              {calendarFiltersOpen && <label className="text-xs font-semibold text-stone-600">
                 Therapist
                 <select value={calendarTherapist} onChange={(event) => setCalendarTherapist(event.target.value)} className="block mt-1 p-2 rounded-lg border border-stone-300">
                   <option value="all">All therapists</option>
                   {therapists.map((therapist) => <option key={therapist.id} value={therapist.id}>{therapist.name}</option>)}
                 </select>
-              </label>
+              </label>}
               <button onClick={loadCalendar} disabled={isLoadingCalendar} className="h-9 px-3 bg-emerald-800 text-white rounded-lg text-xs font-bold disabled:opacity-50">
                 {isLoadingCalendar ? 'Loading...' : 'Refresh'}
               </button>
-            </div>
+              {!calendarFiltersOpen && (calendarBranch !== 'all' || calendarTherapist !== 'all') && <button type="button" onClick={() => setCalendarFiltersOpen(true)} className="h-9 rounded-lg border border-blue-200 px-3 text-xs text-blue-700">
+                Filters: {branches.find((item) => String(item.id) === calendarBranch)?.name || 'All branches'} · {therapists.find((item) => String(item.id) === calendarTherapist)?.name || 'All therapists'}
+              </button>}
           </div>
+          {quickBookingNotice && <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">{quickBookingNotice}</p>}
           {calendarLoadError && <div className="p-3 bg-red-50 border border-red-200 text-red-800 rounded-xl text-xs">{calendarLoadError}</div>}
           <WixCalendarSync onSynced={async () => {
             await Promise.all([loadCalendar(), loadBookingsFromBackend()]);
@@ -6246,7 +6310,7 @@ function AdminPortal({
               Open the primary Google Calendar
             </a>
           )}
-          <div className="rounded-xl overflow-hidden border border-stone-200 bg-white">
+          {calendarViewMode === 'daily' && <div className="rounded-xl overflow-hidden border border-stone-200 bg-white">
             <div className="flex items-center justify-between px-4 py-3 bg-stone-50 border-b border-stone-200">
               <div>
                 <p className="font-bold text-stone-900">{new Date(`${calendarDate}T12:00:00`).toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</p>
@@ -6257,12 +6321,13 @@ function AdminPortal({
             <div className="max-h-[620px] overflow-y-auto">
               {Array.from({ length: 12 }, (_, index) => index + 8).map((hour) => {
                 const hourLabel = new Date(2000, 0, 1, hour).toLocaleTimeString([], { hour: 'numeric' });
-                const hourEvents = calendarEvents.filter((event) => Number(event.localTime?.split(':')[0]) === hour);
+                const hourEvents = visibleCalendarEvents.filter((event) => Number(event.localTime?.split(':')[0]) === hour);
                 const hourBlocks = calendarUnavailability.filter((block) => Number(block.startTime?.split(':')[0]) <= hour && Number(block.endTime?.split(':')[0]) > hour);
                 return (
                   <div key={hour} className="grid grid-cols-[72px_1fr] min-h-[58px] border-b border-stone-100">
                     <div className="p-2 text-[11px] text-stone-400 text-right border-r border-stone-100">{hourLabel}</div>
                     <div className="p-1.5 space-y-1">
+                      {hour >= 10 && <button type="button" onClick={() => openQuickBooking(AVAILABLE_TIMES[(hour - 10) * 4])} aria-label={`Add appointment at ${hourLabel}`} className="rounded-lg px-2 py-1 text-[11px] font-semibold text-blue-600 hover:bg-blue-50">+ Book {hourLabel}</button>}
                       {hourBlocks.map((block) => (
                         <div key={`block-${block.id}`} className="flex items-center gap-1.5 rounded-lg border-l-4 border-stone-400 bg-stone-100 px-3 py-2 text-xs text-stone-600">
                           <CalendarX className="w-3.5 h-3.5 shrink-0" />
@@ -6284,11 +6349,11 @@ function AdminPortal({
                 );
               })}
             </div>
-          </div>
+          </div>}
           <p className="text-xs text-stone-500">
-            Updates automatically every 15 seconds while this tab is visible. This live visual uses the same Google Calendar events and the same date, branch, and therapist filters as the appointment list below.
+            {calendarAutoRefresh ? 'Updates automatically every 15 seconds while this tab is visible.' : 'Auto-refresh is paused. Use Refresh to load current appointments.'} The daily view and appointment list use the same search, date, branch, and therapist filters.
           </p>
-          <div className="flex flex-wrap gap-3 items-center rounded-xl bg-stone-50 border border-stone-200 px-3 py-2">
+          {calendarShowLegend && <div className="flex flex-wrap gap-3 items-center rounded-xl bg-stone-50 border border-stone-200 px-3 py-2">
             <span className="text-xs font-bold text-stone-700">Therapists:</span>
             {(calendarTherapist === 'all' ? therapists : therapists.filter((therapist) => String(therapist.id) === calendarTherapist)).map((therapist) => {
               const color = getTherapistCalendarColor(therapist.name, therapists);
@@ -6305,12 +6370,12 @@ function AdminPortal({
                 Any Available
               </span>
             )}
-          </div>
-          {calendarEvents.length === 0 && !isLoadingCalendar ? (
-            <p className="py-8 text-center text-sm text-stone-500">No appointments found for the selected date, branch and therapist. Sync covers all imported dates; select an appointment date or choose All branches and All therapists.</p>
+          </div>}
+          {visibleCalendarEvents.length === 0 && !isLoadingCalendar ? (
+            <p className="py-8 text-center text-sm text-stone-500">No appointments match this date, search, branch and therapist. Adjust your filters or add an appointment.</p>
           ) : (
             <div className="space-y-3">
-              {calendarEvents.map((event) => (
+              {visibleCalendarEvents.map((event) => (
                 <div key={event.id} className={`p-4 rounded-xl border border-stone-200 ${getTherapistCalendarColor(event.therapistName, therapists).event}`}>
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <button type="button" onClick={() => { setSelectedCalendarEvent(event); setIssuedReceipt(null); setReceiptError(''); setReceiptNotice(''); }} className="min-w-0 text-left">
@@ -6332,6 +6397,26 @@ function AdminPortal({
           )}
         </div>
       )}
+
+      {quickBooking && <QuickBooking
+        {...quickBooking}
+        branches={dashboardBranches}
+        services={services}
+        therapists={therapists}
+        times={AVAILABLE_TIMES}
+        isScheduled={isTherapistScheduledAtBranch}
+        onClose={() => setQuickBooking(null)}
+        onSaved={async ({ date, branchId, therapistId, notice }) => {
+          setQuickBooking(null);
+          setQuickBookingNotice(notice);
+          setActiveTab('calendar');
+          setCalendarDate(date);
+          setCalendarBranch(branchId);
+          setCalendarTherapist(therapistId);
+          if (activeTab === 'calendar' && date === calendarDate && branchId === calendarBranch && therapistId === calendarTherapist) await loadCalendar();
+          await loadBookingsFromBackend();
+        }}
+      />}
 
       {/* TAB CONTENT: SERVICES CATALOGUE MANAGER */}
       {activeTab === 'services' && (

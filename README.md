@@ -74,6 +74,33 @@ Google Sheets API and Google Calendar API in the Google Cloud project. The
 service account creates calendars named `<Therapist> - MY THAI THAI` and shares
 the primary calendar with `GOOGLE_PRIMARY_CALENDAR_ID`.
 
+## Staff calendar and quick booking
+
+The dashboard **Booking Calendar** includes appointment search, Daily/Agenda
+views, branch and therapist filters, display/auto-refresh settings, and
+**Manage** and **Add** menus. **Add > Quick Sale** and **Add > Appointment**
+both open a quick appointment form; Quick Sale does not collect a payment.
+The schedule's **Add Booking** button and the daily calendar's **Book** buttons
+use the same form.
+
+Staff enter a client name and **either an email address or a phone number**,
+then select a therapist and time. Date and branch default from the calendar;
+staff can adjust them and select the service. Couple services require two
+different therapists. The server checks the active catalogue, therapist
+qualifications/branch schedule, existing appointments, and availability blocks.
+Receptionists and managers can book only within their assigned branches.
+
+These appointments save to BigQuery and Google Calendar as **unpaid / pay at
+clinic**, without checkout, marketing enrollment, or a medical-history form.
+Medical history must still be completed before treatment. Email contacts receive
+the normal confirmation/reminder; phone-only bookings skip email delivery.
+The calendar displays the saved appointment and reports confirmation failures
+without asking staff to book again.
+
+Owners can also use **Add > Blocked staff time** and **Add > Create New Service**
+to open the existing availability and service managers with calendar defaults.
+These actions remain owner-only. The public booking workflow is unchanged.
+
 ## Booking records in BigQuery
 
 Booking records (customer name, service, therapist, date/time, payment,
