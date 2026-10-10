@@ -105,7 +105,8 @@ that finish after midnight.
 
 ### Optional receipt discount
 
-Owners can enter **Manual discount ($) — optional** before issuing a receipt.
+Owners, branch managers, and receptionists can enter **Manual discount ($) —
+optional** before issuing a receipt for bookings within their authorized branches.
 Leave it blank for no discount. The dollar amount is subtracted after membership
 and loyalty discounts and before HST; tax-exempt services remain exempt.
 Discounts must be non-negative, have at most two decimal places, and not exceed
@@ -715,12 +716,26 @@ passwords should be shared through a separate secure channel.
 - **Owner:** full dashboard access and staff-account administration.
 - **Branch manager:** appointments and sales reporting for assigned branches;
   no patient medical-history or business-administration access.
-- **Branch receptionist:** assigned-branch appointments and booking creation;
-  no revenue/payment amounts, sales reports, patient records, or settings.
+- **Branch receptionist:** assigned-branch appointments, booking creation/editing,
+  payment details, and receipt discounts with confirmed reconciliation;
+  no sales reports, patient medical records, or settings.
 
 Branch restrictions and protected actions are enforced by the API as well as
 the dashboard UI. Public customer booking submissions remain available without
 a dashboard session.
+
+**Schedule & Bookings** and calendar appointment details include **Edit booking**
+for all three dashboard roles. Staff can change client/contact details, shared
+notes, service, therapist(s), date/time and recorded payment details without
+changing the branch. Review the total and amount paid when changing a service;
+this records externally handled payments and does not charge or refund Square.
+Issued receipts, prepaid packages and membership-linked records protect customer,
+service, schedule and payment details; shared notes and eligible therapist
+assignments remain editable. Edits check availability and use a booking version
+to reject stale changes. Completed, cancelled and no-show appointments cannot
+be rescheduled. Linked Calendar events update alongside the database;
+if the database write fails, the API restores Calendar or explicitly reports
+that staff reconciliation is required. Internal notes are never added to Calendar.
 
 The owner dashboard's **Google Ads** section provides read-only campaign
 reporting for a selected date range, with campaign search, status filters, and

@@ -5,6 +5,7 @@ import { createWixContactStore, prepareWixContacts } from '../lib/wix-contacts.j
 import { applyWixCataloguePrices, applyWixTherapistMappings, importWixBookings, prepareWixBookings } from '../lib/wix-bookings.js';
 import { BOOKING_TABLE_FIELDS } from '../lib/booking-schema.js';
 import { validateBookingNote } from '../lib/booking-note.js';
+import { bookingEditVersion, staffBooking, validateBookingEdit, zonedBookingInstant } from '../lib/booking-edit.js';
 import { createPackageStore, historicalPackageVisit, readPackageUsage, packageReceiptDetails } from '../lib/packages.js';
 import { createBookingHistoryStore } from '../lib/booking-history.js';
 import { syncWixCalendarBatch } from '../lib/wix-calendar.js';
@@ -314,7 +315,7 @@ async function bqAppendBookingRows(bigquery, rowArrays) {
 
 // fields uses the same camelCase property names as the row-array mapping
 // (e.g. { paidAmount: 50 }, { status: 'Cancelled', statusNotes: '...' }).
-async function bqUpdateBookingFields(bigquery, bookingId, fields, receiptSnapshot = null) {
+async function bqUpdateBookingFields(bigquery, bookingId, fields, receiptSnapshot = null, expectedRow = null) {
   await ensureBookingsTable(bigquery);
   const entries = Object.entries(fields).map(([prop, value]) => {
     const field = BOOKING_TABLE_FIELDS.find((candidate) => candidate.prop === prop);
@@ -329,6 +330,20 @@ async function bqUpdateBookingFields(bigquery, bookingId, fields, receiptSnapsho
     else if (field.type === 'INT64') params[`set_${field.name}`] = value === '' || value === null || value === undefined ? 0 : Math.trunc(Number(value) || 0);
     else params[`set_${field.name}`] = value === null || value === undefined ? '' : String(value);
   });
+  if (expectedRow) {
+    const conditions = BOOKING_TABLE_FIELDS.map((field, index) => {
+      params[`expected_${field.name}`] = field.type === 'STRING' ? String(expectedRow[index] || '') : Number(expectedRow[index]) || 0;
+      return `COALESCE(${field.name}, ${field.type === 'STRING' ? "''" : '0'}) = @expected_${field.name}`;
+    });
+    await bigquery.query({
+      query: `BEGIN TRANSACTION;
+        ASSERT (SELECT COUNT(*) FROM ${bookingsTableRef()} WHERE booking_id = @where_booking_id AND ${conditions.join(' AND ')}) = 1 AS 'Booking changed during editing; refresh and retry';
+        UPDATE ${bookingsTableRef()} SET ${setClauses.join(', ')} WHERE booking_id = @where_booking_id;
+        COMMIT TRANSACTION;`,
+      params,
+    });
+    return;
+  }
   if (receiptSnapshot) {
     Object.assign(params, {
       expected_notes: String(receiptSnapshot.notes || ''),
@@ -4414,11 +4429,11 @@ export default async function handler(req, res) {
     const ownerOnlyRequest =
       ['wix-contacts', 'wix-contacts-import', 'wix-bookings-import', ...packageViews, ...historyViews, ...wixCalendarViews].includes(view) ||
       (req.method === 'GET' && ['patient-history', 'appointment-notes', 'business-profile', 'google-ads-report', 'loyalty-dashboard', 'google-reviews', 'unavailability', 'campaign-log', 'campaign-audience-options', 'review-request-audience', 'therapist-accounts', 'dashboard-users'].includes(view)) ||
-      ['business-profile', 'dashboard-user', 'dashboard-user-status', 'therapist-account-status', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-clear-ledger', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-link', 'unavailability-delete', 'review-request-send', 'reassign-therapist'].includes(view) ||
+      ['business-profile', 'dashboard-user', 'dashboard-user-status', 'therapist-account-status', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-clear-ledger', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-link', 'unavailability-delete', 'review-request-send', 'reassign-therapist'].includes(view) ||
       (req.method === 'POST' && ['branches', 'services', 'therapists', 'unavailability'].includes(view));
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
     const dashboardSession = await getOwnerSession(req);
-    if (view === 'manual-booking') {
+    if (['manual-booking', 'edit-booking', 'issue-receipt', 'mark-paid'].includes(view)) {
       res.setHeader('Cache-Control', 'no-store');
       if (!dashboardSession) return res.status(401).json({ message: 'Dashboard sign-in required' });
       if (!isSameOriginRequest(req)) return res.status(403).json({ message: 'Request origin is not allowed' });
@@ -4431,17 +4446,17 @@ export default async function handler(req, res) {
     }
     if (
       dashboardSession?.role === 'branch_receptionist'
-      && ['reports', 'patient-history', 'appointment-notes', 'mark-paid', 'appointment-note', 'issue-receipt'].includes(view)
+      && ['reports', 'patient-history', 'appointment-notes', 'appointment-note'].includes(view)
     ) {
       return res.status(403).json({ message: 'This dashboard role does not have access to that information or action.' });
     }
     if (
       dashboardSession?.role === 'branch_manager'
-      && ['patient-history', 'issue-receipt'].includes(view)
+      && ['patient-history'].includes(view)
     ) {
       return res.status(403).json({ message: 'This dashboard role does not have access to that information or action.' });
     }
-    if (view === 'mark-paid' && dashboardSession?.role !== 'owner' && dashboardSession?.role !== 'branch_manager') {
+    if (view === 'mark-paid' && !['owner', 'branch_manager', 'branch_receptionist'].includes(dashboardSession?.role)) {
       return res.status(dashboardSession ? 403 : 401).json({ message: 'A branch manager or owner sign-in is required for this action.' });
     }
 
@@ -6951,7 +6966,7 @@ export default async function handler(req, res) {
               const eventTherapist = bookingRow?.[6] || parsedDescription.therapistName || getTherapistFromDescription(event.description);
               if (
                 localStart.date === date &&
-                (!allowedBranchNames || allowedBranchNames.has(String(booking.branchName || location).trim().toLowerCase())) &&
+                (!allowedBranchNames || allowedBranchNames.has(String(bookingRow?.[4] || location).trim().toLowerCase())) &&
                 ((!branch && !branchName) || matchesBranchName(bookingRow?.[4]) || matchesBranchName(location) ||
                   (branch && [location, bookingRow?.[13]].some((address) => String(address || '').toLowerCase().includes(branch)))) &&
                 (!therapist || eventTherapist.toLowerCase() === therapist)
@@ -6976,6 +6991,7 @@ export default async function handler(req, res) {
                   bookingNote: bookingRow[28] || '',
                   status: bookingRow[24] || '',
                   statusNotes: bookingRow[25] || '',
+                  paymentLocked: staffBooking(bookingRow).paymentLocked,
                 } : null;
 
                 if (!booking) {
@@ -7031,12 +7047,11 @@ export default async function handler(req, res) {
                     status: '',
                     statusNotes: '',
                     autoLinked: true,
+                    editVersion: bookingEditVersion(autoRow),
                   };
                 }
 
-                const calendarBooking = dashboardSession?.role === 'branch_receptionist'
-                  ? { ...booking, paymentOption: '', paidAmount: 0, total: 0, receiptNumber: '', receiptEmailStatus: '', receiptManualDiscount: 0 }
-                  : booking;
+                const calendarBooking = { ...booking, editVersion: bookingRow ? bookingEditVersion(bookingRow) : booking.editVersion };
                 events.push({
                   id: event.id,
                   calendarId,
@@ -7106,18 +7121,25 @@ export default async function handler(req, res) {
           therapistName: row[6] || '',
           date: row[7] || '',
           time: row[8] || '',
-          paymentOption: dashboardSession?.role === 'branch_receptionist' ? '' : row[9] || '',
-          paidAmount: dashboardSession?.role === 'branch_receptionist' ? 0 : Number(row[10]) || 0,
-          total: dashboardSession?.role === 'branch_receptionist' ? 0 : Number(row[11]) || 0,
+          paymentOption: row[9] || '',
+          paidAmount: Number(row[10]) || 0,
+          total: Number(row[11]) || 0,
           durationMinutes: Number(row[12]) || 0,
           branchAddress: row[13] || '',
-          intakeNotes: row[14] || '',
+          timeRange: row[7] && row[8] ? getCalendarTimeRange(
+            zonedBookingInstant(parseBookingDateTime(row[7], row[8]), CALENDAR_TIME_ZONE),
+            zonedBookingInstant(addMinutes(parseBookingDateTime(row[7], row[8]), Number(row[12]) || 60), CALENDAR_TIME_ZONE),
+          ) : '',
+          ...(dashboardSession.role === 'owner' ? { intakeNotes: row[14] || '' } : {}),
+          paymentLocked: staffBooking(row).paymentLocked,
           calendarId: row[15] || '',
           calendarEventId: row[16] || '',
           createdAt: row[17] || '',
-          receiptNumber: dashboardSession?.role === 'branch_receptionist' ? '' : row[18] || '',
-          receiptIssuedAt: dashboardSession?.role === 'branch_receptionist' ? '' : row[19] || '',
-          receiptEmailStatus: dashboardSession?.role === 'branch_receptionist' ? '' : row[20] || '',
+          receiptNumber: row[18] || '',
+          receiptIssuedAt: row[19] || '',
+          receiptEmailStatus: row[20] || '',
+          receiptManualDiscount: Number(row[26]) || 0,
+          editVersion: bookingEditVersion(row),
           status: row[24] || '',
           statusNotes: row[25] || '',
           isCouple: /couple/i.test(row[5] || ''),
@@ -7125,6 +7147,165 @@ export default async function handler(req, res) {
           bookingNote: row[28] || '',
         })),
       });
+    }
+
+    if (req.method === 'POST' && view === 'edit-booking') {
+      const bookingId = String(req.body?.bookingId || '').trim();
+      if (!bookingId || bookingId.length > 100) return res.status(400).json({ message: 'A valid booking ID is required.' });
+      const bigquery = getBigQueryClient();
+      const result = await bqFetchBookingRows(bigquery);
+      const row = (result.data.values || []).find((candidate) => candidate[0] === bookingId && candidate[0] !== 'Booking ID');
+      if (!row) return res.status(404).json({ message: 'Booking was not found.' });
+      const allowedBranches = await getDashboardBranchNames(sheets, dashboardSession);
+      if (allowedBranches && !allowedBranches.has(String(row[4] || '').trim().toLowerCase())) {
+        return res.status(403).json({ message: 'This booking is outside your assigned branch access.' });
+      }
+      if (req.body?.expectedVersion !== bookingEditVersion(row)) {
+        return res.status(409).json({ message: 'This booking changed. Refresh the booking before editing.' });
+      }
+      const locked = staffBooking(row).paymentLocked;
+      const edited = validateBookingEdit(req.body, locked ? row : null);
+      const [branches, services, therapists] = await Promise.all([getBranches(sheets), getServices(sheets), getTherapists(sheets)]);
+      const branch = branches.find((item) => item.name === row[4] || item.address === row[4]);
+      if (!branch) return res.status(409).json({ message: 'Match this booking to a configured branch before editing.' });
+      const service = services.find((item) => String(item.id) === String(req.body.serviceId)) ||
+        (req.body.serviceId === '__existing__' ? { name: row[5], duration: Number(row[12]), active: true } : null);
+      const serviceChanged = service?.name !== row[5];
+      const therapistNames = Array.isArray(req.body.therapistNames) ? req.body.therapistNames : [];
+      if (!service || (serviceChanged && service.active === false) || !Number.isFinite(service.duration) || service.duration <= 0) {
+        return res.status(400).json({ message: 'Choose an active service with a valid duration.' });
+      }
+      const couple = /couple/i.test(service.name);
+      const preservingTherapist = therapistNames.join(', ') === row[6];
+      if ((!preservingTherapist && therapistNames.length !== (couple ? 2 : 1)) || new Set(therapistNames).size !== therapistNames.length ||
+          therapistNames.some((name) => typeof name !== 'string' || name.length > 150)) {
+        return res.status(400).json({ message: 'Choose a scheduled, qualified therapist (two different therapists for a couple session).' });
+      }
+      const therapistName = therapistNames.join(', ');
+      const schedulingChanged = serviceChanged || edited.date !== row[7] || edited.time !== row[8] || therapistName !== row[6];
+      if (['Completed', 'Cancelled', 'No Show'].includes(row[24]) && schedulingChanged) {
+        return res.status(409).json({ message: 'Completed, cancelled or no-show bookings cannot be rescheduled.' });
+      }
+      if (locked && serviceChanged) {
+        return res.status(409).json({ message: 'Issued receipts, prepaid packages and membership records lock customer, service, schedule and payment details. You can still edit the shared note and therapist.' });
+      }
+      const durationMinutes = serviceChanged ? service.duration : Number(row[12]) || service.duration;
+      const startDateTime = parseBookingDateTime(edited.date, edited.time);
+      const endDateTime = addMinutes(startDateTime, durationMinutes);
+      const startInstant = zonedBookingInstant(startDateTime, CALENDAR_TIME_ZONE);
+      const endInstant = zonedBookingInstant(endDateTime, CALENDAR_TIME_ZONE);
+      const calendarId = row[15] || PRIMARY_CALENDAR_ID;
+      const eventId = row[16] || '';
+      if (schedulingChanged) {
+        if (req.body.serviceId === '__existing__' || service.active === false || branch.active === false) return res.status(400).json({ message: 'Choose an active service with a valid duration.' });
+        if (therapistNames.some((name) => !therapists.some((item) => item.name === name && item.active !== false &&
+            isTherapistScheduledAtBranch(item, branch.id, edited.date) && (!service.isRmt || item.rmtCertified)))) {
+          return res.status(400).json({ message: 'Choose a scheduled, qualified therapist (two different therapists for a couple session).' });
+        }
+        const blocks = await getUnavailabilityBlocks(sheets);
+        const blocked = blocks.some((block) => {
+          if (block.date !== edited.date) return false;
+          const blockStart = zonedBookingInstant(`${block.date}T${block.startTime}:00`, CALENDAR_TIME_ZONE);
+          const blockEnd = zonedBookingInstant(`${block.date}T${block.endTime}:00`, CALENDAR_TIME_ZONE);
+          return hasTimeOverlap(startInstant, endInstant, blockStart, blockEnd) &&
+            ((block.scope === 'business' && (!block.branchName || block.branchName === branch.name)) ||
+              (block.scope === 'therapist' && therapistNames.includes(block.therapistName)));
+        });
+        if (blocked) return res.status(409).json({ message: 'This time is unavailable. Choose another date, time or therapist.' });
+        const dayEvents = [];
+        for (const checkedCalendarId of new Set([calendarId, PRIMARY_CALENDAR_ID, ...(result.data.values || []).map((candidate) => candidate[15]).filter(Boolean)])) {
+          let pageToken;
+          do {
+            const page = await calendarApi.events.list({
+              calendarId: checkedCalendarId, timeMin: zonedBookingInstant(`${edited.date}T00:00:00`, CALENDAR_TIME_ZONE),
+              timeMax: zonedBookingInstant(`${shiftDate(edited.date, 1)}T00:00:00`, CALENDAR_TIME_ZONE), singleEvents: true, maxResults: 2500, pageToken,
+            });
+            dayEvents.push(...(page.data.items || []).filter((event) => !(checkedCalendarId === calendarId && event.id === eventId)));
+            pageToken = page.data.nextPageToken;
+          } while (pageToken);
+        }
+        const conflict = dayEvents.some((event) => event.status !== 'cancelled' &&
+          hasTimeOverlap(startInstant, endInstant, event.start?.dateTime || event.start?.date, event.end?.dateTime || event.end?.date) &&
+          therapistNames.some((name) => {
+            const assigned = getTherapistFromDescription(event.description);
+            return assigned === name || assigned.split(',').map((item) => item.trim()).includes(name);
+          }));
+        const databaseConflict = (result.data.values || []).some((candidate) => candidate[0] !== bookingId && candidate[7] === edited.date &&
+          !['Cancelled', 'No Show'].includes(candidate[24]) && therapistNames.some((name) => candidate[6] === name ||
+            String(candidate[6] || '').split(',').map((item) => item.trim()).includes(name)) &&
+          hasTimeOverlap(startInstant, endInstant, zonedBookingInstant(parseBookingDateTime(candidate[7], candidate[8]), CALENDAR_TIME_ZONE),
+            zonedBookingInstant(addMinutes(parseBookingDateTime(candidate[7], candidate[8]), Number(candidate[12]) || 60), CALENDAR_TIME_ZONE)));
+        if (conflict || databaseConflict) return res.status(409).json({ message: 'The selected therapist already has an appointment at this time.' });
+      }
+      const fields = {
+        ...edited, serviceName: service.name, therapistName, durationMinutes,
+        statusNotes: `${row[25] || ''}${row[25] ? '\n' : ''}Booking edited by ${dashboardSession.email} at ${new Date().toISOString()}.`,
+      };
+      const updatedRow = [...row];
+      for (const [prop, value] of Object.entries(fields)) updatedRow[BOOKING_TABLE_FIELDS.findIndex((field) => field.prop === prop)] = value;
+      let originalEvent;
+      let patchedEvent;
+      if (eventId) {
+        originalEvent = (await calendarApi.events.get({ calendarId, eventId })).data;
+        const description = String(originalEvent.description || '');
+        let nextDescription = description;
+        for (const [label, value] of Object.entries({
+          Customer: edited.customerName, Email: edited.email, Phone: edited.phone,
+          Therapist: therapistName, Service: service.name, Payment: edited.paymentOption,
+          Paid: edited.paidAmount, Total: edited.total,
+        })) {
+          const matcher = new RegExp(`^${label}:.*$`, 'm');
+          const line = `${label}: ${String(value).replace(/[\r\n]/g, ' ')}`;
+          nextDescription = matcher.test(nextDescription) ? nextDescription.replace(matcher, () => line) : `${nextDescription}\n${line}`;
+        }
+        try {
+          patchedEvent = (await calendarApi.events.patch({ calendarId, eventId, requestBody: {
+            summary: `${service.name} - ${edited.customerName}`, description: nextDescription,
+            ...(schedulingChanged ? { start: { dateTime: startDateTime, timeZone: CALENDAR_TIME_ZONE }, end: { dateTime: endDateTime, timeZone: CALENDAR_TIME_ZONE } } : {}),
+          } }, { headers: originalEvent.etag ? { 'If-Match': originalEvent.etag } : {} })).data;
+        } catch (error) {
+          console.error('Booking edit calendar update failed:', error);
+          const conflict = Number(error.code || error.response?.status) === 412;
+          return res.status(conflict ? 409 : 500).json({
+            message: conflict ? 'The calendar appointment changed. Refresh before editing.' :
+              'The calendar update could not be verified. No database edit was attempted. Check and reconcile the calendar before retrying.',
+            calendarRecoveryRequired: !conflict,
+          });
+        }
+      }
+      try {
+        await bqUpdateBookingFields(bigquery, bookingId, fields, null, row);
+      } catch (error) {
+        console.error('Booking edit database update failed:', error);
+        let persistedRow;
+        try {
+          persistedRow = (await bqFetchBookingRows(bigquery)).data.values?.find((candidate) => candidate[0] === bookingId);
+        } catch (verificationError) {
+          console.error('Booking edit database verification failed:', verificationError);
+          return res.status(500).json({ message: 'The booking update could not be verified. Staff must reconcile the database and calendar before retrying.', calendarRecoveryRequired: Boolean(originalEvent) });
+        }
+        if (persistedRow && bookingEditVersion(persistedRow) === bookingEditVersion(updatedRow)) {
+          return res.status(200).json({ booking: staffBooking(persistedRow), calendarUpdated: Boolean(eventId) });
+        }
+        if (!persistedRow || bookingEditVersion(persistedRow) !== bookingEditVersion(row)) {
+          return res.status(409).json({ message: 'The booking changed during saving. Staff must reconcile the database and calendar before retrying.', calendarRecoveryRequired: Boolean(originalEvent) });
+        }
+        if (originalEvent) {
+          try {
+            await calendarApi.events.patch({ calendarId, eventId, requestBody: {
+              summary: originalEvent.summary || '', description: originalEvent.description || '',
+              start: originalEvent.start, end: originalEvent.end,
+            } }, { headers: patchedEvent?.etag ? { 'If-Match': patchedEvent.etag } : {} });
+          } catch (rollbackError) {
+            console.error('Booking edit calendar recovery failed:', rollbackError);
+            return res.status(500).json({ message: 'The database update failed and Calendar could not be restored. Staff must reconcile this appointment before retrying.', calendarRecoveryRequired: true });
+          }
+        }
+        return res.status(/Booking changed during editing/.test(error.message || '') ? 409 : 500).json({
+          message: 'The booking could not be saved. Refresh the booking before retrying.',
+        });
+      }
+      return res.status(200).json({ booking: staffBooking(updatedRow), calendarUpdated: Boolean(eventId) });
     }
 
     if (req.method === 'POST' && req.query?.view === 'complete-booking-details') {
@@ -7398,7 +7579,7 @@ export default async function handler(req, res) {
       if (rowIndex < 0) return res.status(404).json({ message: 'Booking was not found' });
 
       const row = rows[rowIndex];
-      if (dashboardSession?.role === 'branch_manager') {
+      if (dashboardSession?.role !== 'owner') {
         const allowedBranches = await getDashboardBranchNames(sheets, dashboardSession);
         if (!allowedBranches?.has(String(row[4] || '').trim().toLowerCase())) {
           return res.status(403).json({ message: 'This booking is outside your assigned branch access.' });
@@ -7439,6 +7620,10 @@ export default async function handler(req, res) {
       if (rowIndex < 0) return res.status(404).json({ message: 'Booking was not found' });
 
       const row = rows[rowIndex];
+      const allowedBranches = await getDashboardBranchNames(sheets, dashboardSession);
+      if (allowedBranches && !allowedBranches.has(String(row[4] || '').trim().toLowerCase())) {
+        return res.status(403).json({ message: 'This booking is outside your assigned branch access.' });
+      }
       const discountInput = req.body?.manualDiscount;
       const hasDiscountInput = discountInput !== undefined;
       const discountText = discountInput === '' ? '0' : String(discountInput ?? '');

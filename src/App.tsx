@@ -17,6 +17,7 @@ import PackageTracking from './PackageTracking';
 import ClearBookingHistory from './ClearBookingHistory';
 import WixCalendarSync from './WixCalendarSync';
 import QuickBooking from './QuickBooking';
+import EditBooking from './EditBooking';
 import BookingNote from './BookingNote';
 import { LanguageProvider, createTranslator, message, useTranslation } from './localization';
 import { AVAILABLE_TIMES, BOOKING_DEPOSIT_AMOUNT, branchPaymentOptions, bookingCategories } from '../lib/booking-options.js';
@@ -4400,6 +4401,8 @@ function AdminPortal({
   const [calendarAutoRefresh, setCalendarAutoRefresh] = useState(true);
   const [calendarShowLegend, setCalendarShowLegend] = useState(true);
   const [quickBooking, setQuickBooking] = useState(null);
+  const [editingBooking, setEditingBooking] = useState(null);
+  const [bookingEditNotice, setBookingEditNotice] = useState('');
   const [quickBookingNotice, setQuickBookingNotice] = useState('');
   const calendarRequest = useRef<AbortController | null>(null);
   const [unavailabilityBlocks, setUnavailabilityBlocks] = useState([]);
@@ -5066,8 +5069,10 @@ function AdminPortal({
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
       setBookings(data.bookings || []);
+      return true;
     } catch (error) {
       setBookingLoadError(error.message || 'Unable to load bookings from the database');
+      return false;
     } finally {
       setIsLoadingBookings(false);
     }
@@ -5075,6 +5080,20 @@ function AdminPortal({
 
   const [deletingBookingId, setDeletingBookingId] = useState('');
   const [deleteBookingError, setDeleteBookingError] = useState('');
+  const openBookingEditor = async (booking) => {
+    try {
+      const response = await fetch('/api/booking', { cache: 'no-store' });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Unable to load bookings from the database');
+      const freshBooking = data.bookings?.find((item) => item.id === booking.id);
+      if (!freshBooking) throw new Error('Booking was not found.');
+      setEditingBooking(freshBooking);
+      setBookingEditNotice('');
+    } catch (error) {
+      setBookingLoadError(error.message);
+      setReceiptError(error.message);
+    }
+  };
 
   // Daily therapist hours / branch audit PDF reports — generated client-side from
   // already-loaded booking data (no extra API round trip needed).
@@ -5313,7 +5332,7 @@ function AdminPortal({
   useEffect(() => {
     setNewAppointmentNote('');
     setAppointmentNotesError('');
-    loadAppointmentNotes(selectedCalendarEvent?.booking?.id);
+    if (dashboardUser.role === 'owner') loadAppointmentNotes(selectedCalendarEvent?.booking?.id);
   }, [selectedCalendarEvent?.booking?.id]);
 
   const addAppointmentNote = async () => {
@@ -5660,8 +5679,10 @@ function AdminPortal({
       setCalendarUrl(data.calendarUrl || '');
       setCalendarWarnings(data.errors || []);
       setCalendarUnavailability(data.unavailability || []);
+      return true;
     } catch (error) {
       if (!controller.signal.aborted) setCalendarLoadError(error.message || 'Unable to load Google Calendar events');
+      return false;
     } finally {
       if (calendarRequest.current === controller) {
         calendarRequest.current = null;
@@ -5988,6 +6009,7 @@ function AdminPortal({
         </div>
 
         <main className="mx-auto max-w-[1600px] space-y-6 p-4 sm:p-6 xl:p-8">
+      {bookingEditNotice && <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">{tr(bookingEditNotice)}</p>}
       <section className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-slate-950 via-emerald-950 to-emerald-800 px-5 py-6 text-white shadow-xl shadow-emerald-950/10 sm:px-8 sm:py-8">
         <div aria-hidden="true" className="absolute -right-16 -top-28 h-72 w-72 rounded-full border border-white/10" />
         <div aria-hidden="true" className="absolute -right-2 -top-14 h-48 w-48 rounded-full border border-white/10" />
@@ -6168,8 +6190,8 @@ function AdminPortal({
                   <th className="p-3">{tr("Therapist")}</th>
                   <th className="p-3">{tr("Time")}</th>
                   <th className="p-3"><span className="inline-flex items-center gap-1.5"><Database className="w-3.5 h-3.5" /> {tr("Database")}</span></th>
-                  {!isBranchReceptionist && <th className="p-3">{tr("Total")}</th>}
-                  {dashboardUser.role === 'owner' && <th className="p-3">{tr("Actions")}</th>}
+                  <th className="p-3">{tr("Total")}</th>
+                  <th className="p-3">{tr("Actions")}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-stone-100">
@@ -6192,16 +6214,21 @@ function AdminPortal({
                         <span className="bg-stone-100 text-stone-600 font-bold px-2 py-1 rounded-md text-[10px]">{tr("Local Only")}</span>
                       )}
                     </td>
-                    {!isBranchReceptionist && <td className="p-3 font-bold text-stone-900">${b.total.toFixed(2)}</td>}
-                    {dashboardUser.role === 'owner' && <td className="p-3">
-                      <button
+                    <td className="p-3 font-bold text-stone-900">${b.total.toFixed(2)}</td>
+                    <td className="p-3">
+                      <button type="button" onClick={() => openBookingEditor(b)} className="mr-2 rounded-lg border border-emerald-300 px-2 py-1 text-[11px] font-bold text-emerald-900">{tr("Edit booking")}</button>
+                      <button type="button" onClick={() => {
+                        setIssuedReceipt(null); setReceiptError(''); setReceiptNotice('');
+                        setSelectedCalendarEvent({ id: b.calendarEventId || b.id, booking: b, localTime: b.time, timeRange: b.timeRange });
+                      }} className="mr-2 rounded-lg border px-2 py-1 text-[11px] font-bold">{tr("Appointment details")}</button>
+                      {dashboardUser.role === 'owner' && <button
                         onClick={() => deleteBooking(b.id)}
                         disabled={deletingBookingId === b.id}
                         className="px-2 py-1 border border-red-300 text-red-700 rounded-lg text-[11px] font-bold hover:bg-red-50 disabled:opacity-50"
                       >
                         {deletingBookingId === b.id ? tr("Removing...") : tr("Clear")}
-                      </button>
-                    </td>}
+                      </button>}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -6389,6 +6416,24 @@ function AdminPortal({
         </div>
       )}
 
+      {editingBooking && <EditBooking
+        key={editingBooking.id}
+        booking={editingBooking}
+        services={services}
+        therapists={therapists}
+        times={AVAILABLE_TIMES}
+        isScheduled={(therapist, date) => isTherapistScheduledAtBranch(therapist, branches.find((branch) => branch.name === editingBooking.branchName || branch.address === editingBooking.branchName)?.id, date)}
+        onClose={() => setEditingBooking(null)}
+        onSaved={async (booking) => {
+          setBookings((current) => current.map((item) => item.id === booking.id ? { ...item, ...booking } : item));
+          setSelectedCalendarEvent(null);
+          setIssuedReceipt(null);
+          setEditingBooking(null);
+          setBookingEditNotice(message("Booking saved."));
+          const refreshed = await Promise.all([loadCalendar(), loadBookingsFromBackend()]);
+          if (refreshed.some((success) => !success)) setBookingEditNotice(message("Booking saved, but refreshed data could not be loaded. Refresh before making further changes."));
+        }}
+      />}
       {quickBooking && <QuickBooking
         {...quickBooking}
         branches={dashboardBranches}
@@ -8023,6 +8068,7 @@ function AdminPortal({
                 const needsDetails = booking?.autoLinked && !booking.receiptNumber && (!booking.email || !(Number(booking.total) > 0));
                 return booking ? (
                   <>
+                    <button type="button" onClick={() => openBookingEditor(selectedCalendarEvent.booking)} className="rounded-lg border border-emerald-300 px-3 py-2 text-xs font-bold text-emerald-900">{tr("Edit booking")}</button>
                     {booking.autoLinked && (
                       <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-950">{tr("This appointment was booked directly on the calendar and was automatically linked to a new booking record.")}{needsDetails ? tr("Add the missing details below to enable receipt issuing.") : ''}
                       </div>
@@ -8053,7 +8099,7 @@ function AdminPortal({
                               <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{tr("Therapist")}</p>
                               <p className="mt-1 inline-flex items-center gap-1.5 break-words text-sm font-semibold text-slate-800"><UserRound className="h-3.5 w-3.5 shrink-0 text-slate-400" />{currentTherapist || tr("Unassigned")}</p>
                             </div>
-                            {!isCancelled && !issuedReceipt && (
+                            {dashboardUser.role === 'owner' && !isCancelled && !issuedReceipt && (
                               <div className="flex flex-wrap items-center gap-2">
                                 <select
                                   value={therapistReassignTo}
@@ -8087,7 +8133,7 @@ function AdminPortal({
                       <div className="flex justify-between text-sm text-slate-500"><span>{tr("Amount paid")}</span><span>${Number(booking.paidAmount || 0).toFixed(2)}</span></div>
                       <div className="mt-2 flex justify-between text-sm font-bold text-slate-900"><span>{tr("Appointment total")}</span><span>${Number(booking.total || 0).toFixed(2)}</span></div>
                     </div>
-                    {!issuedReceipt && needsDetails && linkEventForm && (
+                    {dashboardUser.role === 'owner' && !issuedReceipt && needsDetails && linkEventForm && (
                       <form onSubmit={completeBookingDetails} className="space-y-3 rounded-xl border border-slate-200 p-4">
                         <div className="grid gap-3 sm:grid-cols-2">
                           <label className="text-xs font-semibold text-slate-600">{tr("Patient email")}<input required type="email" value={linkEventForm.email} onChange={(event) => setLinkEventForm((current) => ({ ...current, email: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
@@ -8164,7 +8210,7 @@ function AdminPortal({
                         await Promise.all([loadCalendar(), loadBookingsFromBackend()]);
                       }} />
                     )}
-                    {booking.id && (
+                    {dashboardUser.role === 'owner' && booking.id && (
                       <div className="space-y-3 border-t border-slate-100 pt-4">
                         <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500">{tr("Notes")}</h4>
                         {appointmentNotesError && <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">{tr(appointmentNotesError)}</div>}

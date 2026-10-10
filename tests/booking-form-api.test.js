@@ -4,6 +4,8 @@ import { Readable } from 'node:stream';
 import { BigQuery } from '@google-cloud/bigquery';
 import { google } from 'googleapis';
 import { emptyPatientHistory } from '../lib/patient-history.js';
+import { BOOKING_TABLE_FIELDS } from '../lib/booking-schema.js';
+import { bookingEditVersion } from '../lib/booking-edit.js';
 import { createDashboardChallengeStore, handleDashboardChallengeQuery, readDashboardOtp } from './helpers/dashboard-auth.js';
 
 test('booking choices persist, skipped history writes nothing, and standalone history only updates the matched patient record', async (t) => {
@@ -38,7 +40,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   const headers = [];
   t.mock.method(google, 'sheets', () => ({
     spreadsheets: {
-      get: async () => ({ data: { sheets: ['Branches', 'Unavailability', 'Services', 'Therapists'].map((title) => ({ properties: { title } })) } }),
+      get: async () => ({ data: { sheets: ['Branches', 'Unavailability', 'Services', 'Therapists', 'BusinessProfile'].map((title) => ({ properties: { title } })) } }),
       values: {
         get: async ({ range }) => {
           if (range === 'Branches!A2:K') return { data: { values: branchRows } };
@@ -46,6 +48,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
           if (range === 'Unavailability!A:J') return { data: { values: blockRows } };
           if (range === 'Services!A2:K') return { data: { values: serviceRows } };
           if (range === 'Therapists!A2:J') return { data: { values: therapistRows } };
+          if (range === 'BusinessProfile!A1:I1' || range === 'BusinessProfile!A1:I2') return { data: { values: [['businessName', 'legalName', 'tagline', 'email', 'phone', 'website', 'address', 'taxRegistrationNumber', 'photoUrl'], ['Test Clinic']] } };
           throw new Error(`Unexpected sheets read: ${range}`);
         },
         update: async ({ range, requestBody }) => {
@@ -58,9 +61,19 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
     },
   }));
   const events = [];
+  const patches = [];
+  let failCalendarPatch = false, failRecovery = false, failBookingWrite = false, raceBookingWrite = false;
+  const originalEvent = { summary: 'Original appointment', description: 'Customer: Old name\nTherapist: Test Therapist\nPrivate integration metadata',
+    start: { dateTime: '2026-11-01T10:00:00-05:00' }, end: { dateTime: '2026-11-01T11:00:00-05:00' }, etag: '"original"' };
   t.mock.method(google, 'calendar', () => ({ events: {
     list: async () => ({ data: { items: busyEvents } }),
     insert: async (options) => { events.push(options); return { data: { id: `event-${events.length}` } }; },
+    get: async () => ({ data: originalEvent }),
+    patch: async (options, transport) => {
+      patches.push({ ...options, transport });
+      if (failCalendarPatch || (failRecovery && options.requestBody.summary === originalEvent.summary)) throw new Error('Synthetic calendar failure');
+      return { data: { ...options.requestBody, etag: '"patched"' } };
+    },
   } }));
   const emails = [];
   t.mock.method(google, 'gmail', () => ({ users: { messages: { send: async (request) => { emails.push(request); return { data: { id: 'email' } }; } } } }));
@@ -107,6 +120,23 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
     }
     if (query.startsWith('SELECT * FROM `test-project.booking_system.bookings`')) return [records];
     if (query.startsWith('INSERT INTO `test-project.booking_system.bookings`')) { records.push(params); return [[]]; }
+    if (params?.where_booking_id) {
+      if (failBookingWrite) throw new Error('Synthetic database failure');
+      if (raceBookingWrite) throw new Error('Booking changed during editing; refresh and retry');
+      const record = records.find((item) => item.booking_id === params.where_booking_id);
+      if (query.includes('Booking changed during editing')) {
+        for (const field of BOOKING_TABLE_FIELDS) {
+          const existing = field.type === 'STRING' ? String(record[field.name] || '') : Number(record[field.name]) || 0;
+          assert.equal(params[`expected_${field.name}`], existing);
+        }
+      }
+      if (query.includes('Booking changed during receipt issuance')) {
+        assert.equal(params.expected_total, record.total);
+        assert.equal(params.expected_paid, record.paid_amount);
+      }
+      for (const [key, value] of Object.entries(params)) if (key.startsWith('set_')) record[key.slice(4)] = value;
+      return [[]];
+    }
     if (query.includes('SET booking_note = @note')) {
       const record = records.find((item) => item.booking_id === params.bookingId);
       assert.equal(record.booking_note || '', params.expectedNote);
@@ -313,7 +343,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
     challengeId: receptionistLogin.data.challengeId, code: readDashboardOtp(emails.at(-1)),
   })).code, 200);
   assert.equal((await request('patient-history', null, { method: 'GET' })).code, 403);
-  assert.equal((await request('mark-paid', { bookingId: 'MTT-not-found' })).code, 403);
+  assert.equal((await request('mark-paid', { bookingId: 'MTT-not-found' })).code, 404);
   assert.equal((await request('dashboard-users', null, { method: 'GET' })).code, 403);
 
   const receptionistCookie = cookie;
@@ -429,4 +459,114 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   assert.equal(records.length, recordsBeforeEmailFailure + 1, 'Confirmation failures do not discard the saved appointment');
   assert.equal(events.length, eventCount + 4);
   assert.equal(histories.length, historyCount);
+  t.mock.method(google, 'gmail', () => ({ users: { messages: { send: async (message) => { emails.push(message); return { data: { id: 'receipt' } }; } } } }));
+  const editable = records.find((record) => record.booking_id === phoneBooking.data.bookingId);
+  const version = () => bookingEditVersion(BOOKING_TABLE_FIELDS.map((field) => editable[field.name]));
+  const editBody = () => ({
+    bookingId: editable.booking_id, expectedVersion: version(), customerName: 'Updated client',
+    email: 'updated@example.com', phone: '+1 437 555 0101', bookingNote: 'Internal edit note',
+    date: editable.date, time: editable.time, serviceId: '1', therapistNames: ['Test Therapist'],
+    paymentOption: 'Cash', total: '113.00', paidAmount: '113.00',
+  });
+  cookie = '';
+  assert.equal((await request('edit-booking', editBody())).code, 401);
+  cookie = receptionistCookie;
+  assert.equal((await request('edit-booking', editBody(), { origin: 'https://untrusted.example' })).code, 403);
+  assert.equal((await request('edit-booking', { ...editBody(), expectedVersion: 'stale' })).code, 409);
+  const stale = editBody();
+  const savedEdit = await request('edit-booking', stale);
+  assert.equal(savedEdit.code, 200, JSON.stringify(savedEdit.data));
+  assert.equal(editable.customer_name, 'Updated client');
+  assert.equal(editable.total, 113);
+  assert.equal(editable.paid_amount, 113);
+  assert.equal(editable.booking_note, 'Internal edit note');
+  assert.equal(savedEdit.data.booking.editVersion, version());
+  assert.equal(savedEdit.data.booking.intakeNotes, undefined);
+  assert.doesNotMatch(patches.at(-1).requestBody.description, /Internal edit note/);
+  assert.match(patches.at(-1).requestBody.description, /Customer: Updated client[\s\S]*Private integration metadata[\s\S]*Email: updated@example.com/);
+  assert.equal(patches.at(-1).transport.headers['If-Match'], '"original"');
+  assert.equal((await request('edit-booking', stale)).code, 409);
+  for (const invalid of [{ serviceId: '404' }, { serviceId: '4' }, { time: '09:45 AM' }, { therapistNames: ['Inactive Therapist'] },
+    { therapistNames: ['Off Duty'] }, { serviceId: '3', therapistNames: ['Test Therapist'] }, { serviceId: '2', therapistNames: ['Test Therapist', 'Test Therapist'] },
+    { paidAmount: '114' }, { total: '-1' }, { date: '2026-02-30' }, { bookingNote: null }]) {
+    const result = await request('edit-booking', { ...editBody(), ...invalid });
+    assert.equal(result.code, 400, JSON.stringify({ invalid, data: result.data }));
+  }
+  editable.branch_name = 'Unassigned Branch';
+  assert.equal((await request('edit-booking', editBody())).code, 403);
+  assert.equal((await request('issue-receipt', { bookingId: editable.booking_id, manualDiscount: '5', confirmReconciliation: true })).code, 403);
+  assert.equal((await request('mark-paid', { bookingId: editable.booking_id })).code, 403);
+  editable.branch_name = 'Test Branch';
+  busyEvents = [{ id: 'other', description: 'Therapist: Test Therapist', start: { dateTime: '2026-12-01T15:00:00Z' }, end: { dateTime: '2026-12-01T16:00:00Z' } }];
+  assert.equal((await request('edit-booking', { ...editBody(), date: '2026-12-01' })).code, 409);
+  busyEvents = [{ ...busyEvents[0], id: editable.calendar_event_id }];
+  blockRows = [['Block ID'], ['block-edit', 'therapist', '', 'Test Therapist', '2026-12-01', '10:00', '11:00', 'Unavailable']];
+  assert.equal((await request('edit-booking', { ...editBody(), date: '2026-12-01' })).code, 409);
+  blockRows = [['Block ID']];
+  cookie = managerCookie;
+  const rescheduled = await request('edit-booking', { ...editBody(), date: '2026-12-01' });
+  assert.equal(rescheduled.code, 200, JSON.stringify(rescheduled.data));
+  assert.equal(patches.at(-1).requestBody.start.dateTime, '2026-12-01T10:00:00');
+  assert.equal(patches.at(-1).requestBody.start.timeZone, 'America/Toronto');
+  busyEvents = [];
+  failCalendarPatch = true;
+  assert.equal((await request('edit-booking', { ...editBody(), customerName: 'Not saved' })).code, 500);
+  assert.equal(editable.customer_name, 'Updated client');
+  failCalendarPatch = false;
+  failBookingWrite = true;
+  assert.equal((await request('edit-booking', { ...editBody(), customerName: 'Not saved' })).code, 500);
+  assert.equal(patches.at(-1).requestBody.summary, originalEvent.summary);
+  assert.equal(patches.at(-1).transport.headers['If-Match'], '"patched"');
+  failRecovery = true;
+  const recovery = await request('edit-booking', { ...editBody(), customerName: 'Not saved' });
+  assert.equal(recovery.code, 500);
+  assert.equal(recovery.data.calendarRecoveryRequired, true);
+  failRecovery = false;
+  failBookingWrite = false;
+  raceBookingWrite = true;
+  assert.equal((await request('edit-booking', editBody())).code, 409);
+  assert.equal(patches.at(-1).requestBody.summary, originalEvent.summary);
+  raceBookingWrite = false;
+  const conflictRecord = { ...editable, booking_id: 'database-conflict', date: '2026-12-02', calendar_id: '', calendar_event_id: '' };
+  records.push(conflictRecord);
+  assert.equal((await request('edit-booking', { ...editBody(), date: '2026-12-02' })).code, 409);
+  conflictRecord.status = 'Cancelled';
+  const coupleEdit = await request('edit-booking', { ...editBody(), date: '2026-12-02', serviceId: '2', therapistNames: ['Test Therapist', 'Second Therapist'], total: '203.40', paidAmount: '0' });
+  assert.equal(coupleEdit.code, 200, JSON.stringify(coupleEdit.data));
+  assert.equal(editable.therapist_name, 'Test Therapist, Second Therapist');
+  assert.equal(editable.service_name, 'Couple Massage');
+  assert.equal(editable.total, 203.4);
+  assert.equal((await request('edit-booking', editBody())).code, 200);
+  for (const staffCookie of [managerCookie, receptionistCookie]) {
+    cookie = staffCookie;
+    const discountRecord = { ...editable, booking_id: `discount-${staffCookie === managerCookie ? 'manager' : 'receptionist'}`, receipt_number: '', receipt_email_status: '' };
+    records.push(discountRecord);
+    assert.equal((await request('issue-receipt', { bookingId: discountRecord.booking_id, manualDiscount: '10' })).code, 400);
+    const discounted = await request('issue-receipt', { bookingId: discountRecord.booking_id, manualDiscount: '10', confirmReconciliation: true });
+    assert.equal(discounted.code, 200, JSON.stringify(discounted.data));
+    assert.equal(discountRecord.total, 101.7);
+    assert.equal(discountRecord.paid_amount, 101.7);
+    assert.equal(JSON.parse(discountRecord.receipt_reconciliation).confirmedBy, staffCookie === managerCookie ? 'manager@example.com' : 'reception@example.com');
+    assert.equal((await request('issue-receipt', { bookingId: discountRecord.booking_id, manualDiscount: '10' })).code, 200);
+    assert.equal(discountRecord.total, 101.7, 'Retry does not apply the discount twice');
+  }
+  editable.receipt_number = 'ISSUED';
+  assert.equal((await request('edit-booking', { ...editBody(), total: '100', paidAmount: '100' })).code, 409);
+  assert.equal((await request('edit-booking', { ...editBody(), bookingNote: 'Note after receipt' })).code, 200);
+  editable.receipt_number = '';
+  editable.membership_type = 'silver';
+  assert.equal((await request('edit-booking', { ...editBody(), total: '100', paidAmount: '100' })).code, 409);
+  editable.membership_type = '';
+  editable.service_name = 'Legacy custom service';
+  const legacyEdit = await request('edit-booking', { ...editBody(), serviceId: '__existing__' });
+  assert.equal(legacyEdit.code, 200, JSON.stringify(legacyEdit.data));
+  assert.equal(editable.service_name, 'Legacy custom service');
+  editable.service_name = 'Massage';
+  editable.status = 'Cancelled';
+  assert.equal((await request('edit-booking', { ...editBody(), time: '11:00 AM' })).code, 409);
+  editable.status = 'Confirmed';
+  const listing = await request('', null, { method: 'GET' });
+  assert.equal(listing.code, 200, JSON.stringify(listing.data));
+  assert.equal(listing.data.bookings.find((record) => record.id === editable.booking_id).total, 113);
+  assert.equal(listing.data.bookings.find((record) => record.id === editable.booking_id).intakeNotes, undefined);
 });

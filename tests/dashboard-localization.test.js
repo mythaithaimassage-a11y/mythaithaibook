@@ -49,13 +49,29 @@ const props = {
   onBranchesChange() {}, onServicesChange() {}, onTherapistsChange() {}, setBookings() {},
   setSelectedBranchId() {}, setLang() {},
 };
-function render(tab, language = 'th', overrides = {}) {
+function render(tab, language = 'th', overrides = {}, propOverrides = {}) {
   fixtures = { activeTab: tab, hasLoadedBusinessProfile: true, ...overrides };
   activeStates = states;
   stateIndex = 0;
   return renderToStaticMarkup(React.createElement(LanguageProvider, { language },
-    React.createElement(AdminPortal, { ...props, lang: language })));
+    React.createElement(AdminPortal, { ...props, lang: language, ...propOverrides })));
 }
+
+test('managers and receptionists can edit schedule bookings and apply receipt discounts without medical access', () => {
+  for (const role of ['branch_manager', 'branch_receptionist']) {
+    const user = { dashboardUser: { role, branchIds: ['1'] } };
+    const schedule = render('schedule', 'en', {}, user);
+    assert.match(schedule, />Edit booking</);
+    assert.match(schedule, />Appointment details</);
+    assert.match(schedule, /\$107\.35/);
+    assert.doesNotMatch(schedule, />Clear</);
+    const details = render('calendar', 'en', { selectedCalendarEvent: { id: 'event', booking, localTime: booking.time } }, user);
+    assert.match(details, /Manual discount/);
+    assert.match(details, /Confirm reconciliation/);
+    assert.match(details, />Edit booking</);
+    assert.doesNotMatch(details, /Log a quick note about this appointment|Change therapist…/);
+  }
+});
 
 test('Thai is shared by dashboard navigation, booking list and child workflows without translating customer data', () => {
   const thai = render('schedule');
