@@ -28,6 +28,7 @@ test('reviewed Wix import produces paid records and actual receipt endpoint issu
     { id: 2, name: 'Registered Massage Therapy (90 min)', duration: 90, price: 120, taxRate: 0 },
   ];
   const profileHeaders = ['businessName', 'legalName', 'tagline', 'email', 'phone', 'website', 'address', 'taxRegistrationNumber', 'photoUrl'];
+  let businessPhotoUrl = '';
   t.mock.method(google, 'sheets', () => ({
     spreadsheets: {
       get: async () => ({ data: { sheets: ['Services', 'BusinessProfile', 'Therapists'].map((title) => ({ properties: { title } })) } }),
@@ -39,7 +40,7 @@ test('reviewed Wix import produces paid records and actual receipt endpoint issu
           ]) } };
           if (range === 'BusinessProfile!A1:I1') return { data: { values: [profileHeaders] } };
           if (range === 'BusinessProfile!A1:I2') return { data: { values: [profileHeaders, [
-            'Test Clinic', '', '', 'test@example.com', '4165550100', 'https://test.example', 'Ontario', '', '',
+            'Test Clinic', '', '', 'test@example.com', '4165550100', 'https://test.example', 'Ontario', '', businessPhotoUrl,
           ]] } };
           throw new Error(`Unexpected spreadsheet read: ${range}`);
         },
@@ -286,6 +287,30 @@ test('reviewed Wix import produces paid records and actual receipt endpoint issu
     records.set(id, record);
     return record;
   };
+  const receiptHtml = () => {
+    const mime = Buffer.from(emails.at(-1).requestBody.raw, 'base64url').toString();
+    const encoded = mime.match(/Content-Type: text\/html; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n([\s\S]*?)\r\n--/)[1];
+    return Buffer.from(encoded.replace(/\s/g, ''), 'base64').toString();
+  };
+  const noLogo = newRecord('MTT-initials-receipt');
+  assert.equal((await request('issue-receipt', { bookingId: noLogo.booking_id })).code, 200);
+  assert.match(receiptHtml(), /font-size:22px;font-weight:bold">TC<\/td>/);
+  assert.doesNotMatch(receiptHtml(), /<img /);
+  businessPhotoUrl = 'https://images.example.com/business-logo.png?size=64&theme="light"';
+  const logoBooking = newRecord('MTT-logo-receipt');
+  assert.equal((await request('issue-receipt', { bookingId: logoBooking.booking_id })).code, 200);
+  const brandedHtml = receiptHtml();
+  assert.match(brandedHtml, /<img src="https:\/\/images\.example\.com\/business-logo\.png\?size=64&amp;theme=&quot;light&quot;" alt="Test Clinic logo" width="64" height="64"/);
+  assert.ok(brandedHtml.indexOf('<img ') < brandedHtml.indexOf('Payment receipt'));
+  assert.match(brandedHtml, /Total paid[\s\S]*\$113\.00/);
+  businessPhotoUrl = 'javascript:alert(1)';
+  const invalidLogo = newRecord('MTT-invalid-logo');
+  const invalidLogoResponse = await request('issue-receipt', { bookingId: invalidLogo.booking_id });
+  assert.equal(invalidLogoResponse.code, 500);
+  assert.match(invalidLogoResponse.data.message, /Business photo URL must use https:\/\/ or http:\/\//);
+  assert.equal(invalidLogo.receipt_email_status, 'failed');
+  businessPhotoUrl = '';
+  assert.equal((await request('issue-receipt', { bookingId: invalidLogo.booking_id })).code, 200);
   const discounted = newRecord('MTT-manual-discount');
   assert.equal((await request('issue-receipt', { bookingId: discounted.booking_id, manualDiscount: 10 }, false)).code, 400);
   assert.equal(discounted.total, 113);

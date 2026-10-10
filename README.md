@@ -103,6 +103,15 @@ times in the configured calendar time zone, for example **11:00 AM - 12:00 PM**.
 The range uses the actual Google Calendar event times, including appointments
 that finish after midnight.
 
+### Receipt email branding
+
+Receipt emails display the configured **Business photo URL** as a 64px business
+icon beside the business name and receipt heading. Set this to a publicly
+accessible logo image in **Business profile** (HTTPS recommended). When no image
+is configured, the header uses business initials. Some email clients block remote
+images until the recipient allows them; the business name and receipt details
+remain readable.
+
 ### Manual discount in Edit booking
 
 **Edit booking** has **Manual discount ($) — optional** instead of an editable
