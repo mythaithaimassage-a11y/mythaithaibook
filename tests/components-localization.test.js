@@ -8,6 +8,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import ts from 'typescript';
 import * as wixPricing from '../lib/wix-pricing.js';
 import * as calendarSync from '../src/runWixCalendarSync.js';
+import { defaultBusinessHours } from '../lib/booking-options.js';
 
 const require = createRequire(import.meta.url);
 const compile = (name) => ts.transpileModule(readFileSync(new URL(`../src/${name}`, import.meta.url), 'utf8'), {
@@ -95,6 +96,7 @@ const quickProps = {
 };
 const screens = [
   ['QuickBooking', quickProps, 'Quick appointment', 'เพิ่มนัดหมายด่วน'],
+  ['BusinessHours', { onChange() {} }, 'Weekly business hours', 'เวลาทำการประจำสัปดาห์'],
   ['BookingNote', { bookingId: 'B1', initialNote: 'Keep this English note', async onSaved() {} }, 'Shared internal booking note', 'บันทึกภายในเกี่ยวกับการจองสำหรับทีม'],
   ['AppointmentCheckIn', { bookingId: 'B1', checkedInAt: '', checkedInBy: '', receiptIssued: false, cancelled: false, async onChanged() {} }, 'Check in client', 'เช็กอินลูกค้า'],
   ['WixCalendarSync', { async onSynced() {} }, 'Sync Wix bookings', 'ซิงค์การจอง Wix'],
@@ -151,6 +153,27 @@ test('Thai catalogue covers literal translations, validation fallbacks and mappe
     assert.deepEqual([...english.matchAll(/\{(\w+)\}/g)].map((match) => match[1]).sort(), [...thai.matchAll(/\{(\w+)\}/g)].map((match) => match[1]).sort(), `Placeholder mismatch: ${english}`);
   }
   assert.equal(translate('th-TH', 'An unknown API error'), 'An unknown API error');
+});
+
+test('business-hours editor shows seven independent daily settings and preserves hours when closing a day', () => {
+  let hours;
+  const props = { onChange(value) { hours = value; } };
+  const ui = harness('BusinessHours', 'th-TH');
+  const output = html(ui.render(props));
+  assert.equal((output.match(/type="time"/g) || []).length, 14);
+  assert.equal((output.match(/type="checkbox"/g) || []).length, 7);
+  for (const day of ['วันจันทร์', 'วันอังคาร', 'วันพุธ', 'วันพฤหัสบดี', 'วันศุกร์', 'วันเสาร์', 'วันอาทิตย์']) assert.ok(output.includes(day));
+  assert.equal((output.match(/value="10:00"/g) || []).length, 7);
+  assert.equal((output.match(/value="20:00"/g) || []).length, 7);
+  find(ui.render(props), (node) => node.type === 'input' && node.props.type === 'time').props.onChange({ target: { value: '08:00' } });
+  assert.equal(hours.mon.open, '08:00');
+  assert.equal(hours.tue.open, '10:00');
+  props.hours = hours;
+  find(ui.render(props), (node) => node.type === 'input' && node.props.type === 'checkbox').props.onChange({ target: { checked: true } });
+  assert.equal(hours.mon.closed, true);
+  assert.equal(hours.mon.open, '08:00');
+  props.hours = hours;
+  assert.match(html(ui.render(props)), /type="time"[^>]*disabled=""[^>]*value="08:00"/);
 });
 
 test('Thai quick-booking confirmation translates messages without changing request data', async () => {
@@ -300,14 +323,16 @@ test('Thai time options preserve original API values when a different time is se
     sent = JSON.parse(options.body);
     return { ok: true, async json() { return { bookingId: 'B124', emailSent: true }; } };
   });
-  const props = { ...quickProps, times: ['12:00 AM', '12:00 PM', '02:15 PM'] };
+  const businessHours = defaultBusinessHours();
+  businessHours.sat.open = '00:00';
+  const props = { ...quickProps, branches: [{ ...quickProps.branches[0], businessHours }], times: ['12:00 AM', '12:00 PM', '02:15 PM'] };
   const element = ui.render(props);
   const output = html(element);
   assert.match(output, /value="12:00 AM"[^>]*>00:00 น\./);
   assert.match(output, /value="12:00 PM">12:00 น\./);
   assert.match(output, /value="02:15 PM">14:15 น\./);
   const timeSelect = find(element, (node) => node.type === 'select'
-    && node.props.children?.some?.((child) => child.props?.value === '02:15 PM'));
+    && html(node).includes('value="02:15 PM"'));
   timeSelect.props.onChange({ target: { value: '02:15 PM' } });
   const updated = ui.render(props);
   assert.match(html(updated), /value="02:15 PM" selected="">14:15 น\./);

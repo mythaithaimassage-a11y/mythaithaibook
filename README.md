@@ -98,6 +98,21 @@ different therapists. The server checks the active catalogue, therapist
 qualifications/branch schedule, existing appointments, and availability blocks.
 Receptionists and managers can book only within their assigned branches.
 
+Each branch has editable **Weekly business hours** in **Manage > Branches**,
+with opening/closing times and a closed-day option for all seven weekdays.
+Existing branches default to **10:00 AM–8:00 PM daily**. Save branches to persist
+the schedule in the `Business Hours` JSON column (`L`) of the existing
+`Branches` sheet; no booking-table schema change is needed.
+Appointment starts use 15-minute intervals and must be at least **one hour
+before closing**. The full service duration (including timed add-ons) must
+also finish by closing: at an 8:00 PM close, the last 60-minute booking starts
+at 7:00 PM, the last 90-minute booking at 6:30 PM, and the last 120-minute
+booking at 6:00 PM. Customer booking, quick appointments, scheduling edits,
+and customer rescheduling all use the branch/date hours, enforced server-side.
+The daily calendar expands for changed hours and retains existing appointments
+outside the new hours. Hours changes do not move existing bookings or reject
+historical/future Wix imports; staff schedules and availability blocks still apply.
+
 These appointments save to BigQuery and Google Calendar as **unpaid / pay at
 clinic**, without checkout, marketing enrollment, or a medical-history form.
 Medical history must still be completed before treatment. Email contacts receive

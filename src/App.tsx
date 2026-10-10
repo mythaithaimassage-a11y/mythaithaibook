@@ -21,7 +21,8 @@ import EditBooking from './EditBooking';
 import BookingNote from './BookingNote';
 import AppointmentCheckIn, { formatCheckInTime } from './AppointmentCheckIn';
 import { LanguageProvider, createTranslator, message, useTranslation } from './localization';
-import { AVAILABLE_TIMES, BOOKING_DEPOSIT_AMOUNT, branchPaymentOptions, bookingCategories } from '../lib/booking-options.js';
+import { AVAILABLE_TIMES, BOOKING_DEPOSIT_AMOUNT, branchPaymentOptions, bookingCategories, branchAppointmentTimes, businessHoursForDate, appointmentTimeMinutes } from '../lib/booking-options.js';
+import BusinessHours from './BusinessHours';
 import { emptyPatientHistory } from '../lib/patient-history.js';
 import { anatomicalBodyParts } from '../lib/body-map.js';
 import { portalEntry } from '../lib/portal-entry.js';
@@ -2645,6 +2646,13 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
   };
 
   const paymentOptions = branchPaymentOptions(bookingData.branch);
+  const appointmentTimes = bookingData.branch && bookingData.date
+    ? branchAppointmentTimes(bookingData.branch, bookingData.date, (Number(bookingData.service?.duration) || 60) +
+      (bookingData.hotStoneAddOn && hotStoneAddOnService ? Number(hotStoneAddOnService.duration) || 0 : 0)) : [];
+  const validBookingTime = appointmentTimes.includes(bookingData.time);
+  useEffect(() => {
+    if (bookingData.time && !validBookingTime) setBookingData((prev) => ({ ...prev, time: null }));
+  }, [validBookingTime, bookingData.time]);
   const paymentSkipped = (staffBooking && bookingData.skipPayment) || bookingData.paymentOption === 'clinic';
   useEffect(() => {
     if (!paymentOptions[bookingData.paymentOption]) {
@@ -2748,6 +2756,11 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
 
   const handleFinalSubmit = async (e) => {
     e.preventDefault();
+    if (!validBookingTime) {
+      setSheetsSyncStatus('error');
+      setSheetsSyncReason('Choose a time during branch business hours. Appointments must start at least one hour before closing and finish by closing.');
+      return;
+    }
     setIsSubmitting(true);
     setSheetsSyncStatus('pending');
     setSheetsSyncReason('');
@@ -2894,7 +2907,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
       </div>
 
       {portalMode === 'manage' ? (
-        <ManageBookingPanel onBack={() => setPortalMode('book')} initialBookingId={manageDeepLink.ref} />
+        <ManageBookingPanel branches={branches} onBack={() => setPortalMode('book')} initialBookingId={manageDeepLink.ref} />
       ) : (
       <>
       {portalMode === 'history' && (
@@ -3180,7 +3193,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
 
               <label className="block text-xs font-semibold text-stone-700 mb-2">Available Time Slots</label>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                {AVAILABLE_TIMES.map(t => (
+                {appointmentTimes.map(t => (
                   <button
                     key={t}
                     type="button"
@@ -3195,6 +3208,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                   </button>
                 ))}
               </div>
+              {appointmentTimes.length === 0 && <p role="alert" className="mt-3 text-sm text-amber-800">No appointment times fit the business hours for this branch, date and service.</p>}
             </div>
 
             <div className="flex justify-between pt-4">
@@ -3207,7 +3221,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
               </button>
               <button
                 type="button"
-                disabled={!bookingData.time}
+                disabled={!validBookingTime}
                 onClick={() => setStep(3)}
                 className="px-6 py-2.5 bg-emerald-800 text-white font-semibold rounded-xl hover:bg-emerald-900 disabled:opacity-40 disabled:cursor-not-allowed transition shadow-sm flex items-center"
               >
@@ -3932,7 +3946,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
   );
 }
 
-function ManageBookingPanel({ onBack, initialBookingId = '' }) {
+function ManageBookingPanel({ branches, onBack, initialBookingId = '' }) {
   const [bookingId, setBookingId] = useState(initialBookingId);
   const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
@@ -3945,6 +3959,9 @@ function ManageBookingPanel({ onBack, initialBookingId = '' }) {
   const [showRescheduleForm, setShowRescheduleForm] = useState(false);
   const [newDate, setNewDate] = useState('');
   const [newTime, setNewTime] = useState('');
+  const rescheduleBranch = branches.find((branch) => branch.name === booking?.branchName || branch.address === booking?.branchName);
+  const rescheduleTimes = rescheduleBranch && newDate
+    ? branchAppointmentTimes(rescheduleBranch, newDate, Number(booking?.durationMinutes) || 60) : [];
 
   const findBooking = async (e) => {
     e.preventDefault();
@@ -3999,7 +4016,7 @@ function ManageBookingPanel({ onBack, initialBookingId = '' }) {
 
   const rescheduleBooking = async (e) => {
     e.preventDefault();
-    if (!newDate || !newTime) return;
+    if (!newDate || !rescheduleTimes.includes(newTime)) return;
     setActionLoading(true);
     setActionResult(null);
     try {
@@ -4108,7 +4125,7 @@ function ManageBookingPanel({ onBack, initialBookingId = '' }) {
           {showRescheduleForm && booking.status !== 'Cancelled' && (
             <form onSubmit={rescheduleBooking} className="grid gap-2 sm:grid-cols-3 pt-2 border-t border-stone-200">
               <input type="date" value={newDate} onChange={(e) => setNewDate(e.target.value)} required className="rounded-xl border border-stone-300 px-3 py-2 text-xs" />
-              <input type="text" value={newTime} onChange={(e) => setNewTime(e.target.value)} placeholder="e.g. 2:30 PM" required className="rounded-xl border border-stone-300 px-3 py-2 text-xs" />
+              <select value={rescheduleTimes.includes(newTime) ? newTime : ''} onChange={(e) => setNewTime(e.target.value)} required aria-label="New appointment time" className="rounded-xl border border-stone-300 px-3 py-2 text-xs"><option value="">Choose time</option>{rescheduleTimes.map((time) => <option key={time} value={time}>{time}</option>)}</select>
               <button type="submit" disabled={actionLoading} className="px-3 py-2 bg-emerald-800 text-white font-semibold rounded-xl hover:bg-emerald-900 transition disabled:opacity-50 text-xs">
                 {actionLoading ? 'Saving…' : 'Confirm new time'}
               </button>
@@ -5694,10 +5711,25 @@ function AdminPortal({
     return !search || [event.summary, event.therapistName, event.location, event.booking?.customerName, event.booking?.email, event.booking?.phone]
       .some((value) => String(value || '').toLowerCase().includes(search));
   });
+  const calendarBusinessBranches = branches.filter((branch) => branch.active !== false &&
+    (dashboardUser.role === 'owner' || dashboardUser.branchIds.includes(String(branch.id))) &&
+    (calendarBranch === 'all' || String(branch.id) === calendarBranch));
+  const calendarBookTimes = [...new Set(calendarBusinessBranches.flatMap((branch) => branchAppointmentTimes(branch, calendarDate)))];
+  const calendarHours = calendarBusinessBranches.map((branch) => businessHoursForDate(branch, calendarDate)).filter((hours) => !hours.closed);
+  const visibleHours = [
+    ...calendarHours.flatMap((hours) => [Number(hours.open.split(':')[0]), Number(hours.close.split(':')[0])]),
+    ...visibleCalendarEvents.map((event) => Number(event.localTime?.split(':')[0])).filter(Number.isFinite),
+    ...calendarUnavailability.flatMap((block) => [Number(block.startTime?.split(':')[0]), Number(block.endTime?.split(':')[0])]).filter(Number.isFinite),
+  ];
+  const calendarFirstHour = Math.min(8, ...visibleHours);
+  const calendarLastHour = Math.max(19, ...visibleHours);
+  const calendarDisplayHours = Array.from({ length: calendarLastHour - calendarFirstHour + 1 }, (_, index) => index + calendarFirstHour);
 
   const openQuickBooking = (time = '') => {
     setQuickBookingNotice('');
-    setQuickBooking({ date: calendarDate, branchId: calendarBranch, therapistId: calendarTherapist, time });
+    const slotBranch = calendarBranch === 'all' && time
+      ? calendarBusinessBranches.find((branch) => branchAppointmentTimes(branch, calendarDate).includes(time)) : null;
+    setQuickBooking({ date: calendarDate, branchId: slotBranch ? String(slotBranch.id) : calendarBranch, therapistId: calendarTherapist, time });
   };
 
   useEffect(() => {
@@ -6314,6 +6346,12 @@ function AdminPortal({
           </div>
           {quickBookingNotice && <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">{tr(quickBookingNotice)}</p>}
           {calendarLoadError && <div className="p-3 bg-red-50 border border-red-200 text-red-800 rounded-xl text-xs">{tr(calendarLoadError)}</div>}
+          <div className="flex flex-wrap gap-3 text-xs text-stone-600">
+            {calendarBusinessBranches.map((branch) => {
+              const hours = businessHoursForDate(branch, calendarDate);
+              return <span key={branch.id}><strong>{branch.name}</strong>: {hours.closed ? tr('Closed') : `${hours.open} - ${hours.close}`}</span>;
+            })}
+          </div>
           <WixCalendarSync onSynced={async () => {
             await Promise.all([loadCalendar(), loadBookingsFromBackend()]);
           }} />
@@ -6345,15 +6383,16 @@ function AdminPortal({
               <CalendarIcon className="w-5 h-5 text-emerald-700" />
             </div>
             <div className="max-h-[620px] overflow-y-auto">
-              {Array.from({ length: 12 }, (_, index) => index + 8).map((hour) => {
+              {calendarDisplayHours.map((hour) => {
                 const hourLabel = new Date(2000, 0, 1, hour).toLocaleTimeString(locale, { hour: 'numeric' });
                 const hourEvents = visibleCalendarEvents.filter((event) => Number(event.localTime?.split(':')[0]) === hour);
                 const hourBlocks = calendarUnavailability.filter((block) => Number(block.startTime?.split(':')[0]) <= hour && Number(block.endTime?.split(':')[0]) > hour);
+                const bookTime = calendarBookTimes.find((time) => Math.floor(appointmentTimeMinutes(time) / 60) === hour);
                 return (
                   <div key={hour} className="grid grid-cols-[72px_1fr] min-h-[58px] border-b border-stone-100">
                     <div className="p-2 text-[11px] text-stone-400 text-right border-r border-stone-100">{formatTime(hourLabel)}</div>
                     <div className="p-1.5 space-y-1">
-                      {hour >= 10 && <button type="button" onClick={() => openQuickBooking(AVAILABLE_TIMES[(hour - 10) * 4])} aria-label={tr("Add appointment at {value0}", { value0: hourLabel })} className="rounded-lg px-2 py-1 text-[11px] font-semibold text-blue-600 hover:bg-blue-50">{tr("+ Book")} {formatTime(hourLabel)}</button>}
+                      {bookTime && <button type="button" onClick={() => openQuickBooking(bookTime)} aria-label={tr("Add appointment at {value0}", { value0: bookTime })} className="rounded-lg px-2 py-1 text-[11px] font-semibold text-blue-600 hover:bg-blue-50">{tr("+ Book")} {formatTime(bookTime)}</button>}
                       {hourBlocks.map((block) => (
                         <div key={`block-${block.id}`} className="flex items-center gap-1.5 rounded-lg border-l-4 border-stone-400 bg-stone-100 px-3 py-2 text-xs text-stone-600">
                           <CalendarX className="w-3.5 h-3.5 shrink-0" />
@@ -6429,6 +6468,7 @@ function AdminPortal({
         services={services}
         therapists={therapists}
         times={AVAILABLE_TIMES}
+        branch={branches.find((branch) => branch.name === editingBooking.branchName || branch.address === editingBooking.branchName)}
         isScheduled={(therapist, date) => isTherapistScheduledAtBranch(therapist, branches.find((branch) => branch.name === editingBooking.branchName || branch.address === editingBooking.branchName)?.id, date)}
         onClose={() => setEditingBooking(null)}
         onSaved={async (booking) => {
@@ -6694,6 +6734,7 @@ function AdminPortal({
                     ))}
                   </div>
                 </fieldset>
+                <BusinessHours hours={branch.businessHours} onChange={(hours) => updateBranchField(branch.id, 'businessHours', hours)} />
               </div>
             ))}
           </div>

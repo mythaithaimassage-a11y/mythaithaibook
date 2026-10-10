@@ -1,0 +1,23 @@
+export type BusinessDay = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun';
+export type WeeklyBusinessHours = Record<BusinessDay, { closed: boolean; open: string; close: string }>;
+export type BookingBranch = {
+  businessHours?: WeeklyBusinessHours;
+  name?: string;
+  collectsDeposit?: boolean;
+  allowClinicPayment?: boolean;
+  allowDepositPayment?: boolean;
+  allowFullPayment?: boolean;
+};
+export const BOOKING_DEPOSIT_AMOUNT: number;
+export const AVAILABLE_TIMES: string[];
+export const BUSINESS_WEEKDAYS: BusinessDay[];
+export function defaultBusinessHours(): WeeklyBusinessHours;
+export function validateBusinessHours(hours?: unknown): WeeklyBusinessHours;
+export function businessHoursForDate(branch: BookingBranch | undefined, date: string): WeeklyBusinessHours[BusinessDay];
+export function appointmentTimeMinutes(time: string): number;
+export function appointmentTimeLabel(minutes: number): string;
+export function branchAppointmentTimes(branch: BookingBranch | undefined, date: string, duration?: number): string[];
+export function validateAppointmentTime(time: string, branch?: BookingBranch, date?: string, duration?: number): void;
+export function branchPaymentOptions(branch?: BookingBranch): { clinic: boolean; deposit: boolean; full: boolean };
+export function validateBranchPaymentOptions(branch?: BookingBranch): { clinic: boolean; deposit: boolean; full: boolean };
+export function bookingCategories(services: { name: string; category?: string; active?: boolean }[]): string[];

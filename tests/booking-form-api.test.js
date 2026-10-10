@@ -6,6 +6,7 @@ import { google } from 'googleapis';
 import { emptyPatientHistory } from '../lib/patient-history.js';
 import { BOOKING_TABLE_FIELDS } from '../lib/booking-schema.js';
 import { bookingEditVersion } from '../lib/booking-edit.js';
+import { defaultBusinessHours } from '../lib/booking-options.js';
 import { createDashboardChallengeStore, handleDashboardChallengeQuery, readDashboardOtp } from './helpers/dashboard-auth.js';
 
 test('booking choices persist, skipped history writes nothing, and standalone history only updates the matched patient record', async (t) => {
@@ -43,7 +44,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
       get: async () => ({ data: { sheets: ['Branches', 'Unavailability', 'Services', 'Therapists', 'BusinessProfile'].map((title) => ({ properties: { title } })) } }),
       values: {
         get: async ({ range }) => {
-          if (range === 'Branches!A2:K') return { data: { values: branchRows } };
+          if (range === 'Branches!A2:L') return { data: { values: branchRows } };
           if (range === 'Unavailability!A1:J1') return { data: { values: [['Block ID']] } };
           if (range === 'Unavailability!A:J') return { data: { values: blockRows } };
           if (range === 'Services!A2:K') return { data: { values: serviceRows } };
@@ -52,11 +53,11 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
           throw new Error(`Unexpected sheets read: ${range}`);
         },
         update: async ({ range, requestBody }) => {
-          if (range === 'Branches!A1:K1') headers.push(requestBody.values[0]);
-          else if (range.startsWith('Branches!A2:K')) branchRows = requestBody.values;
+          if (range === 'Branches!A1:L1') headers.push(requestBody.values[0]);
+          else if (range.startsWith('Branches!A2:L')) branchRows = requestBody.values;
           else throw new Error(`Unexpected sheets update: ${range}`);
         },
-        clear: async ({ range }) => { assert.equal(range, 'Branches!A2:K'); },
+        clear: async ({ range }) => { assert.equal(range, 'Branches!A2:L'); },
       },
     },
   }));
@@ -181,7 +182,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
     subtotalAmount: '100', taxRate: 0.13, paymentOption: 'clinic', skipPatientHistory: true,
   };
   assert.equal((await request('', { ...base, time: '09:45 AM' })).code, 400);
-  assert.equal((await request('reschedule-booking', { bookingId: 'MTT-test', email: base.email, date: base.date, time: '09:30 AM' })).code, 400);
+  assert.equal((await request('reschedule-booking', { bookingId: 'MTT-test', email: base.email, date: base.date, time: '09:30 AM' })).code, 404);
   assert.equal(events.length, 0);
   assert.equal((await request('', { ...base, skipPatientHistory: false, patientHistory: {} })).code, 400);
   for (const [option, amount] of [['clinic', 0], ['deposit', 10], ['full', 113]]) {
@@ -255,10 +256,21 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
 
   const branch = { id: 1, name: 'Test Branch', allowClinicPayment: true, allowDepositPayment: false, allowFullPayment: false };
   assert.equal((await request('branches', { branches: [branch] })).code, 200);
-  assert.equal(headers[0].length, 11);
-  assert.deepEqual(branchRows[0].slice(8), ['TRUE', 'FALSE', 'FALSE']);
+  assert.equal(headers[0].length, 12);
+  assert.deepEqual(branchRows[0].slice(8, 11), ['TRUE', 'FALSE', 'FALSE']);
+  assert.deepEqual(JSON.parse(branchRows[0][11]), defaultBusinessHours());
   const loaded = await request('branches', null, { method: 'GET' });
   assert.equal(loaded.data.branches[0].allowDepositPayment, false);
+  assert.deepEqual(loaded.data.branches[0].businessHours, defaultBusinessHours());
+  const customHours = defaultBusinessHours();
+  customHours.sun = { open: '08:00', close: '22:00', closed: false };
+  customHours.mon.closed = true;
+  assert.equal((await request('branches', { branches: [{ ...branch, businessHours: customHours }] })).code, 200);
+  assert.deepEqual((await request('branches', null, { method: 'GET' })).data.branches[0].businessHours, customHours);
+  const storedHours = branchRows[0][11];
+  assert.equal((await request('branches', { branches: [{ ...branch, businessHours: {} }] })).code, 400);
+  assert.equal(branchRows[0][11], storedHours, 'Invalid schedules do not replace stored hours');
+  assert.equal((await request('branches', { branches: [branch] })).code, 200);
   assert.equal((await request('branches', { branches: [{ ...branch, allowClinicPayment: false }] })).code, 400);
   assert.equal((await request('', { ...base, paymentOption: 'deposit' })).code, 400);
   assert.equal((await request('', { ...base, paymentOption: 'full' })).code, 400);
@@ -691,4 +703,37 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   assert.equal(listing.code, 200, JSON.stringify(listing.data));
   assert.equal(listing.data.bookings.find((record) => record.id === editable.booking_id).total, 113);
   assert.equal(listing.data.bookings.find((record) => record.id === editable.booking_id).intakeNotes, undefined);
+
+  cookie = ownerCookie;
+  const hours = defaultBusinessHours();
+  hours.sun = { open: '08:00', close: '22:00', closed: false };
+  hours.mon.closed = true;
+  branchRows[0][11] = JSON.stringify(hours);
+  const beforeHoursBookings = events.length;
+  for (const change of [
+    { time: '07:45 AM' }, { time: '09:15 PM' }, { date: '2026-11-02' },
+    { time: '09:00 PM', durationMinutes: 90 },
+  ]) {
+    const result = await request('', { ...base, id: `MTT-hours-invalid-${events.length}`, ...change });
+    assert.equal(result.code, 400, JSON.stringify(result.data));
+  }
+  assert.equal(events.length, beforeHoursBookings, 'Out-of-hours requests do not create Calendar events');
+  assert.equal((await request('manual-booking', { ...manual, time: '08:00 AM' })).code, 200,
+    'Earlier branch hours are available to quick appointments');
+  assert.equal((await request('manual-booking', { ...manual, time: '09:00 PM' })).code, 200,
+    'A one-hour appointment can start exactly one hour before a later closing');
+  const flexibleEdit = await request('edit-booking', { ...editBody(), date: base.date, time: '09:00 AM' });
+  assert.equal(flexibleEdit.code, 200, JSON.stringify(flexibleEdit.data));
+  for (const time of ['07:45 AM', '09:15 PM']) {
+    assert.equal((await request('edit-booking', { ...editBody(), time })).code, 400);
+    assert.equal((await request('reschedule-booking', { bookingId: editable.booking_id, email: editable.email, date: base.date, time })).code, 400);
+  }
+  assert.equal((await request('reschedule-booking', {
+    bookingId: editable.booking_id, email: editable.email, date: base.date, time: '08:00 PM',
+  })).code, 200);
+  hours.sun.closed = true;
+  branchRows[0][11] = JSON.stringify(hours);
+  assert.equal((await request('edit-booking', { ...editBody(), bookingNote: 'Retained existing appointment after hours change' })).code, 200,
+    'Changing branch hours does not prevent non-scheduling edits to existing appointments');
+  assert.equal((await request('manual-booking', manual)).code, 400, 'Closed days reject new appointments');
 });

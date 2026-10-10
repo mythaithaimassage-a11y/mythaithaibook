@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import { message, useTranslation, type TranslationMessage } from './localization';
+import { branchAppointmentTimes, type WeeklyBusinessHours } from '../lib/booking-options.js';
 
-type Branch = { id: number; name: string; active?: boolean };
-type Service = { id: number; name: string; active?: boolean; isRmt?: boolean };
+type Branch = { id: number; name: string; active?: boolean; businessHours?: WeeklyBusinessHours };
+type Service = { id: number; name: string; active?: boolean; isRmt?: boolean; duration?: number };
 type Therapist = { id: number; name: string; active?: boolean; rmtCertified?: boolean };
 type Customer = { name: string; email: string; phone: string };
 type Props = {
@@ -42,6 +43,9 @@ export default function QuickBooking(props: Props) {
   const dialog = useRef<HTMLDialogElement>(null);
   const submitting = useRef(false);
   const service = props.services.find((item) => String(item.id) === serviceId);
+  const branch = props.branches.find((item) => String(item.id) === branchId);
+  const availableTimes = date && branch ? branchAppointmentTimes(branch, date, service?.duration ?? 60) : [];
+  const validTime = availableTimes.includes(time) ? time : '';
   const couple = /couple/i.test(service?.name || '');
   const therapists = props.therapists.filter((item) => item.active !== false
     && props.isScheduled(item, branchId, date) && (!service?.isRmt || item.rmtCertified));
@@ -96,7 +100,7 @@ export default function QuickBooking(props: Props) {
       const response = await fetch('/api/booking?view=manual-booking', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ customerName: name, contact, ...(selectedCustomer ? { email: selectedCustomer.email, phone: selectedCustomer.phone } : {}), branchId, serviceId, therapistId: validTherapistId, therapistId2: couple ? validTherapistId2 : '', date, time, bookingNote }),
+        body: JSON.stringify({ customerName: name, contact, ...(selectedCustomer ? { email: selectedCustomer.email, phone: selectedCustomer.phone } : {}), branchId, serviceId, therapistId: validTherapistId, therapistId2: couple ? validTherapistId2 : '', date, time: validTime, bookingNote }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || 'Unable to save this appointment.');
@@ -176,15 +180,16 @@ export default function QuickBooking(props: Props) {
         {selectedCustomer?.email && selectedCustomer.phone && <p className="text-xs text-stone-500">{selectedCustomer.email} / {selectedCustomer.phone}</p>}
         <div className="grid grid-cols-2 gap-3">
           <label className="text-xs font-bold text-stone-700">{tr('Therapist')}<select required value={validTherapistId} onChange={(event) => setTherapistId(event.target.value)} className={inputClass}><option value="">{tr('Choose therapist')}</option>{therapists.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-          <label className="text-xs font-bold text-stone-700">{tr('Time')}<select required value={time} onChange={(event) => setTime(event.target.value)} className={inputClass}>{props.times.map((value) => <option key={value} value={value}>{formatTime(value)}</option>)}</select></label>
+          <label className="text-xs font-bold text-stone-700">{tr('Time')}<select required value={validTime} onChange={(event) => setTime(event.target.value)} className={inputClass}><option value="">{tr('Choose time')}</option>{availableTimes.map((value) => <option key={value} value={value}>{formatTime(value)}</option>)}</select></label>
           {couple && <label className="col-span-2 text-xs font-bold text-stone-700">{tr('Second therapist')}<select required value={validTherapistId2} onChange={(event) => setTherapistId2(event.target.value)} className={inputClass}><option value="">{tr('Choose a different therapist')}</option>{therapists.filter((item) => String(item.id) !== validTherapistId).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}
           <label className="text-xs font-bold text-stone-700">{tr('Date')}<input type="date" required value={date} onChange={(event) => setDate(event.target.value)} className={inputClass} /></label>
           <label className="text-xs font-bold text-stone-700">{tr('Branch')}<select required value={branchId} onChange={(event) => setBranchId(event.target.value)} className={inputClass}>{props.branches.filter((item) => item.active !== false).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
           <label className="col-span-2 text-xs font-bold text-stone-700">{tr('Service')}<select required value={serviceId} onChange={(event) => setServiceId(event.target.value)} className={inputClass}>{props.services.filter((item) => item.active !== false).map((item) => <option key={item.id} value={item.id}>{tr(item.name)}</option>)}</select></label>
         </div>
+        {availableTimes.length === 0 && <p role="alert" className="text-xs text-amber-800">{tr('No appointment times fit the business hours for this branch, date and service.')}</p>}
         {therapists.length === 0 && <p role="alert" className="text-xs text-amber-800">{tr('No eligible therapists are scheduled for this branch, date, and service. Choose different appointment details.')}</p>}
         {error && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-800">{tr(error)}</p>}
-        <div className="flex justify-end gap-2"><button type="button" disabled={saving} onClick={props.onClose} className="rounded-lg border border-stone-300 px-4 py-2 text-sm">{tr('Cancel')}</button><button type="submit" disabled={saving || !therapists.length} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-50">{tr(saving ? 'Saving...' : 'Save appointment')}</button></div>
+        <div className="flex justify-end gap-2"><button type="button" disabled={saving} onClick={props.onClose} className="rounded-lg border border-stone-300 px-4 py-2 text-sm">{tr('Cancel')}</button><button type="submit" disabled={saving || !therapists.length || !availableTimes.length} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-50">{tr(saving ? 'Saving...' : 'Save appointment')}</button></div>
       </form>
     </dialog>
   );

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import { useTranslation } from './localization';
 import { bookingTaxTreatment, HST_RATE, isCashPayment, preTaxSubtotal, taxOn } from '../lib/booking-tax.js';
+import { branchAppointmentTimes, type WeeklyBusinessHours } from '../lib/booking-options.js';
 
 export type EditableBooking = {
   id: string; customerName: string; email: string; phone: string; bookingNote?: string;
@@ -9,16 +10,18 @@ export type EditableBooking = {
   paymentOption: string; total: number; paidAmount: number; editVersion: string;
   receiptNumber?: string; paymentLocked?: boolean;
   manualBookingDiscount?: number; originalBookingTotal?: number;
+  durationMinutes?: number;
 };
 type Service = { id: number; name: string; price: number; duration: number; taxRate: number; active?: boolean; isRmt?: boolean };
 type Therapist = { id: number; name: string; active?: boolean; rmtCertified?: boolean };
 type Props = {
   booking: EditableBooking; services: Service[]; therapists: Therapist[];
   times: string[]; isScheduled: (therapist: Therapist, date: string) => boolean;
+  branch?: { businessHours?: WeeklyBusinessHours };
   onClose: () => void; onSaved: (booking: EditableBooking) => Promise<void>;
 };
 
-export default function EditBooking({ booking, services, therapists, times, isScheduled, onClose, onSaved }: Props) {
+export default function EditBooking({ booking, services, therapists, times, branch, isScheduled, onClose, onSaved }: Props) {
   const { translate: tr, formatTime } = useTranslation();
   const [form, setForm] = useState(() => ({
     customerName: booking.customerName, email: booking.email, phone: booking.phone,
@@ -41,6 +44,10 @@ export default function EditBooking({ booking, services, therapists, times, isSc
   const submitting = useRef(false);
   const locked = Boolean(booking.receiptNumber || booking.paymentLocked);
   const service = services.find((item) => String(item.id) === form.serviceId);
+  const availableTimes = branch && form.date ? branchAppointmentTimes(branch, form.date, service?.duration ?? booking.durationMinutes ?? 60) : times;
+  const preservingSchedule = form.date === booking.date && service?.name === booking.serviceName;
+  const timeChoices = [...new Set([...(locked || preservingSchedule || form.serviceId === '__existing__' && form.date === booking.date ? [booking.time] : []), ...availableTimes])];
+  const validTime = timeChoices.includes(form.time) ? form.time : '';
   const couple = /couple/i.test(service?.name || booking.serviceName) && (assigned.length > 0 || form.serviceId !== '__existing__');
   const eligible = therapists.filter((item) => item.active !== false && isScheduled(item, form.date) && (!service?.isRmt || item.rmtCertified));
   const choices = therapists.filter((item) => eligible.includes(item) || assigned.includes(item));
@@ -107,7 +114,7 @@ export default function EditBooking({ booking, services, therapists, times, isSc
           <label className="text-xs font-semibold">{tr('Phone')}<input type="tel" maxLength={40} disabled={locked} value={form.phone} onChange={(event) => update('phone', event.target.value)} className={inputClass} /></label>
           <label className="text-xs font-semibold">{tr('Service')}<select required disabled={locked} value={form.serviceId} onChange={(event) => update('serviceId', event.target.value)} className={inputClass}><option value="">{tr('Choose service')}</option>{!services.some((item) => item.name === booking.serviceName) && <option value="__existing__">{tr(booking.serviceName)}</option>}{services.filter((item) => item.active !== false || item.name === booking.serviceName).map((item) => <option key={item.id} value={item.id}>{tr(item.name)}</option>)}</select></label>
           <label className="text-xs font-semibold">{tr('Date')}<input type="date" required disabled={locked} value={form.date} onChange={(event) => update('date', event.target.value)} className={inputClass} /></label>
-          <label className="text-xs font-semibold">{tr('Time')}<select required disabled={locked} value={form.time} onChange={(event) => update('time', event.target.value)} className={inputClass}>{[...new Set([form.time, ...times])].filter(Boolean).map((time) => <option key={time} value={time}>{formatTime(time)}</option>)}</select></label>
+          <label className="text-xs font-semibold">{tr('Time')}<select required disabled={locked} value={validTime} onChange={(event) => update('time', event.target.value)} className={inputClass}><option value="">{tr('Choose time')}</option>{timeChoices.map((time) => <option key={time} value={time}>{formatTime(time)}</option>)}</select></label>
           <label className="text-xs font-semibold">{tr('Therapist')}<select required value={therapist1} onChange={(event) => setTherapist1(event.target.value)} className={inputClass}><option value="">{tr('Choose therapist')}</option>{!choices.some((item) => item.name === therapist1) && therapist1 && <option value={therapist1}>{therapist1}</option>}{choices.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}</select></label>
           {couple && <label className="text-xs font-semibold">{tr('Second therapist')}<select required value={therapist2} onChange={(event) => setTherapist2(event.target.value)} className={inputClass}><option value="">{tr('Choose a different therapist')}</option>{choices.filter((item) => item.name !== therapist1).map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}</select></label>}
           <label className="text-xs font-semibold">{tr('Payment method')}<select required disabled={locked} value={form.paymentOption} onChange={(event) => update('paymentOption', event.target.value)} className={inputClass}>{[...new Set([form.paymentOption, 'Cash', 'Card', 'E-transfer', 'Other'])].map((value) => <option key={value} value={value}>{tr(value)}</option>)}</select></label>

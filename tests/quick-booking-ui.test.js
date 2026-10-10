@@ -6,7 +6,7 @@ import vm from 'node:vm';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import ts from 'typescript';
-import { AVAILABLE_TIMES } from '../lib/booking-options.js';
+import { AVAILABLE_TIMES, defaultBusinessHours } from '../lib/booking-options.js';
 import { validateBookingNote } from '../lib/booking-note.js';
 import { createTsLoader } from './helpers/load-ts-module.js';
 
@@ -233,6 +233,26 @@ test('an empty scheduled roster displays an explicit error and disables booking'
   assert.match(html, /<button type="submit" disabled=""/);
 });
 
+test('quick booking times reflect branch weekday hours, selected service duration and closed days', () => {
+  const businessHours = defaultBusinessHours();
+  businessHours.sun = { open: '08:15', close: '22:00', closed: false };
+  const changes = {
+    branches: [{ id: 2, name: 'Downtown', businessHours }],
+    services: [{ id: 1, name: 'Massage', duration: 90 }],
+  };
+  const extended = render(changes);
+  assert.match(extended, /value="08:15 AM"/);
+  assert.match(extended, /value="08:30 PM"/);
+  assert.doesNotMatch(extended, /value="08:45 PM"|value="09:00 PM"/);
+  businessHours.sun.closed = true;
+  const closed = render(changes);
+  assert.match(closed, /No appointment times fit the business hours/);
+  assert.match(closed, /<button type="submit" disabled=""/);
+  const longService = render({ services: [{ id: 1, name: 'Massage', duration: 120 }] });
+  assert.match(longService, /value="06:00 PM"/);
+  assert.doesNotMatch(longService, /value="06:15 PM"|value="07:00 PM"/);
+});
+
 test('calendar toolbar opens manual booking with search applied to both calendar surfaces', () => {
   const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
   for (const label of ['Search appointments', 'Calendar view', 'Calendar filters', 'Calendar settings', 'Quick Sale', 'Appointment', 'Blocked staff time', 'Create New Service']) {
@@ -285,7 +305,7 @@ test('receipts refresh booking records even after email failures without reconci
 test('shared internal booking note is wired to booking creation, staff views and therapist details', () => {
   const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
   const editor = readFileSync(new URL('../src/BookingNote.tsx', import.meta.url), 'utf8');
-  assert.match(source, /date, time, bookingNote/);
+  assert.match(source, /date, time: validTime, bookingNote/);
   assert.match(app, /b\.bookingNote/);
   assert.match(app, /event\.booking\?\.bookingNote/);
   assert.match(app, /selectedAppointment\.bookingNote/);

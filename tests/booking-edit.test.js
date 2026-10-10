@@ -11,9 +11,10 @@ test('booking edit validates explicit contacts, dates, appointment times and pre
   assert.equal(validateBookingEdit({ ...valid, email: '' }).email, '');
   assert.equal(validateBookingEdit({ ...valid, phone: '' }).phone, '');
   assert.equal(validateBookingEdit({ ...valid, total: '0', paidAmount: '0' }).total, 0);
+  assert.equal(validateBookingEdit({ ...valid, time: '09:45 AM' }).time, '09:45 AM', 'Branch-specific hours are checked by the API');
   for (const change of [null, [], { customerName: '' }, { customerName: 'x'.repeat(151) },
     { customerName: 'Client\nEmail: injected@example.com' }, { email: 'invalid' }, { phone: 'abc' },
-    { email: '', phone: '' }, { date: '2026-02-30' }, { date: '2026-2-1' }, { time: '09:45 AM' },
+    { email: '', phone: '' }, { date: '2026-02-30' }, { date: '2026-2-1' }, { time: '09:46 AM' },
     { total: '-1' }, { total: '1.001' }, { total: Infinity }, { paidAmount: '114' }, { total: '' },
     { paidAmount: null }, { bookingNote: undefined }, { bookingNote: 'x'.repeat(2001) }]) {
     assert.throws(() => validateBookingEdit(change === null || Array.isArray(change) ? change : { ...valid, ...change }),

@@ -12,7 +12,7 @@ import { createBookingHistoryStore } from '../lib/booking-history.js';
 import { syncWixCalendarBatch } from '../lib/wix-calendar.js';
 import { searchBookingCustomers } from '../lib/customer-search.js';
 import { sendGmailMessage } from '../lib/gmail.js';
-import { BOOKING_DEPOSIT_AMOUNT, validateBranchPaymentOptions, validateAppointmentTime } from '../lib/booking-options.js';
+import { BOOKING_DEPOSIT_AMOUNT, validateBranchPaymentOptions, validateAppointmentTime, validateBusinessHours, appointmentTimeMinutes } from '../lib/booking-options.js';
 import { validatePatientHistory, patientHistoryValues } from '../lib/patient-history.js';
 
 // Body parsing is done manually (see readRawBody/parseRequestBody below) so the Square
@@ -76,7 +76,7 @@ const DEFAULT_BUSINESS_PROFILE = {
   taxRegistrationNumber: '',
   photoUrl: '',
 };
-const BRANCH_FIELDS = ['ID', 'Name', 'Address', 'City', 'Phone', 'Active', 'Updated At', 'Collects Deposit', 'Allow Clinic Payment', 'Allow Deposit Payment', 'Allow Full Payment'];
+const BRANCH_FIELDS = ['ID', 'Name', 'Address', 'City', 'Phone', 'Active', 'Updated At', 'Collects Deposit', 'Allow Clinic Payment', 'Allow Deposit Payment', 'Allow Full Payment', 'Business Hours'];
 const DEFAULT_BRANCHES = [
   { id: 1, name: 'Mississauga Central', address: '4310 Sherwoodtowne Blvd', city: 'Mississauga, ON', phone: '+1 437 898 7424', active: true },
   { id: 2, name: 'Oakville Downtown', address: '123 Lakeshore Rd E', city: 'Oakville, ON', phone: '+1 437 898 7424', active: true },
@@ -1931,13 +1931,13 @@ async function ensureBranchesSheet(sheets) {
     ]);
     await sheets.spreadsheets.values.update({
       spreadsheetId,
-      range: 'Branches!A1:K1',
+      range: 'Branches!A1:L1',
       valueInputOption: 'RAW',
       requestBody: { values: [BRANCH_FIELDS] },
     });
     await sheets.spreadsheets.values.update({
       spreadsheetId,
-      range: `Branches!A2:K${seedRows.length + 1}`,
+      range: `Branches!A2:L${seedRows.length + 1}`,
       valueInputOption: 'RAW',
       requestBody: { values: seedRows },
     });
@@ -1970,6 +1970,7 @@ function validateBranches(input) {
       allowClinicPayment: paymentOptions.clinic,
       allowDepositPayment: paymentOptions.deposit,
       allowFullPayment: paymentOptions.full,
+      businessHours: validateBusinessHours(branch?.businessHours),
     };
   });
 }
@@ -1978,7 +1979,7 @@ async function getBranches(sheets) {
   await ensureBranchesSheet(sheets);
   const result = await sheets.spreadsheets.values.get({
     spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-    range: 'Branches!A2:K',
+    range: 'Branches!A2:L',
   });
   const rows = result.data.values || [];
   if (rows.length === 0) return DEFAULT_BRANCHES;
@@ -1995,6 +1996,7 @@ async function getBranches(sheets) {
       allowClinicPayment: row[8] === undefined || row[8] === '' ? String(row[7] ?? 'TRUE').toUpperCase() === 'FALSE' : String(row[8]).toUpperCase() === 'TRUE',
       allowDepositPayment: row[9] === undefined || row[9] === '' ? String(row[7] ?? 'TRUE').toUpperCase() !== 'FALSE' : String(row[9]).toUpperCase() === 'TRUE',
       allowFullPayment: row[10] === undefined || row[10] === '' ? String(row[7] ?? 'TRUE').toUpperCase() !== 'FALSE' : String(row[10]).toUpperCase() === 'TRUE',
+      businessHours: validateBusinessHours(row[11] ? JSON.parse(row[11]) : undefined),
     }));
 }
 
@@ -2005,18 +2007,19 @@ async function saveBranches(sheets, branches) {
   const rows = validated.map((branch) => [
     branch.id, branch.name, branch.address, branch.city, branch.phone, branch.active ? 'TRUE' : 'FALSE', new Date().toISOString(), branch.collectsDeposit === false ? 'FALSE' : 'TRUE',
     branch.allowClinicPayment ? 'TRUE' : 'FALSE', branch.allowDepositPayment ? 'TRUE' : 'FALSE', branch.allowFullPayment ? 'TRUE' : 'FALSE',
+    JSON.stringify(branch.businessHours),
   ]);
   await sheets.spreadsheets.values.update({
-    spreadsheetId, range: 'Branches!A1:K1', valueInputOption: 'RAW',
+    spreadsheetId, range: 'Branches!A1:L1', valueInputOption: 'RAW',
     requestBody: { values: [BRANCH_FIELDS] },
   });
   await sheets.spreadsheets.values.clear({
     spreadsheetId,
-    range: 'Branches!A2:K',
+    range: 'Branches!A2:L',
   });
   await sheets.spreadsheets.values.update({
     spreadsheetId,
-    range: `Branches!A2:K${rows.length + 1}`,
+    range: `Branches!A2:L${rows.length + 1}`,
     valueInputOption: 'RAW',
     requestBody: { values: rows },
   });
@@ -7288,6 +7291,7 @@ export default async function handler(req, res) {
       const eventId = row[16] || '';
       if (schedulingChanged) {
         if (req.body.serviceId === '__existing__' || service.active === false || branch.active === false) return res.status(400).json({ message: 'Choose an active service with a valid duration.' });
+        validateAppointmentTime(edited.time, branch, edited.date, durationMinutes);
         if (therapistNames.some((name) => !therapists.some((item) => item.name === name && item.active !== false &&
             isTherapistScheduledAtBranch(item, branch.id, edited.date) && (!service.isRmt || item.rmtCertified)))) {
           return res.status(400).json({ message: 'Choose a scheduled, qualified therapist (two different therapists for a couple session).' });
@@ -8087,7 +8091,7 @@ export default async function handler(req, res) {
         return res.status(400).json({ message: 'Choose a valid new date and time.' });
       }
       try {
-        validateAppointmentTime(newTime);
+        appointmentTimeMinutes(newTime.replace(/^(\d):/, '0$1:'));
       } catch (error) {
         return res.status(400).json({ message: error.message });
       }
@@ -8117,6 +8121,10 @@ export default async function handler(req, res) {
         return res.status(400).json({ message: error.message });
       }
       const durationMinutes = Number(row[12]) || 60;
+      const branch = (await getBranches(sheets)).find((item) => item.name === row[4] || item.address === row[4]);
+      if (!branch || branch.active === false) return res.status(400).json({ message: 'Choose an active branch.' });
+      const normalizedTime = newTime.replace(/^(\d):/, '0$1:');
+      validateAppointmentTime(normalizedTime, branch, newDate, durationMinutes);
       const newEndDateTime = addMinutes(newStartDateTime, durationMinutes);
       const calendarId = row[15] || PRIMARY_CALENDAR_ID;
       const calendarEventId = row[16] || '';
@@ -8372,12 +8380,13 @@ export default async function handler(req, res) {
       };
     }
     try {
-      validateAppointmentTime(payload.time);
+      appointmentTimeMinutes(payload.time);
     } catch (error) {
       return res.status(400).json({ message: error.message });
     }
     const selectedBranch = (await getBranches(sheets)).find((branch) => branch.active !== false && branch.name === payload.branchName);
     if (!selectedBranch) return res.status(400).json({ message: 'Choose an active branch.' });
+    validateAppointmentTime(payload.time, selectedBranch, payload.date, Number(payload.durationMinutes));
     if (dashboardSession && dashboardSession.role !== 'owner' && !dashboardSession.branchIds.includes(String(selectedBranch.id))) {
       return res.status(403).json({ message: 'You can only create bookings for your assigned branches.' });
     }

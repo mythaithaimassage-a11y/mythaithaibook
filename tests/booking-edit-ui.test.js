@@ -3,6 +3,7 @@ import test from 'node:test';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createTsLoader } from './helpers/load-ts-module.js';
+import { defaultBusinessHours } from '../lib/booking-options.js';
 
 const editorPath = new URL('../src/EditBooking.tsx', import.meta.url).pathname;
 const load = createTsLoader();
@@ -35,6 +36,19 @@ test('editor translates its fields while preserving contacts, notes and canonica
   assert.match(locked, /disabled=""[^>]*value="Customer name"/);
   assert.doesNotMatch(locked, /textarea[^>]* disabled=""/);
   assert.match(render('en', { services: [] }), /value="__existing__" selected="">Massage/);
+});
+
+test('editor offers branch-specific times and preserves existing schedules after business hours change', () => {
+  const businessHours = defaultBusinessHours();
+  businessHours.tue = { open: '08:00', close: '22:00', closed: false };
+  const custom = render('en', { branch: { businessHours }, services: [{ ...props.services[0], duration: 90 }] });
+  assert.match(custom, /value="08:00 AM"/);
+  assert.match(custom, /value="08:30 PM"/);
+  assert.doesNotMatch(custom, /value="08:45 PM"/);
+  businessHours.tue.closed = true;
+  const retained = render('en', { branch: { businessHours } });
+  assert.match(retained, /value="10:00 AM" selected=""/);
+  assert.doesNotMatch(retained, /value="11:00 AM"/);
 });
 
 test('editor submits changes with a version, prevents duplicate saves and reports failed writes', async () => {
