@@ -98,7 +98,7 @@ test('maps exactly the existing booking schema and preserves exported details wi
   const { bookings, summary } = prepare([{}]);
   assert.equal(summary.validBookings, 1);
   const booking = bookings[0];
-  assert.deepEqual(Object.keys(booking).sort(), BOOKING_TABLE_FIELDS.map(({ name }) => name).sort());
+  assert.deepEqual(Object.keys(booking).sort(), BOOKING_TABLE_FIELDS.filter(({ name }) => name !== 'receipt_manual_discount').map(({ name }) => name).sort());
   assert.equal(booking.branch_name, 'Mississauga Central');
   assert.equal(booking.branch_address, '');
   assert.equal(booking.email, 'client@example.com');
@@ -267,7 +267,7 @@ test('uses only the configured existing table with native types and leaves exist
   assert.equal(options.types.records[0].total, 'FLOAT64');
   assert.equal(options.types.records[0].duration_minutes, 'INT64');
   const parameter = BigQuery.valueToQueryParameter_(options.params.records, options.types.records);
-  assert.equal(parameter.parameterType.arrayType.structTypes.length, 26);
+  assert.equal(parameter.parameterType.arrayType.structTypes.length, BOOKING_TABLE_FIELDS.length);
   assert.ok(Buffer.byteLength(JSON.stringify(parameter)) < MAX_WIX_QUERY_BYTES);
 });
 

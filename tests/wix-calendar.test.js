@@ -3,6 +3,7 @@ import test from 'node:test';
 import { Readable } from 'node:stream';
 import { BigQuery } from '@google-cloud/bigquery';
 import { google } from 'googleapis';
+import { BOOKING_TABLE_FIELDS } from '../lib/booking-schema.js';
 import { isTransientCalendarError, retryCalendarOperation, syncWixCalendarBatch, validateWixSyncDateRange, wixCalendarEvent } from '../lib/wix-calendar.js';
 import { createDashboardChallengeStore, handleDashboardChallengeQuery, readDashboardOtp } from './helpers/dashboard-auth.js';
 
@@ -446,7 +447,7 @@ test('Calendar backfill endpoint enforces owner authentication, method, origin a
     return f.bigquery.query(args);
   });
   t.mock.method(BigQuery.prototype, 'dataset', () => ({
-    exists: async () => [true], table: () => ({ exists: async () => [true] }),
+    exists: async () => [true], table: () => ({ exists: async () => [true], getMetadata: async () => [{ schema: { fields: BOOKING_TABLE_FIELDS } }] }),
   }));
   const blocks = [
     ['central-block', 'business', 'Mississauga Central', '', booking.date, '09:00', '10:00', 'Closed'],

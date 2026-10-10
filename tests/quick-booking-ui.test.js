@@ -98,3 +98,18 @@ test('daily calendar, agenda and appointment details display the shared start-en
   assert.match(app, /\['Appointment time', selectedCalendarEvent\.timeRange \|\| selectedCalendarEvent\.localTime\]/);
   assert.match(app, /const hourEvents = visibleCalendarEvents\.filter\(\(event\) => Number\(event\.localTime/);
 });
+
+test('optional dollar discount is sent only by receipt issuance and displayed in screen and print receipts', () => {
+  const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  assert.match(app, /Manual discount \(\$\) — optional/);
+  assert.match(app, /type="number" min="0" step="0\.01" placeholder="0\.00"/);
+  const issueReceipt = app.slice(app.indexOf('const issueReceipt ='), app.indexOf('const markBookingPaid ='));
+  assert.match(issueReceipt, /manualDiscount: manualReceiptDiscount/);
+  assert.match(issueReceipt, /!selectedCalendarEvent\?\.booking\?\.receiptNumber/);
+  const deleteBooking = app.slice(app.indexOf('const deleteBooking ='), app.indexOf('const issueReceipt ='));
+  assert.doesNotMatch(deleteBooking, /manualDiscount/);
+  assert.match(app, /setManualReceiptDiscount\(''\)/);
+  assert.match(app, /issuedReceipt\.receipt\.manualDiscount\.toFixed\(2\)/);
+  assert.match(app, /insertAdjacentHTML\('beforebegin', `<div class="row"><span>Manual discount/);
+  assert.match(app, /no automatic refund has been issued/);
+});

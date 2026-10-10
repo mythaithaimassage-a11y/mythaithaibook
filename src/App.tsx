@@ -4252,6 +4252,7 @@ function AdminPortal({
   const [linkEventForm, setLinkEventForm] = useState(null);
   const [receiptError, setReceiptError] = useState('');
   const [receiptNotice, setReceiptNotice] = useState('');
+  const [manualReceiptDiscount, setManualReceiptDiscount] = useState('');
   const [therapistReassignTo, setTherapistReassignTo] = useState('');
   const [isReassigningTherapist, setIsReassigningTherapist] = useState(false);
   const [appointmentNotes, setAppointmentNotes] = useState([]);
@@ -4429,6 +4430,7 @@ function AdminPortal({
   // Clear any half-made therapist choice when a different appointment is opened.
   useEffect(() => {
     setTherapistReassignTo('');
+    setManualReceiptDiscount('');
   }, [selectedCalendarEvent?.booking?.id]);
 
   const loadGoogleAdsReport = async (startDate = googleAdsStartDate, endDate = googleAdsEndDate) => {
@@ -5228,7 +5230,7 @@ function AdminPortal({
       const response = await fetch('/api/booking?view=issue-receipt', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ bookingId }),
+        body: JSON.stringify({ bookingId, ...(!selectedCalendarEvent?.booking?.receiptNumber ? { manualDiscount: manualReceiptDiscount } : {}) }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
@@ -5626,6 +5628,12 @@ function AdminPortal({
     const { receipt, booking: originalBooking, businessProfile: profile } = data;
     const booking = { ...originalBooking, paymentOption: `${originalBooking.paymentOption}${receipt.packageUsage ? ` — ${receipt.packageUsage.description} Allocated session value $${receipt.packageUsage.allocatedTotal.toFixed(2)}; new payment $0.00.` : ''}` };
     popup.document.write(`<!doctype html><html><head><title>Receipt ${safe(receipt.number)}</title><meta charset="utf-8"><style>body{font:15px Arial,sans-serif;color:#17231e;max-width:760px;margin:48px auto;padding:32px}header{display:flex;justify-content:space-between;border-bottom:3px solid #087765;padding-bottom:20px}h1{font-size:28px;margin:0}small,.muted{color:#65716b}.row{display:flex;justify-content:space-between;padding:12px 0;border-bottom:1px solid #e5ebe7}.total{font-size:20px;font-weight:bold;border-top:2px solid #087765;margin-top:18px;padding-top:18px}.balance{margin-top:20px;padding:12px;background:#eff6f3;border-radius:8px}button{margin:24px 0;padding:10px 18px;background:#073d32;color:white;border:0;border-radius:8px}@media print{button{display:none}body{margin:0 auto}}</style></head><body><header><div><h1>${safe(profile.businessName)}</h1><p class="muted">${safe(profile.legalName)}</p><p class="muted">${safe(profile.address)}</p><p class="muted">${safe(profile.phone)} · ${safe(profile.email)}</p>${profile.taxRegistrationNumber ? `<p class="muted">GST/HST No.: ${safe(profile.taxRegistrationNumber)}</p>` : ''}</div><h1>RECEIPT</h1></header><p><strong>Receipt No.</strong> ${safe(receipt.number)}<br><strong>Issued</strong> ${safe(receipt.issuedAt.slice(0, 10))}</p><p><strong>Client</strong> ${safe(booking.customerName)}<br>${safe(booking.email)}<br>${safe(booking.phone)}</p><p><strong>Service date</strong> ${safe(booking.date)}<br><strong>Payment method</strong> ${safe(booking.paymentOption)}</p><div class="row"><strong>${safe(booking.serviceName)}</strong><span>$${receipt.subtotal.toFixed(2)}</span></div>${receipt.membershipDiscountAmount > 0 ? `<div class="row"><span>${safe(receipt.membershipDiscountLabel)} (${receipt.membershipDiscountPercent}%)</span><span>-$${receipt.membershipDiscountAmount.toFixed(2)}</span></div>` : ''}${receipt.loyaltyDiscount > 0 ? `<div class="row"><span>Loyalty discount · ${receipt.pointsRedeemed.toLocaleString()} points</span><span>-$${receipt.loyaltyDiscount.toFixed(2)}</span></div>` : ''}<div class="row"><span>${safe(receipt.taxLabel)}</span><span>$${receipt.tax.toFixed(2)}</span></div><div class="row total"><span>Total paid</span><span>$${receipt.total.toFixed(2)}</span></div>${receipt.loyaltyMember ? `<p class="balance"><strong>Loyalty points balance:</strong> ${receipt.pointsBalance.toLocaleString()}</p>` : ''}<p class="muted" style="text-align:center;margin-top:64px">Thank you for choosing ${safe(profile.businessName)}.</p><button onclick="window.print()">Print receipt</button></body></html>`);
+    if (receipt.manualDiscount > 0) {
+      popup.document.querySelector('.total')?.insertAdjacentHTML('beforebegin', `<div class="row"><span>Manual discount</span><span>-$${receipt.manualDiscount.toFixed(2)}</span></div>`);
+    }
+    if (receipt.overpaymentAmount > 0) {
+      popup.document.querySelector('.total')?.insertAdjacentHTML('afterend', `<p class="balance">Recorded payment: $${receipt.recordedPaidAmount.toFixed(2)}. Excess recorded payment: $${receipt.overpaymentAmount.toFixed(2)}. Reconcile manually; no automatic refund has been issued.</p>`);
+    }
     popup.document.close();
     popup.focus();
   };
@@ -8204,12 +8212,21 @@ function AdminPortal({
                         <div className="flex items-center justify-between"><div><p className="text-[10px] font-bold uppercase tracking-wider text-emerald-800">Receipt issued</p><p className="mt-1 font-mono text-sm font-bold text-slate-900">{issuedReceipt.receipt.number}</p></div><CheckCircle2 className="h-5 w-5 text-emerald-700" /></div>
                         {issuedReceipt.receipt.membershipDiscountAmount > 0 && <div className="mt-3 flex justify-between border-t border-emerald-100 pt-3 text-sm"><span className="text-slate-600">{issuedReceipt.receipt.membershipDiscountLabel} ({issuedReceipt.receipt.membershipDiscountPercent}%)</span><span>-${issuedReceipt.receipt.membershipDiscountAmount.toFixed(2)}</span></div>}
                         {issuedReceipt.receipt.loyaltyDiscount > 0 && <div className="mt-3 flex justify-between border-t border-emerald-100 pt-3 text-sm"><span className="text-slate-600">Loyalty discount · {issuedReceipt.receipt.pointsRedeemed.toLocaleString()} points</span><span>-${issuedReceipt.receipt.loyaltyDiscount.toFixed(2)}</span></div>}
+                        {issuedReceipt.receipt.manualDiscount > 0 && <div className="mt-3 flex justify-between border-t border-emerald-100 pt-3 text-sm"><span className="text-slate-600">Manual discount</span><span>-${issuedReceipt.receipt.manualDiscount.toFixed(2)}</span></div>}
                         <div className="mt-3 flex justify-between border-t border-emerald-100 pt-3 text-sm"><span className="text-slate-600">{issuedReceipt.receipt.taxLabel}</span><span>${issuedReceipt.receipt.tax.toFixed(2)}</span></div>
                         <div className="mt-2 flex justify-between text-sm font-bold"><span>Total paid</span><span>${issuedReceipt.receipt.total.toFixed(2)}</span></div>
+                        {issuedReceipt.receipt.overpaymentAmount > 0 && <p role="status" className="mt-3 rounded-lg bg-amber-50 p-3 text-xs text-amber-900">Recorded payment: ${issuedReceipt.receipt.recordedPaidAmount.toFixed(2)}. Excess recorded payment: ${issuedReceipt.receipt.overpaymentAmount.toFixed(2)}. Reconcile manually; no automatic refund has been issued.</p>}
                         {issuedReceipt.receipt.packageUsage && <p className="mt-3 rounded-lg bg-emerald-100 p-3 text-xs text-emerald-950">{issuedReceipt.receipt.packageUsage.description} Allocated prepaid value: ${issuedReceipt.receipt.packageUsage.allocatedTotal.toFixed(2)}. New payment: $0.00.</p>}
                         <p className="mt-3 text-xs text-emerald-900">Loyalty balance: {issuedReceipt.receipt.pointsBalance.toLocaleString()} points.</p>
                         <p className="mt-3 text-xs text-emerald-900">Receipt email sent to {issuedReceipt.booking.email}.</p>
                       </div>
+                    )}
+                    {!issuedReceipt && !needsDetails && (
+                      <label className="block rounded-xl border border-slate-200 p-4 text-xs font-semibold text-slate-600">
+                        Manual discount ($) — optional
+                        <input type="number" min="0" step="0.01" placeholder="0.00" value={booking.receiptNumber ? booking.receiptManualDiscount || 0 : manualReceiptDiscount} disabled={isIssuingReceipt || Boolean(booking.receiptNumber) || /prepaid package redemption/i.test(booking.paymentOption || '')} onChange={(event) => setManualReceiptDiscount(event.target.value)} className="mt-2 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-50" />
+                        <span className="mt-2 block font-normal leading-5">{booking.receiptNumber ? 'An issued receipt keeps its original discount.' : /prepaid package redemption/i.test(booking.paymentOption || '') ? 'Verified prepaid package allocations cannot be discounted.' : 'Deducted before HST, after membership and loyalty discounts. Leave blank for no discount. Recorded payments are unchanged; reconcile any excess manually.'}</span>
+                      </label>
                     )}
                     {!issuedReceipt && !needsDetails && (
                       <div className="flex flex-col-reverse gap-3 border-t border-slate-100 pt-4 sm:flex-row sm:items-center sm:justify-between">

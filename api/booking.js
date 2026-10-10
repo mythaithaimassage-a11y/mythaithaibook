@@ -237,6 +237,15 @@ async function ensureBookingsTable(bigquery) {
           const [existsNow] = await table.exists();
           if (!existsNow) throw error;
         }
+      } else {
+        const [metadata] = await table.getMetadata();
+        const fields = metadata.schema?.fields || [];
+        const discountField = fields.find((field) => field.name === 'receipt_manual_discount');
+        if (!discountField) {
+          await table.setMetadata({ schema: { fields: [...fields, { name: 'receipt_manual_discount', type: 'FLOAT64', mode: 'NULLABLE' }] } });
+        } else if (!['FLOAT64', 'FLOAT'].includes(discountField.type) || ['REPEATED', 'REQUIRED'].includes(discountField.mode)) {
+          throw new Error('The receipt_manual_discount booking column must be a nullable FLOAT64.');
+        }
       }
     })().catch((error) => {
       ensureBookingsTablePromise = null;
@@ -247,7 +256,7 @@ async function ensureBookingsTable(bigquery) {
 }
 
 // Converts a BigQuery result row (a plain object keyed by column name) into
-// the legacy 26-element positional array format (row[0]..row[25]) that every
+// the positional array format, preserving the original booking column indices.
 // existing booking-reading code path in this file already expects.
 function bookingRowArrayFromRecord(record) {
   return BOOKING_TABLE_FIELDS.map(({ name, type }) => {
@@ -257,7 +266,7 @@ function bookingRowArrayFromRecord(record) {
   });
 }
 
-// Maps a legacy 26-element positional row array (row[0]..row[25]) back into
+// Maps a positional booking row array back into
 // a { column_name: value } object suitable for a parameterized BigQuery query.
 function bookingParamsFromRowArray(rowArray) {
   const params = {};
@@ -3759,16 +3768,20 @@ async function sendReceiptEmail(gmail, booking, receipt, businessProfile) {
       ? [`${receipt.membershipDiscountLabel} (${receipt.membershipDiscountPercent}%): -$${receipt.membershipDiscountAmount.toFixed(2)}`]
       : []),
     ...(receipt.loyaltyDiscount > 0 ? [`Loyalty discount: -$${receipt.loyaltyDiscount.toFixed(2)}`, `Points redeemed: ${receipt.pointsRedeemed.toLocaleString()}`] : []),
+    ...(receipt.manualDiscount > 0 ? [`Manual discount: -$${receipt.manualDiscount.toFixed(2)}`] : []),
     `${receipt.taxLabel}: $${receipt.tax.toFixed(2)}`,
     `Total paid: $${receipt.total.toFixed(2)}`,
+    ...(receipt.overpaymentAmount > 0 ? [`Recorded payment: $${receipt.recordedPaidAmount.toFixed(2)}`, `Excess recorded payment: $${receipt.overpaymentAmount.toFixed(2)}. Reconcile with the clinic; no automatic refund has been issued.`] : []),
     ...(receipt.packageUsage ? [receipt.packageUsage.description, `Allocated prepaid session value: $${receipt.packageUsage.allocatedTotal.toFixed(2)}; new payment collected: $0.00.`] : []),
     ...(receipt.loyaltyMember ? [`Loyalty points balance: ${receipt.pointsBalance.toLocaleString()} points`] : []),
     '',
     'Thank you for choosing us.',
   ].join('\n');
-  const loyaltyRows = receipt.loyaltyDiscount > 0
+  const loyaltyRows = (receipt.loyaltyDiscount > 0
     ? `<tr><td style="padding:8px 0;color:#64716b">Loyalty discount · ${receipt.pointsRedeemed.toLocaleString()} points</td><td align="right" style="padding:8px 0">-$${receipt.loyaltyDiscount.toFixed(2)}</td></tr>`
-    : '';
+    : '') + (receipt.manualDiscount > 0
+      ? `<tr><td style="padding:8px 0;color:#64716b">Manual discount</td><td align="right" style="padding:8px 0">-$${receipt.manualDiscount.toFixed(2)}</td></tr>`
+      : '');
   const membershipDiscountRow = receipt.membershipDiscountAmount > 0
     ? `<tr><td style="padding:8px 0;color:#64716b">${escapeHtml(receipt.membershipDiscountLabel)} (${receipt.membershipDiscountPercent}%)</td><td align="right" style="padding:8px 0">-$${receipt.membershipDiscountAmount.toFixed(2)}</td></tr>`
     : '';
@@ -3777,7 +3790,9 @@ async function sendReceiptEmail(gmail, booking, receipt, businessProfile) {
     : '';
   const loyaltyBalance = (receipt.loyaltyMember
     ? `<p style="margin:18px 0 0;padding:12px;background:#eff6f3;border-radius:8px;font-size:13px"><strong>Loyalty balance:</strong> ${receipt.pointsBalance.toLocaleString()} points</p>`
-    : '') + packageBalance;
+    : '') + packageBalance + (receipt.overpaymentAmount > 0
+      ? `<p style="margin:18px 0 0;padding:12px;background:#fff7ed;border-radius:8px;font-size:13px">Recorded payment: $${receipt.recordedPaidAmount.toFixed(2)}. Excess recorded payment: $${receipt.overpaymentAmount.toFixed(2)}. Reconcile with the clinic; no automatic refund has been issued.</p>`
+      : '');
   const html = `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Receipt ${escapeHtml(receipt.number)}</title></head><body style="margin:0;background:#f3f5f4;padding:28px 12px;font-family:Arial,Helvetica,sans-serif;color:#18251f"><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td align="center"><table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width:600px;width:100%;background:#fff;border:1px solid #e2e9e5;border-radius:14px;overflow:hidden"><tr><td style="padding:28px 32px;background:#073d32;color:#fff"><p style="margin:0 0 8px;font-size:12px;letter-spacing:2px">${escapeHtml(businessProfile.businessName).toUpperCase()}</p><h1 style="margin:0;font-size:25px">Payment receipt</h1></td></tr><tr><td style="padding:26px 32px"><p style="margin:0 0 6px;font-weight:bold">${escapeHtml(businessProfile.legalName || businessProfile.businessName)}</p><p style="margin:0 0 4px;color:#66736d">${escapeHtml(businessProfile.address)}</p><p style="margin:0 0 4px;color:#66736d">${escapeHtml(businessProfile.phone)} · ${escapeHtml(businessProfile.email)}</p>${businessProfile.taxRegistrationNumber ? `<p style="margin:0 0 20px;color:#66736d">GST/HST No.: ${escapeHtml(businessProfile.taxRegistrationNumber)}</p>` : '<div style="height:20px"></div>'}<p style="margin:0 0 6px"><strong>Receipt No.</strong> ${escapeHtml(receipt.number)}</p><p style="margin:0 0 22px;color:#66736d">Issued ${escapeHtml(receipt.issuedAt.slice(0, 10))}</p><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse"><tr><td style="padding:10px 0;border-bottom:1px solid #e6ebe8;color:#64716b">Client</td><td align="right" style="padding:10px 0;border-bottom:1px solid #e6ebe8;font-weight:bold">${escapeHtml(booking.customerName)}</td></tr><tr><td style="padding:10px 0;border-bottom:1px solid #e6ebe8;color:#64716b">Email</td><td align="right" style="padding:10px 0;border-bottom:1px solid #e6ebe8">${escapeHtml(booking.email)}</td></tr><tr><td style="padding:10px 0;border-bottom:1px solid #e6ebe8;color:#64716b">Service</td><td align="right" style="padding:10px 0;border-bottom:1px solid #e6ebe8">${escapeHtml(booking.serviceName)}</td></tr><tr><td style="padding:10px 0;border-bottom:1px solid #e6ebe8;color:#64716b">Service date</td><td align="right" style="padding:10px 0;border-bottom:1px solid #e6ebe8">${escapeHtml(booking.date)}</td></tr><tr><td style="padding:10px 0;color:#64716b">Payment method</td><td align="right" style="padding:10px 0">${escapeHtml(booking.paymentOption)}</td></tr></table><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-top:24px;border-top:2px solid #087765"><tr><td style="padding:10px 0;color:#64716b">Subtotal</td><td align="right" style="padding:10px 0">$${receipt.subtotal.toFixed(2)}</td></tr>${membershipDiscountRow}${loyaltyRows}<tr><td style="padding:8px 0;color:#64716b">${escapeHtml(receipt.taxLabel)}</td><td align="right" style="padding:8px 0">$${receipt.tax.toFixed(2)}</td></tr><tr><td style="padding:14px 0;border-top:1px solid #d8e2dc;font-size:18px;font-weight:bold">Total paid</td><td align="right" style="padding:14px 0;border-top:1px solid #d8e2dc;font-size:18px;font-weight:bold">$${receipt.total.toFixed(2)}</td></tr></table>${loyaltyBalance}<p style="margin:24px 0 0;text-align:center;color:#64716b">Thank you for choosing ${escapeHtml(businessProfile.businessName)}.</p></td></tr></table></td></tr></table></body></html>`;
   const boundary = `receipt_${crypto.randomBytes(12).toString('hex')}`;
   const encode = (value) => Buffer.from(value).toString('base64').match(/.{1,76}/g).join('\r\n');
@@ -4532,7 +4547,7 @@ export default async function handler(req, res) {
       }
       const counts = await importWixBookings(getBigQueryClient(), prepared.bookings, {
         projectId: BIGQUERY_PROJECT_ID, datasetId: BIGQUERY_DATASET_ID,
-        tableId: BIGQUERY_BOOKINGS_TABLE, fields: BOOKING_TABLE_FIELDS, reviewedPaid: true,
+        tableId: BIGQUERY_BOOKINGS_TABLE, fields: BOOKING_TABLE_FIELDS.filter((field) => field.name !== 'receipt_manual_discount'), reviewedPaid: true,
       });
       let calendarSync;
       try {
@@ -6915,6 +6930,7 @@ export default async function handler(req, res) {
                   durationMinutes: Number(bookingRow[12]) || 0,
                   receiptNumber: bookingRow[18] || '',
                   receiptEmailStatus: bookingRow[20] || '',
+                  receiptManualDiscount: Number(bookingRow[26]) || 0,
                   status: bookingRow[24] || '',
                   statusNotes: bookingRow[25] || '',
                 } : null;
@@ -6976,7 +6992,7 @@ export default async function handler(req, res) {
                 }
 
                 const calendarBooking = dashboardSession?.role === 'branch_receptionist'
-                  ? { ...booking, paymentOption: '', paidAmount: 0, total: 0, receiptNumber: '', receiptEmailStatus: '' }
+                  ? { ...booking, paymentOption: '', paidAmount: 0, total: 0, receiptNumber: '', receiptEmailStatus: '', receiptManualDiscount: 0 }
                   : booking;
                 events.push({
                   id: event.id,
@@ -7379,6 +7395,16 @@ export default async function handler(req, res) {
       if (rowIndex < 0) return res.status(404).json({ message: 'Booking was not found' });
 
       const row = rows[rowIndex];
+      const discountInput = req.body?.manualDiscount;
+      const hasDiscountInput = discountInput !== undefined;
+      const discountText = discountInput === '' ? '0' : String(discountInput ?? '');
+      if (hasDiscountInput && (!['string', 'number'].includes(typeof discountInput) || !/^\d+(\.\d{1,2})?$/.test(discountText) || !Number.isFinite(Number(discountText)))) {
+        return res.status(400).json({ message: 'Enter a non-negative manual discount in dollars, with at most two decimal places.' });
+      }
+      const manualDiscount = row[18] ? Number(row[26]) || 0 : hasDiscountInput ? Number(discountText) : 0;
+      if (row[18] && hasDiscountInput && Number(discountText) !== manualDiscount) {
+        return res.status(409).json({ message: 'This receipt has already been created. Its manual discount cannot be changed.' });
+      }
       const booking = {
         id: row[0] || '',
         customerName: row[1] || '',
@@ -7394,6 +7420,7 @@ export default async function handler(req, res) {
         total: Number(row[11]) || 0,
       };
       const packageUsage = packageReceiptDetails(row[14]);
+      if (packageUsage && manualDiscount > 0) return res.status(409).json({ message: 'Manual discounts cannot change a verified prepaid package allocation.' });
       if (historicalPackageVisit(row[0], row[5], row[14]) && !packageUsage) {
         return res.status(409).json({ message: 'Register/verify this customer package and link the visit in Package tracking before issuing its receipt.' });
       }
@@ -7442,7 +7469,10 @@ export default async function handler(req, res) {
         return res.status(409).json({ message: 'The loyalty redemption exceeds this receipt subtotal. Adjust the redemption before issuing this receipt.' });
       }
       const subtotal = Math.round((discountedSubtotal + membershipDiscountAmount) * 100) / 100;
-      const receiptSubtotal = Math.round((discountedSubtotal - loyaltyDiscount) * 100) / 100;
+      if (manualDiscount > Math.round((discountedSubtotal - loyaltyDiscount) * 100) / 100) {
+        return res.status(400).json({ message: 'The manual discount cannot exceed the subtotal remaining after membership and loyalty discounts.' });
+      }
+      const receiptSubtotal = Math.round((discountedSubtotal - loyaltyDiscount - manualDiscount) * 100) / 100;
       const tax = packageUsage ? packageUsage.allocatedTax : isTaxExempt ? 0 : Math.round(receiptSubtotal * 0.13 * 100) / 100;
       const receipt = {
         number: row[18] || `MTT-${new Date().getFullYear()}-${String(Math.floor(100000 + Math.random() * 900000))}`,
@@ -7459,6 +7489,9 @@ export default async function handler(req, res) {
             ? 'Silver corporate discount'
             : 'Membership discount',
         loyaltyDiscount,
+        manualDiscount,
+        recordedPaidAmount: booking.paidAmount,
+        overpaymentAmount: manualDiscount > 0 ? Math.max(0, Math.round((booking.paidAmount - receiptSubtotal - tax) * 100) / 100) : 0,
         pointsRedeemed,
         pointsBalance,
         loyaltyMember,
@@ -7468,6 +7501,7 @@ export default async function handler(req, res) {
         receiptNumber: receipt.number,
         receiptIssuedAt: receipt.issuedAt,
         receiptEmailStatus: row[20] || 'pending',
+        receiptManualDiscount: manualDiscount,
       }, { notes: row[14], total: booking.total, paid: booking.paidAmount, receipt: row[18] });
       for (const { rowNumber } of linkedRedemptions) {
         await bqLoyaltyValuesUpdate(`LoyaltyLedger!J${rowNumber}`, [[receipt.number]]);

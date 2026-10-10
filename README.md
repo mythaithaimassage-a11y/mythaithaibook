@@ -103,6 +103,22 @@ times in the configured calendar time zone, for example **11:00 AM - 12:00 PM**.
 The range uses the actual Google Calendar event times, including appointments
 that finish after midnight.
 
+### Optional receipt discount
+
+Owners can enter **Manual discount ($) — optional** before issuing a receipt.
+Leave it blank for no discount. The dollar amount is subtracted after membership
+and loyalty discounts and before HST; tax-exempt services remain exempt.
+Discounts must be non-negative, have at most two decimal places, and not exceed
+the remaining subtotal. Verified prepaid package allocations cannot be discounted.
+
+The discount appears in the on-screen receipt, emailed receipt, and printout.
+It is saved in the nullable `receipt_manual_discount` BigQuery booking column,
+which is added automatically to an existing bookings table. Existing column
+indices and Wix import fields are preserved. Once a receipt is created, its
+discount is locked and reused on email retries. Booking totals and recorded
+payments are not changed; any excess recorded payment is shown for manual
+reconciliation, and no automatic refund is issued.
+
 Owners can also use **Add > Blocked staff time** and **Add > Create New Service**
 to open the existing availability and service managers with calendar defaults.
 These actions remain owner-only. The public booking workflow is unchanged.
