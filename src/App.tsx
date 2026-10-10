@@ -17,6 +17,7 @@ import PackageTracking from './PackageTracking';
 import ClearBookingHistory from './ClearBookingHistory';
 import WixCalendarSync from './WixCalendarSync';
 import QuickBooking from './QuickBooking';
+import BookingNote from './BookingNote';
 import { AVAILABLE_TIMES, BOOKING_DEPOSIT_AMOUNT, branchPaymentOptions, bookingCategories } from '../lib/booking-options.js';
 import { emptyPatientHistory } from '../lib/patient-history.js';
 import { anatomicalBodyParts } from '../lib/body-map.js';
@@ -2060,6 +2061,7 @@ function TherapistPortal() {
                     <span className="shrink-0 rounded bg-blue-100 px-1.5 py-0.5 text-[9px] font-bold text-blue-800">{appointment.time}</span>
                   </span>
                   <span className="mt-1 block truncate text-[10px] text-slate-500">{appointment.serviceName}</span>
+                  {appointment.bookingNote && <span className="mt-1 block whitespace-pre-wrap text-[10px] text-blue-800">Team note: {appointment.bookingNote}</span>}
                   <span className="mt-1 block text-[10px] text-slate-400">{appointment.date} · {appointment.branchName}</span>
                   {(appointment.hasReportedConditions || appointment.allergiesToOil) && <span className="mt-2 inline-flex rounded-full bg-rose-50 px-2 py-0.5 text-[9px] font-bold text-rose-700">Review patient notes</span>}
                 </span>
@@ -2180,7 +2182,7 @@ function TherapistPortal() {
               >
                 <span className="text-sm font-semibold text-slate-900">{appointment.date}<span className="ml-2 text-slate-500">{appointment.time}</span></span>
                 <span className="text-sm font-medium text-slate-800">{appointment.patientName}<span className="block text-xs font-normal text-slate-500">{appointment.branchName}</span></span>
-                <span className="text-sm text-slate-600">{appointment.serviceName}<span className="block text-xs text-slate-400">{appointment.durationMinutes || '—'} minutes</span></span>
+                <span className="text-sm text-slate-600">{appointment.serviceName}<span className="block text-xs text-slate-400">{appointment.durationMinutes || '—'} minutes</span>{appointment.bookingNote && <span className="mt-1 block whitespace-pre-wrap text-xs text-blue-800">Team note: {appointment.bookingNote}</span>}</span>
                 <span className="flex flex-wrap gap-1.5 sm:justify-end">
                   {appointment.hasReportedConditions && <span className="rounded-full bg-rose-100 px-2 py-1 text-[10px] font-semibold text-rose-800">Health flags</span>}
                   {appointment.allergiesToOil && <span className="rounded-full bg-amber-100 px-2 py-1 text-[10px] font-semibold text-amber-800">Oil allergy</span>}
@@ -2211,6 +2213,7 @@ function TherapistPortal() {
                     <BodyAreaMap value={selectedAppointment.bodyAreas} gender={selectedAppointment.gender} readOnly />
                   </div>
                   <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="rounded-xl bg-blue-50 p-4 text-xs"><div className="font-bold text-blue-900 mb-1">Shared internal booking note</div><p className="whitespace-pre-wrap leading-5 text-blue-800">{selectedAppointment.bookingNote || 'No internal booking note recorded.'}</p></div>
                     <div className="rounded-xl bg-stone-50 p-4 text-xs"><div className="font-bold text-stone-700 mb-1">Pain / discomfort notes</div><p className="leading-5 text-stone-600">{selectedAppointment.painAreas || 'No pain or discomfort notes recorded.'}</p></div>
                     <div className="rounded-xl bg-stone-50 p-4 text-xs"><div className="font-bold text-stone-700 mb-1">Patient notes</div><p className="leading-5 text-stone-600">{selectedAppointment.additionalDetails || 'No additional notes recorded.'}</p></div>
                     <div className="rounded-xl bg-stone-50 p-4 text-xs"><div className="font-bold text-stone-700 mb-1">Medical history flags</div><div className="flex flex-wrap gap-1.5">{selectedAppointment.conditionFlags?.length ? selectedAppointment.conditionFlags.map((flag) => <span key={flag} className="rounded-full bg-red-100 px-2 py-1 text-[10px] font-bold text-red-800">{flag}</span>) : <span className="text-stone-600">No conditions reported.</span>}</div></div>
@@ -4253,6 +4256,7 @@ function AdminPortal({
   const [receiptError, setReceiptError] = useState('');
   const [receiptNotice, setReceiptNotice] = useState('');
   const [manualReceiptDiscount, setManualReceiptDiscount] = useState('');
+  const [confirmReceiptReconciliation, setConfirmReceiptReconciliation] = useState(false);
   const [therapistReassignTo, setTherapistReassignTo] = useState('');
   const [isReassigningTherapist, setIsReassigningTherapist] = useState(false);
   const [appointmentNotes, setAppointmentNotes] = useState([]);
@@ -4431,6 +4435,7 @@ function AdminPortal({
   useEffect(() => {
     setTherapistReassignTo('');
     setManualReceiptDiscount('');
+    setConfirmReceiptReconciliation(false);
   }, [selectedCalendarEvent?.booking?.id]);
 
   const loadGoogleAdsReport = async (startDate = googleAdsStartDate, endDate = googleAdsEndDate) => {
@@ -5230,15 +5235,20 @@ function AdminPortal({
       const response = await fetch('/api/booking?view=issue-receipt', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ bookingId, ...(!selectedCalendarEvent?.booking?.receiptNumber ? { manualDiscount: manualReceiptDiscount } : {}) }),
+        body: JSON.stringify({ bookingId, ...(!selectedCalendarEvent?.booking?.receiptNumber ? { manualDiscount: manualReceiptDiscount, confirmReconciliation: confirmReceiptReconciliation } : {}) }),
       });
       const data = await response.json();
+      if (data.booking && data.receipt) {
+        setSelectedCalendarEvent((current) => current ? { ...current, booking: { ...current.booking, ...data.booking, receiptNumber: data.receipt.number, receiptManualDiscount: data.receipt.manualDiscount } } : current);
+        setBookings((current) => current.map((booking) => booking.id === bookingId ? { ...booking, ...data.booking } : booking));
+      }
       if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
       setIssuedReceipt(data);
       setReceiptNotice(data.alreadyIssued ? `Receipt ${data.receipt.number} was already emailed.` : `Receipt ${data.receipt.number} was emailed to ${data.booking.email}.`);
-      await loadCalendar();
+      await Promise.all([loadCalendar(), loadBookingsFromBackend()]);
     } catch (error) {
       setReceiptError(error.message || 'Unable to issue receipt');
+      await Promise.all([loadCalendar(), loadBookingsFromBackend()]);
     } finally {
       setIsIssuingReceipt(false);
     }
@@ -6186,6 +6196,7 @@ function AdminPortal({
                     <td className="p-3">
                       <div className="font-bold text-stone-800">{b.customerName}</div>
                       <div className="text-stone-400 text-[11px]">{b.phone}</div>
+                      {b.bookingNote && <div className="mt-1 whitespace-pre-wrap text-[11px] text-blue-800">Team note: {b.bookingNote}</div>}
                     </td>
                     <td className="p-3 font-medium text-stone-700">{b.serviceName}</td>
                     <td className="p-3 text-stone-600">{b.therapistName}</td>
@@ -6353,6 +6364,7 @@ function AdminPortal({
                             {event.booking?.status === 'Cancelled' && <span className="shrink-0 text-[9px] font-bold uppercase tracking-wide text-red-700 bg-red-100 px-1.5 py-0.5 rounded-full">Cancelled</span>}
                           </div>
                           <div className={getTherapistCalendarColor(event.therapistName, therapists).text}>{event.timeRange || event.localTime} · {event.therapistName || event.calendarName.replace(' - MY THAI THAI', '')}</div>
+                          {event.booking?.bookingNote && <div className="mt-1 whitespace-pre-wrap text-[11px]">Team note: {event.booking.bookingNote}</div>}
                         </button>
                       ))}
                     </div>
@@ -6396,6 +6408,7 @@ function AdminPortal({
                         {event.booking?.status === 'Cancelled' && <span className="text-[10px] font-bold uppercase tracking-wide text-red-700 bg-red-100 px-1.5 py-0.5 rounded-full">Cancelled</span>}
                       </span>
                       <span className="mt-1 block text-xs text-stone-500">{event.therapistName || event.calendarName} · {event.location}</span>
+                      {event.booking?.bookingNote && <span className="mt-1 block whitespace-pre-wrap text-xs text-blue-800">Team note: {event.booking.bookingNote}</span>}
                     </button>
                     <div className="flex shrink-0 flex-col items-end gap-2">
                       <span className="text-sm font-semibold text-emerald-800">{event.timeRange || event.localTime}</span>
@@ -8096,8 +8109,8 @@ function AdminPortal({
               {receiptNotice && <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm text-emerald-900">{receiptNotice}</div>}
               {(() => {
                 const booking = issuedReceipt?.booking || selectedCalendarEvent.booking;
-                const paidInFull = booking && Number(booking.total) > 0 && Number(booking.paidAmount) + 0.005 >= Number(booking.total);
-                const needsDetails = booking?.autoLinked && (!booking.email || !(Number(booking.total) > 0));
+                const paidInFull = booking && (Number(booking.total) > 0 || Boolean(booking.receiptNumber)) && Number(booking.paidAmount) + 0.005 >= Number(booking.total);
+                const needsDetails = booking?.autoLinked && !booking.receiptNumber && (!booking.email || !(Number(booking.total) > 0));
                 return booking ? (
                   <>
                     {booking.autoLinked && (
@@ -8215,6 +8228,7 @@ function AdminPortal({
                         {issuedReceipt.receipt.manualDiscount > 0 && <div className="mt-3 flex justify-between border-t border-emerald-100 pt-3 text-sm"><span className="text-slate-600">Manual discount</span><span>-${issuedReceipt.receipt.manualDiscount.toFixed(2)}</span></div>}
                         <div className="mt-3 flex justify-between border-t border-emerald-100 pt-3 text-sm"><span className="text-slate-600">{issuedReceipt.receipt.taxLabel}</span><span>${issuedReceipt.receipt.tax.toFixed(2)}</span></div>
                         <div className="mt-2 flex justify-between text-sm font-bold"><span>Total paid</span><span>${issuedReceipt.receipt.total.toFixed(2)}</span></div>
+                        {issuedReceipt.receipt.reconciliation && <p role="status" className="mt-3 text-xs text-emerald-900">Reconciliation confirmed. Booking total and paid amount synced to the database: ${issuedReceipt.receipt.total.toFixed(2)}.</p>}
                         {issuedReceipt.receipt.overpaymentAmount > 0 && <p role="status" className="mt-3 rounded-lg bg-amber-50 p-3 text-xs text-amber-900">Recorded payment: ${issuedReceipt.receipt.recordedPaidAmount.toFixed(2)}. Excess recorded payment: ${issuedReceipt.receipt.overpaymentAmount.toFixed(2)}. Reconcile manually; no automatic refund has been issued.</p>}
                         {issuedReceipt.receipt.packageUsage && <p className="mt-3 rounded-lg bg-emerald-100 p-3 text-xs text-emerald-950">{issuedReceipt.receipt.packageUsage.description} Allocated prepaid value: ${issuedReceipt.receipt.packageUsage.allocatedTotal.toFixed(2)}. New payment: $0.00.</p>}
                         <p className="mt-3 text-xs text-emerald-900">Loyalty balance: {issuedReceipt.receipt.pointsBalance.toLocaleString()} points.</p>
@@ -8224,15 +8238,29 @@ function AdminPortal({
                     {!issuedReceipt && !needsDetails && (
                       <label className="block rounded-xl border border-slate-200 p-4 text-xs font-semibold text-slate-600">
                         Manual discount ($) — optional
-                        <input type="number" min="0" step="0.01" placeholder="0.00" value={booking.receiptNumber ? booking.receiptManualDiscount || 0 : manualReceiptDiscount} disabled={isIssuingReceipt || Boolean(booking.receiptNumber) || /prepaid package redemption/i.test(booking.paymentOption || '')} onChange={(event) => setManualReceiptDiscount(event.target.value)} className="mt-2 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-50" />
-                        <span className="mt-2 block font-normal leading-5">{booking.receiptNumber ? 'An issued receipt keeps its original discount.' : /prepaid package redemption/i.test(booking.paymentOption || '') ? 'Verified prepaid package allocations cannot be discounted.' : 'Deducted before HST, after membership and loyalty discounts. Leave blank for no discount. Recorded payments are unchanged; reconcile any excess manually.'}</span>
+                        <input type="number" min="0" step="0.01" placeholder="0.00" value={booking.receiptNumber ? booking.receiptManualDiscount || 0 : manualReceiptDiscount} disabled={isIssuingReceipt || Boolean(booking.receiptNumber) || /prepaid package redemption/i.test(booking.paymentOption || '')} onChange={(event) => { setManualReceiptDiscount(event.target.value); setConfirmReceiptReconciliation(false); }} className="mt-2 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-50" />
+                        <span className="mt-2 block font-normal leading-5">{booking.receiptNumber ? 'An issued receipt keeps its original discount.' : /prepaid package redemption/i.test(booking.paymentOption || '') ? 'Verified prepaid package allocations cannot be discounted.' : 'Deducted before HST, after membership and loyalty discounts. Leave blank for no discount. Confirm reconciliation below to update the booking total and paid amount when issuing the receipt.'}</span>
+                      </label>
+                    )}
+                    {!issuedReceipt && !needsDetails && !booking.receiptNumber && Number(manualReceiptDiscount) > 0 && (
+                      <label className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4">
+                        <input type="checkbox" checked={confirmReceiptReconciliation} disabled={isIssuingReceipt} onChange={(event) => setConfirmReceiptReconciliation(event.target.checked)} className="mt-0.5 h-4 w-4" />
+                        <span className="text-xs text-amber-950"><strong className="block">Confirm reconciliation</strong><span className="mt-1 block leading-5">I confirm any payment adjustment or refund has been handled. Issuing the receipt will save the discounted total and paid amount to the database and refresh the bookings list. No Square refund is sent automatically.</span></span>
                       </label>
                     )}
                     {!issuedReceipt && !needsDetails && (
                       <div className="flex flex-col-reverse gap-3 border-t border-slate-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
                         <p className="text-xs leading-5 text-slate-500">{!paidInFull ? 'Receipts are available only after full payment is recorded.' : !booking.email ? 'Add a valid patient email to the booking before issuing a receipt.' : !booking.id ? 'This appointment is not linked to a booking record.' : 'A receipt will be emailed to the patient and recorded with this booking.'}</p>
-                        <button type="button" disabled={isIssuingReceipt || !paidInFull || !booking.email || !booking.id} onClick={() => issueReceipt(booking.id)} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-emerald-950 px-4 py-2.5 text-xs font-bold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"><ReceiptText className="h-4 w-4" />{isIssuingReceipt ? 'Issuing…' : 'Issue & email receipt'}</button>
+                        <button type="button" disabled={isIssuingReceipt || !paidInFull || !booking.email || !booking.id || (!booking.receiptNumber && Number(manualReceiptDiscount) > 0 && !confirmReceiptReconciliation)} onClick={() => issueReceipt(booking.id)} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-emerald-950 px-4 py-2.5 text-xs font-bold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"><ReceiptText className="h-4 w-4" />{isIssuingReceipt ? 'Issuing…' : 'Issue & email receipt'}</button>
                       </div>
+                    )}
+                    {booking.id && (
+                      <BookingNote key={booking.id} bookingId={booking.id} initialNote={booking.bookingNote || selectedCalendarEvent.booking?.bookingNote || ''} onSaved={async (note) => {
+                        setSelectedCalendarEvent((current) => current ? { ...current, booking: { ...current.booking, bookingNote: note } } : current);
+                        setIssuedReceipt((current) => current ? { ...current, booking: { ...current.booking, bookingNote: note } } : current);
+                        setBookings((current) => current.map((item) => item.id === booking.id ? { ...item, bookingNote: note } : item));
+                        await Promise.all([loadCalendar(), loadBookingsFromBackend()]);
+                      }} />
                     )}
                     {booking.id && (
                       <div className="space-y-3 border-t border-slate-100 pt-4">

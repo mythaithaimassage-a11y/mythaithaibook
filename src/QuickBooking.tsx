@@ -21,6 +21,7 @@ type Props = {
 export default function QuickBooking(props: Props) {
   const [name, setName] = useState('');
   const [contact, setContact] = useState('');
+  const [bookingNote, setBookingNote] = useState('');
   const [date, setDate] = useState(props.date);
   const [branchId, setBranchId] = useState(props.branchId === 'all' ? String(props.branches.find((branch) => branch.active !== false)?.id || '') : props.branchId);
   const [serviceId, setServiceId] = useState(String(props.services.find((service) => service.active !== false)?.id || ''));
@@ -54,7 +55,7 @@ export default function QuickBooking(props: Props) {
       const response = await fetch('/api/booking?view=manual-booking', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ customerName: name, contact, branchId, serviceId, therapistId: validTherapistId, therapistId2: couple ? validTherapistId2 : '', date, time }),
+        body: JSON.stringify({ customerName: name, contact, branchId, serviceId, therapistId: validTherapistId, therapistId2: couple ? validTherapistId2 : '', date, time, bookingNote }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || 'Unable to save this appointment.');
@@ -76,6 +77,10 @@ export default function QuickBooking(props: Props) {
         <div><h2 id="quick-booking-title" className="text-lg font-bold text-stone-900">Quick appointment</h2><p className="mt-1 text-xs text-stone-500">Save now. Handle payment and medical history separately.</p></div>
         <button type="button" disabled={saving} onClick={props.onClose} aria-label="Close quick appointment" className="rounded-lg p-2 hover:bg-stone-100 disabled:opacity-50"><X className="h-5 w-5" /></button>
       </div>
+      <label className="block text-xs font-bold text-stone-700">Internal booking note (optional)
+        <textarea maxLength={2000} rows={2} value={bookingNote} onChange={(event) => setBookingNote(event.target.value)} placeholder="For the clinic team, e.g. client requested Tanya" className={inputClass} />
+        <span className="mt-1 block font-normal text-stone-500">Shared with authorized staff and the assigned therapist. Not included in customer emails or receipts. Do not enter medical information here.</span>
+      </label>
       <form onSubmit={submit} className="space-y-4 p-5">
         <label className="block text-xs font-bold text-stone-700">Client name<input autoFocus required maxLength={150} value={name} onChange={(event) => setName(event.target.value)} autoComplete="name" className={inputClass} /></label>
         <label className="block text-xs font-bold text-stone-700">Email or phone number<input required maxLength={254} value={contact} onChange={(event) => setContact(event.target.value)} placeholder="client@example.com or +1 437 898 7424" className={inputClass} /></label>

@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import { createWixContactStore, prepareWixContacts } from '../lib/wix-contacts.js';
 import { applyWixCataloguePrices, applyWixTherapistMappings, importWixBookings, prepareWixBookings } from '../lib/wix-bookings.js';
 import { BOOKING_TABLE_FIELDS } from '../lib/booking-schema.js';
+import { validateBookingNote } from '../lib/booking-note.js';
 import { createPackageStore, historicalPackageVisit, readPackageUsage, packageReceiptDetails } from '../lib/packages.js';
 import { createBookingHistoryStore } from '../lib/booking-history.js';
 import { syncWixCalendarBatch } from '../lib/wix-calendar.js';
@@ -240,12 +241,19 @@ async function ensureBookingsTable(bigquery) {
       } else {
         const [metadata] = await table.getMetadata();
         const fields = metadata.schema?.fields || [];
-        const discountField = fields.find((field) => field.name === 'receipt_manual_discount');
-        if (!discountField) {
-          await table.setMetadata({ schema: { fields: [...fields, { name: 'receipt_manual_discount', type: 'FLOAT64', mode: 'NULLABLE' }] } });
-        } else if (!['FLOAT64', 'FLOAT'].includes(discountField.type) || ['REPEATED', 'REQUIRED'].includes(discountField.mode)) {
-          throw new Error('The receipt_manual_discount booking column must be a nullable FLOAT64.');
+        const receiptFields = [
+          { name: 'receipt_manual_discount', type: 'FLOAT64', mode: 'NULLABLE' },
+          { name: 'receipt_reconciliation', type: 'STRING', mode: 'NULLABLE' },
+          { name: 'booking_note', type: 'STRING', mode: 'NULLABLE' },
+        ];
+        for (const field of receiptFields) {
+          const existing = fields.find((candidate) => candidate.name === field.name);
+          if (existing && ((existing.type === 'FLOAT' ? 'FLOAT64' : existing.type) !== field.type || ['REPEATED', 'REQUIRED'].includes(existing.mode))) {
+            throw new Error(`The ${field.name} booking column must be a nullable ${field.type}.`);
+          }
         }
+        const missing = receiptFields.filter((field) => !fields.some((candidate) => candidate.name === field.name));
+        if (missing.length) await table.setMetadata({ schema: { fields: [...fields, ...missing] } });
       }
     })().catch((error) => {
       ensureBookingsTablePromise = null;
@@ -4547,7 +4555,7 @@ export default async function handler(req, res) {
       }
       const counts = await importWixBookings(getBigQueryClient(), prepared.bookings, {
         projectId: BIGQUERY_PROJECT_ID, datasetId: BIGQUERY_DATASET_ID,
-        tableId: BIGQUERY_BOOKINGS_TABLE, fields: BOOKING_TABLE_FIELDS.filter((field) => field.name !== 'receipt_manual_discount'), reviewedPaid: true,
+        tableId: BIGQUERY_BOOKINGS_TABLE, fields: BOOKING_TABLE_FIELDS.filter((field) => !['receipt_manual_discount', 'receipt_reconciliation', 'booking_note'].includes(field.name)), reviewedPaid: true,
       });
       let calendarSync;
       try {
@@ -4605,6 +4613,35 @@ export default async function handler(req, res) {
 
     const sheets = google.sheets({ version: 'v4', auth });
     const calendarApi = google.calendar({ version: 'v3', auth });
+    if (view === 'booking-note') {
+      res.setHeader('Cache-Control', 'no-store');
+      if (req.method !== 'POST') return res.status(405).json({ message: 'Method Not Allowed' });
+      if (!dashboardSession) return res.status(401).json({ message: 'Dashboard sign-in required' });
+      if (!isSameOriginRequest(req)) return res.status(403).json({ message: 'Request origin is not allowed' });
+      const bookingId = String(req.body?.bookingId || '').trim();
+      if (!bookingId || bookingId.length > 100) return res.status(400).json({ message: 'A valid booking ID is required.' });
+      if (typeof req.body?.note !== 'string') return res.status(400).json({ message: 'Enter an internal booking note, or leave it empty to clear it.' });
+      const note = validateBookingNote(req.body.note);
+      if (typeof req.body?.expectedNote !== 'string') return res.status(400).json({ message: 'Refresh the booking note before saving.' });
+      const bigquery = getBigQueryClient();
+      const result = await bqFetchBookingRows(bigquery);
+      const row = result.data.values.find((candidate) => candidate[0] === bookingId && candidate[0] !== 'Booking ID');
+      if (!row) return res.status(404).json({ message: 'Booking was not found.' });
+      const allowedBranches = await getDashboardBranchNames(sheets, dashboardSession);
+      if (allowedBranches && !allowedBranches.has(String(row[4] || '').trim().toLowerCase())) {
+        return res.status(403).json({ message: 'This booking is outside your assigned branch access.' });
+      }
+      const expectedNote = req.body.expectedNote;
+      if (String(row[28] || '') !== expectedNote) return res.status(409).json({ message: 'The booking note changed. Refresh the appointment before saving.' });
+      await bigquery.query({
+        query: `BEGIN TRANSACTION;
+          ASSERT (SELECT COUNT(*) FROM ${bookingsTableRef()} WHERE booking_id = @bookingId AND COALESCE(booking_note, '') = @expectedNote) = 1 AS 'Booking note changed; refresh and retry';
+          UPDATE ${bookingsTableRef()} SET booking_note = @note WHERE booking_id = @bookingId;
+          COMMIT TRANSACTION;`,
+        params: { bookingId, expectedNote, note },
+      });
+      return res.status(200).json({ bookingId, bookingNote: note });
+    }
 
     if (req.method === 'POST' && view === 'dashboard-user') {
       if (!isSameOriginRequest(req)) return res.status(403).json({ message: 'Dashboard user request origin is not allowed' });
@@ -6588,7 +6625,10 @@ export default async function handler(req, res) {
           createdAt: row[6] || '',
         }))
         .sort((first, second) => second.createdAt.localeCompare(first.createdAt));
-      const therapistBookings = bookings.filter((row) => row[6] === account.name);
+      const therapistBookings = bookings.filter((row) => {
+        const assignedTherapists = String(row[6] || '').trim();
+        return assignedTherapists === account.name || assignedTherapists.split(',').map((name) => name.trim()).includes(account.name);
+      });
       const upcoming = therapistBookings.filter((row) => row[7] >= new Date().toISOString().slice(0, 10))
         .sort((first, second) => `${first[7]} ${first[8]}`.localeCompare(`${second[7]} ${second[8]}`))
         .map((row) => {
@@ -6601,6 +6641,7 @@ export default async function handler(req, res) {
             : [];
           return {
             bookingId: row[0], patientName: row[1], date: row[7], time: row[8],
+            bookingNote: row[28] || '',
             serviceName: row[5], branchName: row[4], durationMinutes: Number(row[12]) || 0, pressure: history?.[28] || '',
             painAreas: history?.[26] || '', bodyAreas: history?.[27] || '',
             hasReportedConditions: conditionFlags.length > 0, reportedConditionCount: conditionFlags.length, conditionFlags,
@@ -6624,6 +6665,7 @@ export default async function handler(req, res) {
           phone: row[2] || '',
           email: row[3] || '',
           status: 'Completed',
+          bookingNote: row[28] || '',
         }));
       const patientIdentity = (row) => {
         const email = String(row[3] || '').trim().toLowerCase();
@@ -6931,6 +6973,7 @@ export default async function handler(req, res) {
                   receiptNumber: bookingRow[18] || '',
                   receiptEmailStatus: bookingRow[20] || '',
                   receiptManualDiscount: Number(bookingRow[26]) || 0,
+                  bookingNote: bookingRow[28] || '',
                   status: bookingRow[24] || '',
                   statusNotes: bookingRow[25] || '',
                 } : null;
@@ -7079,6 +7122,7 @@ export default async function handler(req, res) {
           statusNotes: row[25] || '',
           isCouple: /couple/i.test(row[5] || ''),
           syncedToSheets: true,
+          bookingNote: row[28] || '',
         })),
       });
     }
@@ -7405,6 +7449,14 @@ export default async function handler(req, res) {
       if (row[18] && hasDiscountInput && Number(discountText) !== manualDiscount) {
         return res.status(409).json({ message: 'This receipt has already been created. Its manual discount cannot be changed.' });
       }
+      const savedReconciliation = row[27] ? JSON.parse(row[27]) : null;
+      if (savedReconciliation && (!savedReconciliation.receipt || !Number.isFinite(savedReconciliation.originalTotal) || !Number.isFinite(savedReconciliation.originalPaid))) {
+        throw new Error('Stored receipt reconciliation is invalid. Reconcile the booking record before issuing a receipt.');
+      }
+      const reconcileDiscount = manualDiscount > 0 && !row[18];
+      if (reconcileDiscount && req.body?.confirmReconciliation !== true) {
+        return res.status(400).json({ message: 'Confirm reconciliation of the discounted payment before issuing this receipt.' });
+      }
       const booking = {
         id: row[0] || '',
         customerName: row[1] || '',
@@ -7430,7 +7482,7 @@ export default async function handler(req, res) {
       if (!booking.email || !/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(booking.email)) {
         return res.status(400).json({ message: 'This appointment does not have a valid patient email address' });
       }
-      if (booking.total <= 0 || booking.paidAmount + 0.005 < booking.total) {
+      if ((!savedReconciliation && booking.total <= 0) || booking.paidAmount + 0.005 < booking.total) {
         return res.status(409).json({ message: 'A receipt can only be issued when the appointment is fully paid' });
       }
 
@@ -7464,7 +7516,8 @@ export default async function handler(req, res) {
         .reduce((sum, loyaltyRow) => sum + (Number(loyaltyRow[4]) || 0), 0);
       const businessProfile = await getBusinessProfile(sheets);
       const isTaxExempt = /registered massage therapy|\brmt\b|acupuncture/i.test(booking.serviceName);
-      const discountedSubtotal = packageUsage ? packageUsage.allocatedSubtotal : Math.round((isTaxExempt ? booking.total : booking.total / 1.13) * 100) / 100;
+      const calculationTotal = savedReconciliation ? savedReconciliation.originalTotal : booking.total;
+      const discountedSubtotal = packageUsage ? packageUsage.allocatedSubtotal : Math.round((isTaxExempt ? calculationTotal : calculationTotal / 1.13) * 100) / 100;
       if (loyaltyDiscount > discountedSubtotal + 0.005) {
         return res.status(409).json({ message: 'The loyalty redemption exceeds this receipt subtotal. Adjust the redemption before issuing this receipt.' });
       }
@@ -7474,7 +7527,7 @@ export default async function handler(req, res) {
       }
       const receiptSubtotal = Math.round((discountedSubtotal - loyaltyDiscount - manualDiscount) * 100) / 100;
       const tax = packageUsage ? packageUsage.allocatedTax : isTaxExempt ? 0 : Math.round(receiptSubtotal * 0.13 * 100) / 100;
-      const receipt = {
+      let receipt = {
         number: row[18] || `MTT-${new Date().getFullYear()}-${String(Math.floor(100000 + Math.random() * 900000))}`,
         issuedAt: row[19] || new Date().toISOString(),
         subtotal,
@@ -7497,12 +7550,33 @@ export default async function handler(req, res) {
         loyaltyMember,
         packageUsage,
       };
+      if (savedReconciliation) receipt = savedReconciliation.receipt;
+      const reconciledFields = {};
+      if (reconcileDiscount) {
+        const reconciliation = {
+          originalTotal: booking.total, originalPaid: booking.paidAmount,
+          confirmedBy: dashboardSession.email, confirmedAt: new Date().toISOString(),
+          adjustedAmount: Math.round((booking.paidAmount - receipt.total) * 100) / 100,
+        };
+        receipt.recordedPaidAmount = receipt.total;
+        receipt.overpaymentAmount = 0;
+        receipt.reconciliation = reconciliation;
+        Object.assign(reconciledFields, {
+          total: receipt.total, paidAmount: receipt.total,
+          receiptReconciliation: JSON.stringify({ ...reconciliation, receipt }),
+        });
+      }
       await bqUpdateBookingFields(bigquery, bookingId, {
         receiptNumber: receipt.number,
         receiptIssuedAt: receipt.issuedAt,
         receiptEmailStatus: row[20] || 'pending',
         receiptManualDiscount: manualDiscount,
+        ...reconciledFields,
       }, { notes: row[14], total: booking.total, paid: booking.paidAmount, receipt: row[18] });
+      if (reconcileDiscount) {
+        booking.total = receipt.total;
+        booking.paidAmount = receipt.total;
+      }
       for (const { rowNumber } of linkedRedemptions) {
         await bqLoyaltyValuesUpdate(`LoyaltyLedger!J${rowNumber}`, [[receipt.number]]);
       }
@@ -7512,7 +7586,10 @@ export default async function handler(req, res) {
           await sendReceiptEmail(createGmailApi(), booking, receipt, businessProfile);
         } catch (error) {
           await bqUpdateBookingFields(bigquery, bookingId, { receiptEmailStatus: 'failed' });
-          throw new Error(`Receipt ${receipt.number} was created but could not be emailed: ${error.message}`);
+          return res.status(500).json({
+            message: `Receipt ${receipt.number} was created but could not be emailed: ${error.message}`,
+            booking, receipt, reconciliationSaved: Boolean(receipt.reconciliation),
+          });
         }
         await bqUpdateBookingFields(bigquery, bookingId, { receiptEmailStatus: 'sent' });
       }
@@ -7960,6 +8037,7 @@ export default async function handler(req, res) {
     if (view === 'manual-booking') {
       if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return res.status(400).json({ message: 'Appointment details are required.' });
       const customerName = String(payload.customerName || '').trim();
+      const bookingNote = validateBookingNote(payload.bookingNote);
       const contact = String(payload.contact || '').trim();
       const date = String(payload.date || '');
       const parsedDate = new Date(`${date}T12:00:00Z`);
@@ -7996,6 +8074,7 @@ export default async function handler(req, res) {
         therapistName: therapist.name, therapistName2: therapist2?.name || '',
         therapistCandidates: [], date, time: payload.time,
         paymentOption: 'clinic', skipPatientHistory: true,
+        bookingNote,
       };
     }
     try {
@@ -8203,6 +8282,9 @@ export default async function handler(req, res) {
       memberBenefit?.type || '',
       discountPercent,
       payload.membershipDiscountAmount,
+      '', '',
+      0, '',
+      view === 'manual-booking' ? payload.bookingNote : '',
     ];
 
     await bqInsertBookingRow(getBigQueryClient(), rowValues);

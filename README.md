@@ -116,8 +116,34 @@ It is saved in the nullable `receipt_manual_discount` BigQuery booking column,
 which is added automatically to an existing bookings table. Existing column
 indices and Wix import fields are preserved. Once a receipt is created, its
 discount is locked and reused on email retries. Booking totals and recorded
-payments are not changed; any excess recorded payment is shown for manual
-reconciliation, and no automatic refund is issued.
+payments are updated to the discounted receipt total after staff checks
+**Confirm reconciliation** and issues the receipt. Staff must first handle any
+payment adjustment/refund; no automatic Square refund is issued. Without that
+confirmation a new discounted receipt cannot be issued.
+
+The database saves the adjusted booking total and paid amount together with the
+receipt before sending email. The calendar appointment and bookings list refresh
+on success or email failure. The nullable `receipt_reconciliation` STRING column
+stores the original amounts, confirming staff email/time, adjustment amount, and
+receipt snapshot so retries cannot deduct the discount twice. Previously issued
+receipts remain unchanged.
+
+### Shared internal booking note
+
+Quick appointments include an optional **Internal booking note** for staff
+reference. Existing appointments have a **Shared internal booking note** editor
+with a Save button, including the ability to clear the note. Notes appear on
+calendar cards, the agenda, the booking list, and the assigned therapist's
+appointment details. Owners, managers, and receptionists can edit notes only for
+bookings within their dashboard access. Therapists can read notes on their
+assigned appointments, including couple sessions.
+
+The note is stored separately in the nullable `booking_note` BigQuery column,
+automatically added without changing existing column indices or Wix import
+fields. Saving refreshes the booking list and calendar. Concurrent edits are
+rejected rather than silently overwriting another staff member's note. Notes
+are not added to Google Calendar event descriptions, customer emails, public
+booking lookup responses, or receipts. Keep medical information in patient notes.
 
 Owners can also use **Add > Blocked staff time** and **Add > Create New Service**
 to open the existing availability and service managers with calendar defaults.

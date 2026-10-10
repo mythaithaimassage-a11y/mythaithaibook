@@ -7,6 +7,7 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import ts from 'typescript';
 import { AVAILABLE_TIMES } from '../lib/booking-options.js';
+import { validateBookingNote } from '../lib/booking-note.js';
 
 const source = readFileSync(new URL('../src/QuickBooking.tsx', import.meta.url), 'utf8');
 const compiled = ts.transpileModule(source, {
@@ -47,7 +48,9 @@ test('quick booking renders name, one contact input, therapist and time dropdown
   assert.match(html, /<option selected="">02:15 PM/);
   assert.match(html, /value="2026-11-01"/);
   assert.doesNotMatch(html, /Off Duty|Inactive Therapist|Inactive service/);
-  assert.doesNotMatch(html, /<textarea|type="checkbox"|type="radio"|type="email"|type="tel"/);
+  assert.doesNotMatch(html, /type="checkbox"|type="radio"|type="email"|type="tel"/);
+  assert.match(html, /Internal booking note \(optional\)/);
+  assert.match(html, /<textarea maxLength="2000"/);
   assert.match(html, /Save appointment/);
   for (const time of AVAILABLE_TIMES) assert.ok(html.includes(time), `Missing time ${time}`);
 });
@@ -112,4 +115,56 @@ test('optional dollar discount is sent only by receipt issuance and displayed in
   assert.match(app, /issuedReceipt\.receipt\.manualDiscount\.toFixed\(2\)/);
   assert.match(app, /insertAdjacentHTML\('beforebegin', `<div class="row"><span>Manual discount/);
   assert.match(app, /no automatic refund has been issued/);
+});
+
+test('receipt discounts require staff reconciliation and refresh booking records even after email failures', () => {
+  const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  assert.match(app, /Confirm reconciliation/);
+  assert.match(app, /confirmReconciliation: confirmReceiptReconciliation/);
+  assert.match(app, /Number\(manualReceiptDiscount\) > 0 && !confirmReceiptReconciliation/);
+  assert.match(app, /setManualReceiptDiscount\(event\.target\.value\); setConfirmReceiptReconciliation\(false\)/);
+  const issue = app.slice(app.indexOf('const issueReceipt ='), app.indexOf('const markBookingPaid ='));
+  assert.equal((issue.match(/Promise\.all\(\[loadCalendar\(\), loadBookingsFromBackend\(\)\]\)/g) || []).length, 2);
+  assert.ok(issue.indexOf('setBookings(') < issue.indexOf('if (!response.ok)'));
+});
+
+test('shared internal booking note is wired to booking creation, staff views and therapist details', () => {
+  const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  const editor = readFileSync(new URL('../src/BookingNote.tsx', import.meta.url), 'utf8');
+  assert.match(source, /date, time, bookingNote/);
+  assert.match(app, /b\.bookingNote/);
+  assert.match(app, /event\.booking\?\.bookingNote/);
+  assert.match(app, /selectedAppointment\.bookingNote/);
+  assert.match(app, /<BookingNote key=\{booking\.id\}/);
+  assert.match(editor, /view=booking-note/);
+  assert.match(editor, /expectedNote: savedNote/);
+  assert.match(editor, /maxLength=\{2000\}/);
+  assert.match(editor, /Save booking note/);
+});
+
+test('internal booking note validation trims text and rejects invalid or oversized values', () => {
+  assert.equal(validateBookingNote(), '');
+  assert.equal(validateBookingNote('   '), '');
+  assert.equal(validateBookingNote('  Shared reference  '), 'Shared reference');
+  assert.equal(validateBookingNote('x'.repeat(2000)).length, 2000);
+  for (const value of [null, 42, {}, ['note'], 'x'.repeat(2001)]) {
+    assert.throws(() => validateBookingNote(value), (error) => error.statusCode === 400);
+  }
+});
+
+test('booking note editor displays saved notes, a length limit and internal-only guidance', () => {
+  const editorSource = readFileSync(new URL('../src/BookingNote.tsx', import.meta.url), 'utf8');
+  const editorCompiled = ts.transpileModule(editorSource, {
+    fileName: 'BookingNote.tsx',
+    compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
+  }).outputText;
+  const editorModule = { exports: {} };
+  vm.runInNewContext(editorCompiled, { exports: editorModule.exports, require: createRequire(import.meta.url) });
+  const html = renderToStaticMarkup(React.createElement(editorModule.exports.default, {
+    bookingId: 'MTT-note', initialNote: 'Please use the quiet room', onSaved: async () => {},
+  }));
+  assert.match(html, /Please use the quiet room/);
+  assert.match(html, /<textarea maxLength="2000"/);
+  assert.match(html, /not customers/);
+  assert.match(html, /<button[^>]*disabled=""[^>]*>Save booking note/);
 });

@@ -98,7 +98,7 @@ test('maps exactly the existing booking schema and preserves exported details wi
   const { bookings, summary } = prepare([{}]);
   assert.equal(summary.validBookings, 1);
   const booking = bookings[0];
-  assert.deepEqual(Object.keys(booking).sort(), BOOKING_TABLE_FIELDS.filter(({ name }) => name !== 'receipt_manual_discount').map(({ name }) => name).sort());
+  assert.deepEqual(Object.keys(booking).sort(), BOOKING_TABLE_FIELDS.filter(({ name }) => !['receipt_manual_discount', 'receipt_reconciliation', 'booking_note'].includes(name)).map(({ name }) => name).sort());
   assert.equal(booking.branch_name, 'Mississauga Central');
   assert.equal(booking.branch_address, '');
   assert.equal(booking.email, 'client@example.com');

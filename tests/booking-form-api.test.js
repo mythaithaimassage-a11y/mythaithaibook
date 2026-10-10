@@ -107,6 +107,13 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
     }
     if (query.startsWith('SELECT * FROM `test-project.booking_system.bookings`')) return [records];
     if (query.startsWith('INSERT INTO `test-project.booking_system.bookings`')) { records.push(params); return [[]]; }
+    if (query.includes('SET booking_note = @note')) {
+      const record = records.find((item) => item.booking_id === params.bookingId);
+      assert.equal(record.booking_note || '', params.expectedNote);
+      assert.match(query, /ASSERT/);
+      record.booking_note = params.note;
+      return [[]];
+    }
     if (/FROM `test-project\.booking_system\.patient_history`/.test(query)) return [histories];
     if (query.startsWith('INSERT INTO `test-project.booking_system.patient_history`')) {
       if (failHistoryWrite) throw new Error('Synthetic medical storage outage');
@@ -118,9 +125,9 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   });
   const { default: handler } = await import(`../api/booking.js?booking-form-test=${Date.now()}`);
   let cookie = '';
-  const request = async (view, body, { method = 'POST', origin = 'https://test.example' } = {}) => {
+  const request = async (view, body, { method = 'POST', origin = 'https://test.example', query = {} } = {}) => {
     const req = Readable.from(body ? [Buffer.from(JSON.stringify(body))] : []);
-    Object.assign(req, { method, query: { view }, headers: { host: 'test.example', origin, 'content-type': 'application/json', cookie } });
+    Object.assign(req, { method, query: { view, ...query }, headers: { host: 'test.example', origin, 'content-type': 'application/json', cookie } });
     const res = {
       code: 200, data: null,
       setHeader(name, value) { if (name === 'Set-Cookie') cookie = String(value).split(';')[0]; },
@@ -314,6 +321,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
     customerName: '  Walk-in Client  ', contact: '+1 (437) 898-7424',
     branchId: '1', serviceId: '1', therapistId: '1', date: '2026-11-01', time: '10:00 AM',
     paidAmount: '999', paymentOption: 'full', subtotalAmount: 1, taxRate: 0, skipPatientHistory: false,
+    bookingNote: 'Internal team reference: only Tanya',
   };
   cookie = '';
   assert.equal((await request('manual-booking', manual)).code, 401);
@@ -329,6 +337,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
     { serviceId: '404' }, { serviceId: '4' }, { therapistId: '3' },
     { therapistId: '4' }, { therapistId: '' }, { serviceId: '3', therapistId: '1' },
     { serviceId: '2', therapistId2: '1' }, { serviceId: '2', therapistId2: '' },
+    { bookingNote: 'x'.repeat(2001) }, { bookingNote: { text: 'invalid' } },
   ]) {
     const result = await request('manual-booking', { ...manual, ...invalid });
     assert.equal(result.code, 400, JSON.stringify({ invalid, data: result.data }));
@@ -358,6 +367,8 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   assert.equal(records.at(-1).email, '');
   assert.equal(records.at(-1).phone, manual.contact);
   assert.equal(records.at(-1).payment_option, 'clinic');
+  assert.equal(records.at(-1).booking_note, manual.bookingNote);
+  assert.doesNotMatch(events.at(-1).requestBody.description, /Internal team reference/);
   assert.equal(histories.length, historyCount);
   assert.equal(emails.length, emailCount, 'Phone-only bookings do not attempt email delivery');
   const emailBooking = await request('manual-booking', { ...manual, contact: 'Client@Example.com', serviceId: '2', therapistId2: '2' });
@@ -367,6 +378,42 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   assert.equal(emailBooking.data.therapistName, 'Test Therapist, Second Therapist');
   assert.equal(records.at(-1).email, 'client@example.com');
   assert.equal(records.at(-1).phone, '');
+  const bookingRecord = records.at(-1);
+  const noteRequest = { bookingId: bookingRecord.booking_id, note: 'Changed shared note', expectedNote: manual.bookingNote };
+  const beforeEditTotal = bookingRecord.total;
+  const beforeEditPaid = bookingRecord.paid_amount;
+  const edit = await request('booking-note', noteRequest);
+  assert.equal(edit.code, 200, JSON.stringify(edit.data));
+  assert.equal(bookingRecord.booking_note, noteRequest.note);
+  assert.equal(bookingRecord.total, beforeEditTotal);
+  assert.equal(bookingRecord.paid_amount, beforeEditPaid);
+  assert.equal((await request('booking-note', noteRequest)).code, 409, 'Stale edits cannot overwrite another note');
+  assert.equal((await request('booking-note', { ...noteRequest, note: 'x'.repeat(2001) })).code, 400);
+  assert.equal((await request('booking-note', { ...noteRequest, note: undefined })).code, 400);
+  assert.equal((await request('booking-note', { ...noteRequest, bookingId: '' })).code, 400);
+  assert.equal((await request('booking-note', { ...noteRequest, expectedNote: undefined })).code, 400);
+  assert.equal((await request('booking-note', { ...noteRequest, bookingId: 'MTT-not-found' })).code, 404);
+  assert.equal((await request('booking-note', noteRequest, { origin: 'https://untrusted.example' })).code, 403);
+  const authorizedNote = await request('', null, { method: 'GET' });
+  assert.equal(authorizedNote.data.bookings.find((item) => item.id === bookingRecord.booking_id).bookingNote, noteRequest.note);
+  assert.equal((await request('booking-note', { ...noteRequest, note: '', expectedNote: noteRequest.note })).code, 200);
+  assert.equal(bookingRecord.booking_note, '');
+  bookingRecord.branch_name = 'Unassigned Branch';
+  assert.equal((await request('booking-note', { ...noteRequest, expectedNote: '' })).code, 403);
+  bookingRecord.branch_name = 'Test Branch';
+  cookie = '';
+  assert.equal((await request('booking-note', { ...noteRequest, expectedNote: '' })).code, 401);
+  bookingRecord.booking_note = 'Private clinic team reference';
+  const publicLookup = await request('find-booking', null, { method: 'GET', query: { bookingId: bookingRecord.booking_id, email: bookingRecord.email } });
+  assert.equal(publicLookup.code, 200, JSON.stringify(publicLookup.data));
+  assert.doesNotMatch(JSON.stringify(publicLookup.data), /Private clinic team reference|bookingNote|booking_note/);
+  cookie = receptionistCookie;
+  for (const message of emails) {
+    const mime = Buffer.from(message.requestBody.raw, 'base64url').toString();
+    for (const part of mime.matchAll(/Content-Transfer-Encoding: base64\r\n\r\n([\s\S]*?)\r\n--/g)) {
+      assert.doesNotMatch(Buffer.from(part[1].replace(/\s/g, ''), 'base64').toString(), /Internal team reference|Changed shared note|Private clinic team reference/);
+    }
+  }
   assert.equal(histories.length, historyCount);
   assert.equal(events.length, eventCount + 2);
   cookie = managerCookie;
