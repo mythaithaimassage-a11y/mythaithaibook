@@ -80,8 +80,9 @@ The dashboard **Booking Calendar** includes appointment search, Daily/Agenda
 views, branch and therapist filters, display/auto-refresh settings, and
 **Manage** and **Add** menus. **Add > Quick Sale** and **Add > Appointment**
 both open a quick appointment form; Quick Sale does not collect a payment.
-The schedule's **Add Booking** button and the daily calendar's **Book** buttons
-use the same form.
+The schedule's **New Walk-in / Phone Booking** button navigates to Booking
+Calendar with the selected branch. Use **Add > Appointment** or the daily
+calendar's **Book** buttons there to open the quick booking form.
 
 Staff enter a client name and **either an email address or a phone number**,
 then select a therapist and time. Date and branch default from the calendar;
@@ -96,6 +97,11 @@ Medical history must still be completed before treatment. Email contacts receive
 the normal confirmation/reminder; phone-only bookings skip email delivery.
 The calendar displays the saved appointment and reports confirmation failures
 without asking staff to book again.
+
+Daily calendar cards, the agenda, and appointment details show the start and end
+times in the configured calendar time zone, for example **11:00 AM - 12:00 PM**.
+The range uses the actual Google Calendar event times, including appointments
+that finish after midnight.
 
 Owners can also use **Add > Blocked staff time** and **Add > Create New Service**
 to open the existing availability and service managers with calendar defaults.

@@ -1503,6 +1503,18 @@ function getLocalDateTime(value) {
   };
 }
 
+function getCalendarTimeRange(start, end) {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: CALENDAR_TIME_ZONE,
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
+  const startLabel = start ? formatter.format(new Date(start)) : '';
+  const endLabel = end ? formatter.format(new Date(end)) : '';
+  return endLabel ? `${startLabel} - ${endLabel}` : startLabel;
+}
+
 function shiftDate(dateString, days) {
   const date = new Date(`${dateString}T12:00:00Z`);
   date.setUTCDate(date.getUTCDate() + days);
@@ -6977,6 +6989,7 @@ export default async function handler(req, res) {
                   end,
                   therapistName: eventTherapist,
                   localTime: localStart.time,
+                  timeRange: getCalendarTimeRange(start, end),
                   isCouple: /couple/i.test(booking.serviceName || event.summary || ''),
                   booking: calendarBooking,
                 });

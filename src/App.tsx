@@ -6135,7 +6135,10 @@ function AdminPortal({
                   : <><Database className="w-3.5 h-3.5" /> Refresh from database</>}
               </button>
               <button
-              onClick={() => openQuickBooking()}
+              onClick={() => {
+                setCalendarBranch(effectiveSelectedBranchId);
+                setActiveTab('calendar');
+              }}
               className="px-4 py-2 bg-emerald-800 text-white rounded-xl text-xs font-bold hover:bg-emerald-900 transition flex items-center"
               >
                 <Plus className="w-4 h-4 mr-1" /> {t.addBooking}
@@ -6341,7 +6344,7 @@ function AdminPortal({
                             <span className="truncate">{event.summary}</span>
                             {event.booking?.status === 'Cancelled' && <span className="shrink-0 text-[9px] font-bold uppercase tracking-wide text-red-700 bg-red-100 px-1.5 py-0.5 rounded-full">Cancelled</span>}
                           </div>
-                          <div className={getTherapistCalendarColor(event.therapistName, therapists).text}>{event.localTime} · {event.therapistName || event.calendarName.replace(' - MY THAI THAI', '')}</div>
+                          <div className={getTherapistCalendarColor(event.therapistName, therapists).text}>{event.timeRange || event.localTime} · {event.therapistName || event.calendarName.replace(' - MY THAI THAI', '')}</div>
                         </button>
                       ))}
                     </div>
@@ -6387,7 +6390,7 @@ function AdminPortal({
                       <span className="mt-1 block text-xs text-stone-500">{event.therapistName || event.calendarName} · {event.location}</span>
                     </button>
                     <div className="flex shrink-0 flex-col items-end gap-2">
-                      <span className="text-sm font-semibold text-emerald-800">{event.localTime}</span>
+                      <span className="text-sm font-semibold text-emerald-800">{event.timeRange || event.localTime}</span>
                       <button type="button" onClick={() => { setSelectedCalendarEvent(event); setIssuedReceipt(null); setReceiptError(''); setReceiptNotice(''); }} className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-white px-2.5 py-1.5 text-[11px] font-bold text-emerald-900 transition hover:bg-emerald-50"><ReceiptText className="h-3.5 w-3.5" />Open appointment</button>
                     </div>
                   </div>
@@ -8077,7 +8080,7 @@ function AdminPortal({
         <div className="fixed inset-0 z-[70] flex items-center justify-center overflow-y-auto bg-slate-950/55 p-4 backdrop-blur-sm" onClick={(event) => { if (event.target === event.currentTarget) setSelectedCalendarEvent(null); }}>
           <section role="dialog" aria-modal="true" aria-labelledby="appointment-receipt-title" className="my-auto w-full max-w-xl overflow-hidden rounded-2xl bg-white shadow-2xl">
             <div className="flex items-start justify-between gap-4 bg-gradient-to-r from-slate-950 to-emerald-900 px-5 py-5 text-white sm:px-6">
-              <div><p className="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-200">Appointment details</p><h2 id="appointment-receipt-title" className="mt-1 text-lg font-bold">{issuedReceipt?.booking?.customerName || selectedCalendarEvent.booking?.customerName || selectedCalendarEvent.summary}</h2><p className="mt-1 text-xs text-emerald-100/80">{selectedCalendarEvent.booking?.id || 'Calendar event'} · {selectedCalendarEvent.localTime}</p></div>
+              <div><p className="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-200">Appointment details</p><h2 id="appointment-receipt-title" className="mt-1 text-lg font-bold">{issuedReceipt?.booking?.customerName || selectedCalendarEvent.booking?.customerName || selectedCalendarEvent.summary}</h2><p className="mt-1 text-xs text-emerald-100/80">{selectedCalendarEvent.booking?.id || 'Calendar event'} · {selectedCalendarEvent.timeRange || selectedCalendarEvent.localTime}</p></div>
               <button type="button" aria-label="Close appointment details" onClick={() => setSelectedCalendarEvent(null)} className="rounded-lg p-1.5 text-white/80 hover:bg-white/10 hover:text-white"><X className="h-5 w-5" /></button>
             </div>
             <div className="space-y-5 p-5 sm:p-6">
@@ -8102,6 +8105,7 @@ function AdminPortal({
                         ['Booking reference', booking.id],
                         ['Service', booking.serviceName],
                         ['Service date', booking.date],
+                        ['Appointment time', selectedCalendarEvent.timeRange || selectedCalendarEvent.localTime],
                         ['Payment method', booking.paymentOption || 'Not recorded'],
                       ].map(([label, value]) => <div key={label} className="rounded-xl border border-slate-100 bg-slate-50 px-3.5 py-3"><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{label}</p><p className="mt-1 break-words text-sm font-semibold text-slate-800">{value || 'Not recorded'}</p></div>)}
                     </div>

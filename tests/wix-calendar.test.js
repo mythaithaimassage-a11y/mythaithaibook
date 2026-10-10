@@ -455,6 +455,8 @@ test('Calendar backfill endpoint enforces owner authentication, method, origin a
   assert.deepEqual(displayed.data.errors, []);
   assert.equal(displayed.data.events.length, 1);
   assert.equal(displayed.data.events[0].booking.id, booking.booking_id);
+  assert.equal(displayed.data.events[0].timeRange, '11:30 PM - 1:00 AM');
+  assert.equal(displayed.data.events[0].localTime, '23:30', 'Hour grouping retains its 24-hour start time');
   assert.deepEqual(pages, [undefined, 'next-page']);
   const branchFiltered = await request('calendar', {
     method: 'GET', query: { branch: '123 Synthetic Street', branchName: 'Mississauga Central' },
@@ -480,6 +482,17 @@ test('Calendar backfill endpoint enforces owner authentication, method, origin a
   event.location = '123 Synthetic Street';
   const legacyAddress = await request('calendar', { method: 'GET', query: { branch: '123 Synthetic Street' } });
   assert.equal(legacyAddress.data.events.length, 1);
+  for (const [start, end, expected] of [
+    ['11:00:00', '12:00:00', '11:00 AM - 12:00 PM'],
+    ['10:00:00', '11:00:00', '10:00 AM - 11:00 AM'],
+    ['13:15:00', '14:45:00', '1:15 PM - 2:45 PM'],
+    ['12:00:00', '12:30:00', '12:00 PM - 12:30 PM'],
+  ]) {
+    event.start.dateTime = `${booking.date}T${start}`;
+    event.end.dateTime = `${booking.date}T${end}`;
+    const range = await request('calendar', { method: 'GET' });
+    assert.equal(range.data.events[0].timeRange, expected);
+  }
   // Clearing database history must not re-create a booking from its retained Wix event.
   f.rows.length = 0;
   const cleared = await request('calendar', { method: 'GET' });

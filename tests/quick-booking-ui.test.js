@@ -71,14 +71,30 @@ test('an empty scheduled roster displays an explicit error and disables booking'
   assert.match(html, /<button type="submit" disabled=""/);
 });
 
-test('calendar toolbar and staff schedule share the manual flow with search applied to both calendar surfaces', () => {
+test('calendar toolbar opens manual booking with search applied to both calendar surfaces', () => {
   const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
   for (const label of ['Search appointments', 'Calendar view', 'Calendar filters', 'Calendar settings', 'Quick Sale', 'Appointment', 'Blocked staff time', 'Create New Service']) {
     assert.ok(app.includes(label), `Missing calendar control: ${label}`);
   }
   assert.match(app, /const hourEvents = visibleCalendarEvents\.filter/);
   assert.match(app, /visibleCalendarEvents\.map/);
-  assert.match(app, /onClick=\{\(\) => openQuickBooking\(\)\}/);
+  assert.match(app, /closest\('details'\)\.open = false; openQuickBooking\(\)/);
   assert.match(source, /view=manual-booking/);
   assert.match(source, /if \(!response\.ok\) throw new Error/);
+});
+
+test('schedule new-booking button navigates to the booking calendar and preserves the selected branch', () => {
+  const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  const schedule = app.slice(app.indexOf('{/* TAB CONTENT: SCHEDULE */}'), app.indexOf("{activeTab === 'calendar' &&"));
+  assert.match(schedule, /onClick=\{\(\) => \{\s*setCalendarBranch\(effectiveSelectedBranchId\);\s*setActiveTab\('calendar'\);\s*\}\}/);
+  assert.match(schedule, /\{t\.addBooking\}/);
+  assert.doesNotMatch(schedule, /openQuickBooking|onNavigateToBookingPortal/);
+});
+
+test('daily calendar, agenda and appointment details display the shared start-end range', () => {
+  const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  assert.equal((app.match(/\{event\.timeRange \|\| event\.localTime\}/g) || []).length, 2);
+  assert.match(app, /\{selectedCalendarEvent\.timeRange \|\| selectedCalendarEvent\.localTime\}/);
+  assert.match(app, /\['Appointment time', selectedCalendarEvent\.timeRange \|\| selectedCalendarEvent\.localTime\]/);
+  assert.match(app, /const hourEvents = visibleCalendarEvents\.filter\(\(event\) => Number\(event\.localTime/);
 });
