@@ -8,6 +8,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import ts from 'typescript';
 import { AVAILABLE_TIMES } from '../lib/booking-options.js';
 import { validateBookingNote } from '../lib/booking-note.js';
+import { createTsLoader } from './helpers/load-ts-module.js';
 
 const source = readFileSync(new URL('../src/QuickBooking.tsx', import.meta.url), 'utf8');
 const compiled = ts.transpileModule(source, {
@@ -15,7 +16,11 @@ const compiled = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
 }).outputText;
 const module = { exports: {} };
-vm.runInNewContext(compiled, { exports: module.exports, require: createRequire(import.meta.url) });
+const loadTs = createTsLoader();
+const requireWithLocalization = (specifier) => specifier === './localization'
+  ? loadTs(new URL('../src/localization.tsx', import.meta.url).pathname)
+  : createRequire(import.meta.url)(specifier);
+vm.runInNewContext(compiled, { exports: module.exports, require: requireWithLocalization });
 const QuickBooking = module.exports.default;
 
 const props = {
@@ -45,7 +50,7 @@ test('quick booking renders name, one contact input, therapist and time dropdown
   assert.equal((html.match(/<select/g) || []).length, 4);
   assert.match(html, /<option value="1" selected="">Scheduled Therapist/);
   assert.match(html, /<option value="2" selected="">Downtown/);
-  assert.match(html, /<option selected="">02:15 PM/);
+  assert.match(html, /<option value="02:15 PM" selected="">02:15 PM/);
   assert.match(html, /value="2026-11-01"/);
   assert.doesNotMatch(html, /Off Duty|Inactive Therapist|Inactive service/);
   assert.doesNotMatch(html, /type="checkbox"|type="radio"|type="email"|type="tel"/);
@@ -96,8 +101,8 @@ test('schedule new-booking button navigates to the booking calendar and preserve
 
 test('daily calendar, agenda and appointment details display the shared start-end range', () => {
   const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
-  assert.equal((app.match(/\{event\.timeRange \|\| event\.localTime\}/g) || []).length, 2);
-  assert.match(app, /\{selectedCalendarEvent\.timeRange \|\| selectedCalendarEvent\.localTime\}/);
+  assert.equal((app.match(/\{formatTime\(event\.timeRange \|\| event\.localTime\)\}/g) || []).length, 2);
+  assert.match(app, /\{formatTime\(selectedCalendarEvent\.timeRange \|\| selectedCalendarEvent\.localTime\)\}/);
   assert.match(app, /\['Appointment time', selectedCalendarEvent\.timeRange \|\| selectedCalendarEvent\.localTime\]/);
   assert.match(app, /const hourEvents = visibleCalendarEvents\.filter\(\(event\) => Number\(event\.localTime/);
 });
@@ -113,7 +118,7 @@ test('optional dollar discount is sent only by receipt issuance and displayed in
   assert.doesNotMatch(deleteBooking, /manualDiscount/);
   assert.match(app, /setManualReceiptDiscount\(''\)/);
   assert.match(app, /issuedReceipt\.receipt\.manualDiscount\.toFixed\(2\)/);
-  assert.match(app, /insertAdjacentHTML\('beforebegin', `<div class="row"><span>Manual discount/);
+  assert.match(app, /insertAdjacentHTML\('beforebegin', `<div class="row"><span>\$\{label\('Manual discount'\)\}/);
   assert.match(app, /no automatic refund has been issued/);
 });
 
@@ -159,7 +164,7 @@ test('booking note editor displays saved notes, a length limit and internal-only
     compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
   }).outputText;
   const editorModule = { exports: {} };
-  vm.runInNewContext(editorCompiled, { exports: editorModule.exports, require: createRequire(import.meta.url) });
+  vm.runInNewContext(editorCompiled, { exports: editorModule.exports, require: requireWithLocalization });
   const html = renderToStaticMarkup(React.createElement(editorModule.exports.default, {
     bookingId: 'MTT-note', initialNote: 'Please use the quiet room', onSaved: async () => {},
   }));

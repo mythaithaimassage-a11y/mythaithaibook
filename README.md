@@ -145,6 +145,23 @@ rejected rather than silently overwriting another staff member's note. Notes
 are not added to Google Calendar event descriptions, customer emails, public
 booking lookup responses, or receipts. Keep medical information in patient notes.
 
+### Dashboard language
+
+The **EN / ไทย** switch applies to the complete staff dashboard interface,
+including navigation, calendar controls, appointment details, receipt discounts
+and reconciliation, shared notes, imports/sync, packages, loyalty, marketing,
+reports, settings, and sign-in/out. Shared components use the same language
+provider instead of their own English-only labels. Thai date labels use the Thai
+locale and appointment clock labels use 24-hour time; submitted date/time values,
+payment/status identifiers, and database records remain unchanged.
+
+Customer/staff names, addresses, free-text notes, custom catalogue content, and
+third-party content remain as entered. Language selection does not rewrite
+customer emails or stored documents. Printed receipt labels follow the selected
+language. Add new interface text to the shared translation catalogues and keep
+persisted progress/notification messages language-independent so switching
+languages also updates existing messages.
+
 Owners can also use **Add > Blocked staff time** and **Add > Create New Service**
 to open the existing availability and service managers with calendar defaults.
 These actions remain owner-only. The public booking workflow is unchanged.

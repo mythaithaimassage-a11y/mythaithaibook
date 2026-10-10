@@ -5,8 +5,8 @@ import { runWixCalendarSync } from '../src/runWixCalendarSync.js';
 
 test('calendar sync offers inclusive date controls and sends a fixed range on every batch', () => {
   const source = readFileSync(new URL('../src/WixCalendarSync.tsx', import.meta.url), 'utf8');
-  assert.match(source, /<option value="all">All dates<\/option>/);
-  assert.match(source, /<option value="range">Selected date range<\/option>/);
+  assert.match(source, /<option value="all">\{tr\('All dates'\)\}<\/option>/);
+  assert.match(source, /<option value="range">\{tr\('Selected date range'\)\}<\/option>/);
   assert.match(source, /Start date/);
   assert.match(source, /End date \(inclusive\)/);
   assert.equal((source.match(/type="date" required disabled=\{busy\}/g) || []).length, 2);

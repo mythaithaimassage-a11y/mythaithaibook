@@ -18,6 +18,7 @@ import ClearBookingHistory from './ClearBookingHistory';
 import WixCalendarSync from './WixCalendarSync';
 import QuickBooking from './QuickBooking';
 import BookingNote from './BookingNote';
+import { LanguageProvider, createTranslator, message, useTranslation } from './localization';
 import { AVAILABLE_TIMES, BOOKING_DEPOSIT_AMOUNT, branchPaymentOptions, bookingCategories } from '../lib/booking-options.js';
 import { emptyPatientHistory } from '../lib/patient-history.js';
 import { anatomicalBodyParts } from '../lib/body-map.js';
@@ -401,6 +402,7 @@ function describeBodyAngle(angle) {
 }
 
 function BodyAreaMap({ value = '', onChange, readOnly = false, gender = '' }) {
+  const { translate: tr } = useTranslation();
   const selected = Array.isArray(value)
     ? value
     : String(value || '').split(',').map((area) => area.trim()).filter(Boolean);
@@ -466,28 +468,28 @@ function BodyAreaMap({ value = '', onChange, readOnly = false, gender = '' }) {
     <div className="rounded-2xl border border-cyan-100 bg-gradient-to-br from-slate-50 via-white to-cyan-50 p-4">
       <div className="flex flex-wrap items-start justify-between gap-3 mb-3">
         <div>
-          <div className="text-sm font-black text-slate-800">3D body map</div>
-          <div className="text-[11px] text-slate-500">{readOnly ? 'Highlighted areas were reported by the patient. Drag the body or use the slider to turn it.' : 'Tap every affected area. Drag the body or use the slider to turn it.'}</div>
+          <div className="text-sm font-black text-slate-800">{tr('3D body map')}</div>
+          <div className="text-[11px] text-slate-500">{tr(readOnly ? 'Highlighted areas were reported by the patient. Drag the body or use the slider to turn it.' : 'Tap every affected area. Drag the body or use the slider to turn it.')}</div>
         </div>
         <div className="flex items-center gap-2">
-          <div className="flex rounded-lg border border-slate-200 bg-white p-0.5" role="group" aria-label="Body type">
+          <div className="flex rounded-lg border border-slate-200 bg-white p-0.5" role="group" aria-label={tr('Body type')}>
             {BODY_TYPE_OPTIONS.map(([id, label]) => (
-              <button key={id} type="button" onClick={() => setBodyType(id)} aria-pressed={bodyType === id} className={`rounded-md px-2 py-1 text-[10px] font-bold ${bodyType === id ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-50'}`}>{label}</button>
+              <button key={id} type="button" onClick={() => setBodyType(id)} aria-pressed={bodyType === id} className={`rounded-md px-2 py-1 text-[10px] font-bold ${bodyType === id ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-50'}`}>{tr(label)}</button>
             ))}
           </div>
-          <span className="rounded-full bg-cyan-100 px-2.5 py-1 text-[10px] font-bold text-cyan-800">{selected.length} marked</span>
+          <span className="rounded-full bg-cyan-100 px-2.5 py-1 text-[10px] font-bold text-cyan-800">{selected.length} {tr('marked')}</span>
         </div>
       </div>
       <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] md:items-center">
         <div className="mx-auto w-full max-w-[260px]">
           <div className="relative rounded-xl border border-slate-200 bg-gradient-to-b from-white to-slate-100">
-            <div className="absolute left-3 top-2 text-[10px] font-bold uppercase tracking-wide text-slate-400">{describeBodyAngle(angle)}</div>
-            <div className="absolute right-3 top-2 text-[10px] font-semibold text-slate-400">{bodyTypeLabel} body</div>
+            <div className="absolute left-3 top-2 text-[10px] font-bold uppercase tracking-wide text-slate-400">{tr(describeBodyAngle(angle))}</div>
+            <div className="absolute right-3 top-2 text-[10px] font-semibold text-slate-400">{tr(bodyTypeLabel)} {tr('body')}</div>
             <svg
               viewBox="-95 -5 190 385"
               className="h-80 w-full cursor-grab touch-none select-none active:cursor-grabbing"
               role="img"
-              aria-label={`${bodyTypeLabel} body diagram, ${describeBodyAngle(angle).toLowerCase()} view, ${selected.length ? `marked areas: ${selected.join(', ')}` : 'no areas marked'}`}
+              aria-label={tr('{body} body diagram, {view} view, {areas}', { body: tr(bodyTypeLabel), view: tr(describeBodyAngle(angle)), areas: selected.length ? tr('marked areas: {areas}', { areas: selected.map((area) => tr(area)).join(', ') }) : tr('no areas marked') })}
               onPointerDown={onPointerDown}
               onPointerMove={onPointerMove}
               onPointerUp={endDrag}
@@ -525,20 +527,20 @@ function BodyAreaMap({ value = '', onChange, readOnly = false, gender = '' }) {
                   <path d="M 0 76 Q -2 110 0 150 M -7 86 Q -20 98 -17 116 M 7 86 Q 20 98 17 116 M 0 177 L 0 195" />
                 </g>
               )}
-              {leftLabel && <text x="-88" y="200" fontSize="11" fontWeight="700" fill="#94a3b8">{leftLabel}</text>}
-              {rightLabel && <text x="80" y="200" fontSize="11" fontWeight="700" fill="#94a3b8">{rightLabel}</text>}
+              {leftLabel && <text x="-88" y="200" fontSize="11" fontWeight="700" fill="#94a3b8">{tr(leftLabel)}</text>}
+              {rightLabel && <text x="88" y="200" textAnchor="end" fontSize="11" fontWeight="700" fill="#94a3b8">{tr(rightLabel)}</text>}
               {markers.map((marker) => (
                 <g
                   key={marker.area}
                   role="button"
                   tabIndex={readOnly ? -1 : 0}
-                  aria-label={`${marker.area}${marker.marked ? ' (selected)' : ''}`}
+                  aria-label={marker.marked ? tr('{area} (selected)', { area: tr(marker.area) }) : tr(marker.area)}
                   onPointerDown={(event) => event.stopPropagation()}
                   onClick={() => toggle(marker.area)}
                   onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggle(marker.area); } }}
                   className={readOnly ? 'cursor-default' : 'cursor-pointer'}
                 >
-                  <title>{marker.area}</title>
+                  <title>{tr(marker.area)}</title>
                   {marker.marked && <circle cx={marker.x} cy={marker.y} r="12" fill="#22d3ee" opacity="0.25" />}
                   <circle cx={marker.x} cy={marker.y} r="8" fill={marker.marked ? '#0891b2' : '#ffffff'} fillOpacity={marker.marked ? 1 : 0.85} stroke={marker.marked ? '#ffffff' : '#64748b'} strokeWidth="1.5" />
                   {marker.marked && <text x={marker.x} y={marker.y + 3.5} textAnchor="middle" fontSize="9" fontWeight="800" fill="#ffffff">{selected.indexOf(marker.area) + 1}</text>}
@@ -547,29 +549,29 @@ function BodyAreaMap({ value = '', onChange, readOnly = false, gender = '' }) {
             </svg>
           </div>
           <div className="mt-2 flex items-center gap-2">
-            <input type="range" min="0" max="359" value={angle} onChange={(event) => setAngle(Number(event.target.value))} aria-label="Rotate body" className="flex-1 accent-cyan-600" />
+            <input type="range" min="0" max="359" value={angle} onChange={(event) => setAngle(Number(event.target.value))} aria-label={tr('Rotate body')} className="flex-1 accent-cyan-600" />
             <span className="w-9 text-right text-[10px] font-semibold text-slate-500">{angle}°</span>
           </div>
           <div className="mt-2 grid grid-cols-4 gap-1">
             {[['Front', 0], ['Right', 90], ['Back', 180], ['Left', 270]].map(([label, target]) => (
-              <button key={label} type="button" onClick={() => setAngle(target)} className={`rounded-md border px-1 py-1 text-[10px] font-bold ${angle === target ? 'border-cyan-400 bg-cyan-50 text-cyan-800' : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50'}`}>{label}</button>
+              <button key={label} type="button" onClick={() => setAngle(target)} className={`rounded-md border px-1 py-1 text-[10px] font-bold ${angle === target ? 'border-cyan-400 bg-cyan-50 text-cyan-800' : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50'}`}>{tr(label)}</button>
             ))}
           </div>
         </div>
         <div>
-          <div className="text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-2">{readOnly ? 'Reported areas' : 'Affected areas'}</div>
+          <div className="text-[11px] font-bold uppercase tracking-wide text-slate-400 mb-2">{tr(readOnly ? 'Reported areas' : 'Affected areas')}</div>
           <div className="flex flex-wrap gap-1.5">
             {BODY_AREA_OPTIONS.map(([area]) => {
               const marked = selected.includes(area);
               return (
                 <button key={area} type="button" onClick={() => toggle(area)} disabled={readOnly} className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-semibold ${marked ? 'border-cyan-400 bg-cyan-100 text-cyan-900' : 'border-slate-200 bg-white text-slate-500'} ${readOnly ? 'cursor-default' : ''}`}>
                   {marked && <span className="flex h-4 w-4 items-center justify-center rounded-full bg-cyan-600 text-[9px] font-black text-white">{selected.indexOf(area) + 1}</span>}
-                  {area}
+                  {tr(area)}
                 </button>
               );
             })}
           </div>
-          {readOnly && selected.length === 0 && <p className="mt-3 text-[11px] text-slate-500">No body areas were reported.</p>}
+          {readOnly && selected.length === 0 && <p className="mt-3 text-[11px] text-slate-500">{tr('No body areas were reported.')}</p>}
         </div>
       </div>
     </div>
@@ -651,6 +653,10 @@ export default function App() {
   // booking, which unlocks the option to take payment at the clinic instead.
   const [staffBooking, setStaffBooking] = useState(false);
   const [adminLang, setAdminLang] = useState('en'); // 'en' or 'th'
+  const tr = createTranslator(viewMode === 'admin' ? adminLang : 'en');
+  useEffect(() => {
+    document.documentElement.lang = viewMode === 'admin' ? adminLang : 'en';
+  }, [viewMode, adminLang]);
   const [servicesList, setServicesList] = useState(INITIAL_SERVICES);
   const [servicesError, setServicesError] = useState('');
   const [therapistsList, setTherapistsList] = useState(MOCK_THERAPISTS);
@@ -759,9 +765,9 @@ export default function App() {
         <div className="flex items-center space-x-2 font-semibold tracking-wide">
           <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-950 text-xs font-black tracking-tight text-white shadow-sm">M</span>
           <span className={`text-lg font-bold tracking-tight ${viewMode === 'therapist' ? 'text-white' : 'text-slate-950'}`}>MedBook</span>
-          <span className={`hidden rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider sm:inline-flex ${viewMode === 'therapist' ? 'border border-slate-700 bg-slate-900 text-slate-300' : 'border border-emerald-100 bg-emerald-50 text-emerald-800'}`}>Practice platform</span>
+          <span className={`hidden rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider sm:inline-flex ${viewMode === 'therapist' ? 'border border-slate-700 bg-slate-900 text-slate-300' : 'border border-emerald-100 bg-emerald-50 text-emerald-800'}`}>{tr('Practice platform')}</span>
         </div>
-        {entry.staffNavigation ? <nav aria-label="Staff platform views" className={`flex items-center gap-1 rounded-full p-1 ${viewMode === 'therapist' ? 'bg-slate-900' : 'bg-slate-100'}`}>
+        {entry.staffNavigation ? <nav aria-label={tr('Staff platform views')} className={`flex items-center gap-1 rounded-full p-1 ${viewMode === 'therapist' ? 'bg-slate-900' : 'bg-slate-100'}`}>
           {[
             { mode: 'customer', label: 'Booking', Icon: CalendarDays },
             { mode: 'admin', label: 'Dashboard', Icon: BarChart3 },
@@ -774,8 +780,8 @@ export default function App() {
                 type="button"
                 onClick={() => setViewMode(mode)}
                 aria-current={isActive ? 'page' : undefined}
-                aria-label={label}
-                title={label}
+                aria-label={tr(label)}
+                title={tr(label)}
                 className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-xs font-semibold transition-all sm:px-3 ${
                   isActive
                     ? `${mode === 'therapist' ? 'bg-slate-700' : 'bg-emerald-950'} text-white shadow-sm`
@@ -783,7 +789,7 @@ export default function App() {
                 }`}
               >
                 <Icon className="h-4 w-4 shrink-0" />
-                <span className="hidden sm:inline">{label}</span>
+                <span className="hidden sm:inline">{tr(label)}</span>
               </button>
             );
           })}
@@ -804,6 +810,7 @@ export default function App() {
             onNewBooking={(newBkg) => setExistingBookings(prev => [newBkg, ...prev])}
           />
         ) : viewMode === 'admin' ? (
+          <LanguageProvider language={adminLang}>
           <AdminGate>
             <AdminPortal
               branches={branchesList}
@@ -824,6 +831,7 @@ export default function App() {
               onNavigateToBookingPortal={() => { setStaffBooking(true); setViewMode('customer'); }}
             />
           </AdminGate>
+          </LanguageProvider>
         ) : (
           <TherapistPortal />
         )}
@@ -831,10 +839,10 @@ export default function App() {
 
       {/* Footer */}
       <footer className={`${viewMode === 'customer' ? 'border-slate-800 bg-slate-950 text-slate-400' : 'border-stone-800 bg-stone-900 text-stone-400'} border-t px-6 py-4 text-center text-xs`}>
-        <p>© 2026 MY THAI THAI MASSAGE AND WELLNESS INC. All rights reserved. • Toronto & Mississauga, Ontario</p>
-        <nav aria-label="Legal information" className="mt-2 flex flex-wrap justify-center gap-4">
-          <a href="/privacy-policy" className="underline underline-offset-4 hover:text-white">Privacy Policy</a>
-          <a href="/terms-of-service" className="underline underline-offset-4 hover:text-white">Terms of Service</a>
+        <p>© 2026 MY THAI THAI MASSAGE AND WELLNESS INC. {tr('All rights reserved.')} • Toronto & Mississauga, Ontario</p>
+        <nav aria-label={tr('Legal information')} className="mt-2 flex flex-wrap justify-center gap-4">
+          <a href="/privacy-policy" className="underline underline-offset-4 hover:text-white">{tr('Privacy Policy')}</a>
+          <a href="/terms-of-service" className="underline underline-offset-4 hover:text-white">{tr('Terms of Service')}</a>
         </nav>
       </footer>
     </div>
@@ -2236,6 +2244,7 @@ function TherapistPortal() {
 }
 
 function AdminGate({ children }) {
+  const { translate: tr } = useTranslation();
   const [dashboardUser, setDashboardUser] = useState(null);
   const [isCheckingSession, setIsCheckingSession] = useState(true);
   const [isSigningIn, setIsSigningIn] = useState(false);
@@ -2291,9 +2300,7 @@ function AdminGate({ children }) {
           <button
             onClick={signOut}
             className="rounded-lg px-3 py-2 text-xs font-semibold text-slate-500 transition hover:bg-white hover:text-slate-900"
-          >
-            Sign out
-          </button>
+          >{tr("Sign out")}</button>
         </div>
         {React.cloneElement(children, { dashboardUser })}
       </div>
@@ -2304,7 +2311,7 @@ function AdminGate({ children }) {
     return (
       <div className="mx-auto my-16 max-w-md rounded-3xl border border-slate-200 bg-white p-8 text-center shadow-sm">
         <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-4 border-emerald-100 border-t-emerald-800" />
-        <p className="text-sm font-medium text-slate-600">Verifying secure dashboard access…</p>
+        <p className="text-sm font-medium text-slate-600">{tr("Verifying secure dashboard access…")}</p>
       </div>
     );
   }
@@ -2315,9 +2322,9 @@ function AdminGate({ children }) {
         <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-2xl border border-white/15 bg-white/10">
           <Building className="h-6 w-6" />
         </div>
-        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-100">MY THAI THAI</p>
-        <h1 className="mt-2 text-2xl font-bold">{setupMode ? 'Set up owner account' : 'Dashboard sign in'}</h1>
-        <p className="mt-2 text-sm leading-6 text-emerald-50/80">{setupMode ? 'Create the first owner account using the one-time setup key from your administrator.' : 'Sign in with your account and verify using a code sent to your email.'}</p>
+        <p className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-100">{tr("MY THAI THAI")}</p>
+        <h1 className="mt-2 text-2xl font-bold">{setupMode ? tr("Set up owner account") : tr("Dashboard sign in")}</h1>
+        <p className="mt-2 text-sm leading-6 text-emerald-50/80">{setupMode ? tr("Create the first owner account using the one-time setup key from your administrator.") : tr("Sign in with your account and verify using a code sent to your email.")}</p>
       </div>
       <form onSubmit={async (event) => {
         event.preventDefault();
@@ -2366,32 +2373,32 @@ function AdminGate({ children }) {
           setIsSigningIn(false);
         }
       }} className="space-y-4 p-8">
-        {error && <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">{error}</p>}
-        {successMessage && <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">{successMessage}</p>}
+        {error && <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">{tr(error)}</p>}
+        {successMessage && <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">{tr(successMessage)}</p>}
         {setupMode ? <>
-          <label htmlFor="owner-setup-name" className="block text-sm font-semibold text-slate-700">Owner name</label>
-          <input id="owner-setup-name" value={setupName} onChange={(event) => setSetupName(event.target.value)} autoComplete="name" maxLength={120} required className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" placeholder="Your name" />
-          <label htmlFor="owner-setup-email" className="block text-sm font-semibold text-slate-700">Owner email</label>
-          <input id="owner-setup-email" type="email" value={setupEmail} onChange={(event) => setSetupEmail(event.target.value)} autoComplete="email" required className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" placeholder="you@example.com" />
-          <label htmlFor="owner-setup-secret" className="block text-sm font-semibold text-slate-700">One-time setup key</label>
+          <label htmlFor="owner-setup-name" className="block text-sm font-semibold text-slate-700">{tr("Owner name")}</label>
+          <input id="owner-setup-name" value={setupName} onChange={(event) => setSetupName(event.target.value)} autoComplete="name" maxLength={120} required className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" placeholder={tr("Your name")} />
+          <label htmlFor="owner-setup-email" className="block text-sm font-semibold text-slate-700">{tr("Owner email")}</label>
+          <input id="owner-setup-email" type="email" value={setupEmail} onChange={(event) => setSetupEmail(event.target.value)} autoComplete="email" required className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" placeholder={tr("you@example.com")} />
+          <label htmlFor="owner-setup-secret" className="block text-sm font-semibold text-slate-700">{tr("One-time setup key")}</label>
           <input id="owner-setup-secret" type="password" value={setupSecret} onChange={(event) => setSetupSecret(event.target.value)} autoComplete="off" required className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" />
-          <label htmlFor="owner-setup-password" className="block text-sm font-semibold text-slate-700">Owner password (at least 16 characters)</label>
+          <label htmlFor="owner-setup-password" className="block text-sm font-semibold text-slate-700">{tr("Owner password (at least 16 characters)")}</label>
           <input id="owner-setup-password" type="password" value={setupPassword} onChange={(event) => setSetupPassword(event.target.value)} autoComplete="new-password" minLength={16} maxLength={1024} required className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" />
-          <label htmlFor="owner-setup-password-confirmation" className="block text-sm font-semibold text-slate-700">Confirm owner password</label>
+          <label htmlFor="owner-setup-password-confirmation" className="block text-sm font-semibold text-slate-700">{tr("Confirm owner password")}</label>
           <input id="owner-setup-password-confirmation" type="password" value={setupPasswordConfirmation} onChange={(event) => setSetupPasswordConfirmation(event.target.value)} autoComplete="new-password" minLength={16} maxLength={1024} required className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" />
         </> : !challengeId ? <>
-          <label htmlFor="dashboard-email" className="block text-sm font-semibold text-slate-700">Email</label>
-          <input id="dashboard-email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="username" required className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" placeholder="name@example.com" />
-          <label htmlFor="dashboard-password" className="block text-sm font-semibold text-slate-700">Password</label>
-          <input id="dashboard-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" placeholder="Enter your password" />
+          <label htmlFor="dashboard-email" className="block text-sm font-semibold text-slate-700">{tr("Email")}</label>
+          <input id="dashboard-email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="username" required className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" placeholder={tr("name@example.com")} />
+          <label htmlFor="dashboard-password" className="block text-sm font-semibold text-slate-700">{tr("Password")}</label>
+          <input id="dashboard-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required className="w-full rounded-xl border border-slate-300 px-4 py-3 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" placeholder={tr("Enter your password")} />
         </> : <>
-          <p role="status" className="rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-900">A six-digit verification code was sent to {email}.</p>
-          <label htmlFor="dashboard-otp" className="block text-sm font-semibold text-slate-700">Email verification code</label>
+          <p role="status" className="rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-900">{tr("A six-digit verification code was sent to")} {email}.</p>
+          <label htmlFor="dashboard-otp" className="block text-sm font-semibold text-slate-700">{tr("Email verification code")}</label>
           <input id="dashboard-otp" type="text" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} value={otpCode} onChange={(event) => setOtpCode(event.target.value.replace(/\D/g, '').slice(0, 6))} autoComplete="one-time-code" required className="w-full rounded-xl border border-slate-300 px-4 py-3 text-center font-mono text-lg tracking-[0.4em] outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" placeholder="000000" />
-          <button type="button" onClick={() => { setChallengeId(''); setOtpCode(''); setError(''); }} className="text-xs font-semibold text-emerald-800 underline">Back to email and password</button>
+          <button type="button" onClick={() => { setChallengeId(''); setOtpCode(''); setError(''); }} className="text-xs font-semibold text-emerald-800 underline">{tr("Back to email and password")}</button>
         </>}
         <button type="submit" disabled={isSigningIn} className="w-full rounded-xl bg-emerald-900 py-3 text-sm font-bold text-white shadow-lg shadow-emerald-950/15 transition hover:bg-emerald-800 disabled:cursor-wait disabled:opacity-60">
-          {isSigningIn ? 'Please wait…' : setupMode ? 'Create owner account' : challengeId ? 'Verify and sign in' : 'Continue to email verification'}
+          {isSigningIn ? tr("Please wait…") : setupMode ? tr("Create owner account") : challengeId ? tr("Verify and sign in") : tr("Continue to email verification")}
         </button>
         {setupAvailable && !challengeId && (
           <button
@@ -2399,10 +2406,10 @@ function AdminGate({ children }) {
             onClick={() => { setSetupMode(!setupMode); setError(''); setSuccessMessage(''); }}
             className="w-full text-center text-xs font-semibold text-emerald-800 underline"
           >
-            {setupMode ? 'Return to dashboard sign in' : 'First time here? Set up the owner account'}
+            {setupMode ? tr("Return to dashboard sign in") : tr("First time here? Set up the owner account")}
           </button>
         )}
-        <p className="text-center text-xs leading-5 text-slate-500">{setupMode ? 'Setup closes automatically after the first owner account is created.' : 'Your secure session expires after 8 hours.'}</p>
+        <p className="text-center text-xs leading-5 text-slate-500">{setupMode ? tr("Setup closes automatically after the first owner account is created.") : tr("Your secure session expires after 8 hours.")}</p>
       </form>
     </div>
   );
@@ -4133,6 +4140,7 @@ function AdminPortal({
   onNavigateToBookingPortal,
   dashboardUser,
 }) {
+  const { translate: tr, locale, formatTime } = useTranslation();
   const [activeTab, setActiveTab] = useState('schedule');
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [dashboardUsers, setDashboardUsers] = useState([]);
@@ -4589,9 +4597,7 @@ function AdminPortal({
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
-      setLoyaltyNotice(data.alreadyAwarded
-        ? 'Points or prepaid hours were already recorded for this booking.'
-        : `${data.points ? `${data.points} points awarded to ${booking.customerName}` : `${booking.customerName}'s visit recorded`}${data.hoursUsed ? `; ${data.hoursUsed} prepaid hours used.` : '.'}${data.balanceEmailSent === false ? ` Balance email failed: ${data.balanceEmailError || 'check Gmail configuration.'}` : ' Loyalty balance email sent.'}`);
+      setLoyaltyNotice(data.alreadyAwarded ? message("Points or prepaid hours were already recorded for this booking.") : message("{value0}{value1}{value2}", { value0: data.points ? message("{value0} points awarded to {value1}", { value0: data.points, value1: booking.customerName }) : message("{value0}'s visit recorded", { value0: booking.customerName }), value1: data.hoursUsed ? message("; {value0} prepaid hours used.", { value0: data.hoursUsed }) : '.', value2: data.balanceEmailSent === false ? message(" Balance email failed: {value0}", { value0: (data.balanceEmailError || message("check Gmail configuration.")) }) : message(" Loyalty balance email sent.") }));
       await loadLoyaltyDashboard();
     } catch (error) {
       setLoyaltyError(error.message || 'Unable to award loyalty points.');
@@ -4618,7 +4624,7 @@ function AdminPortal({
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
-      setLoyaltyNotice(`${data.redeemedPoints.toLocaleString()} points redeemed for $${Number(data.rewardValue).toFixed(2)} off and linked to booking ${data.bookingId}. Remaining balance: ${data.remainingPoints.toLocaleString()} points.${data.emailSent ? ' Confirmation emailed; the receipt number will be linked and emailed when the receipt is issued.' : ` Redemption saved, but confirmation email failed: ${data.emailError || 'check Gmail configuration.'}`}`);
+      setLoyaltyNotice(message("{value0} points redeemed for ${value1} off and linked to booking {value2}. Remaining balance: {value3} points.{value4}", { value0: data.redeemedPoints.toLocaleString(locale), value1: Number(data.rewardValue).toFixed(2), value2: data.bookingId, value3: data.remainingPoints.toLocaleString(locale), value4: data.emailSent ? message(" Confirmation emailed; the receipt number will be linked and emailed when the receipt is issued.") : message(" Redemption saved, but confirmation email failed: {value0}", { value0: (data.emailError || message("check Gmail configuration.")) }) }));
       setSelectedLoyaltyMember(null);
       setLoyaltyRedeemPoints('');
       setLoyaltyRedeemBookingId('');
@@ -4643,14 +4649,8 @@ function AdminPortal({
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || 'Unable to onboard member.');
-      const platinumNextStep = data.member.membershipType === 'platinum' && !newLoyaltyMember.initialTopUpPaid
-        ? ' The company request is pending; use the member row to record the top-up after payment is confirmed.'
-        : newLoyaltyMember.initialTopUpPaid
-          ? ` ${Number(data.hoursBalance).toFixed(2)} prepaid hours were added after confirming payment.`
-          : '';
-      setLoyaltyNotice(`${data.emailSent
-        ? `Membership saved and eligibility details emailed to ${data.member.email}.`
-        : `Membership saved, but the email could not be sent: ${data.emailError || 'check Gmail configuration and retry.'}`}${platinumNextStep}`);
+      const platinumNextStep = data.member.membershipType === 'platinum' && !newLoyaltyMember.initialTopUpPaid ? message(" The company request is pending; use the member row to record the top-up after payment is confirmed.") : newLoyaltyMember.initialTopUpPaid ? message(" {value0} prepaid hours were added after confirming payment.", { value0: Number(data.hoursBalance).toFixed(2) }) : '';
+      setLoyaltyNotice(message("{value0}{value1}", { value0: data.emailSent ? message("Membership saved and eligibility details emailed to {value0}.", { value0: data.member.email }) : message("Membership saved, but the email could not be sent: {value0}", { value0: (data.emailError || message("check Gmail configuration and retry.")) }), value1: platinumNextStep }));
       setNewLoyaltyMember({ name: '', email: '', phone: '', membershipType: 'gold', organization: '', companyId: '', companyContactEmail: '', paidThrough: '', initialTopUpPaid: false, isPrimaryOwner: false });
       setLoyaltyOnboardingSearch('');
       await loadLoyaltyDashboard();
@@ -4674,7 +4674,7 @@ function AdminPortal({
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || 'Unable to record Platinum top-up.');
-      setLoyaltyNotice(`Recorded $${Number(loyaltySettings.membershipPlans.platinum.topUpPrice).toFixed(2)} payment; ${data.hoursAdded} prepaid hours added. New balance: ${Number(data.hoursBalance).toFixed(2)} hours.${data.emailSent ? ' Balance email sent.' : ` Balance email failed: ${data.emailError || 'check Gmail configuration.'}`}`);
+      setLoyaltyNotice(message("Recorded ${value0} payment; {value1} prepaid hours added. New balance: {value2} hours.{value3}", { value0: Number(loyaltySettings.membershipPlans.platinum.topUpPrice).toFixed(2), value1: data.hoursAdded, value2: Number(data.hoursBalance).toFixed(2), value3: data.emailSent ? message(" Balance email sent.") : message(" Balance email failed: {value0}", { value0: (data.emailError || message("check Gmail configuration.")) }) }));
       setSelectedTopUpMember(null);
       await loadLoyaltyDashboard();
     } catch (error) {
@@ -4696,7 +4696,7 @@ function AdminPortal({
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || 'Unable to update the primary contact.');
-      setLoyaltyNotice(`${member.name || member.email} is now the primary owner/contact for ${member.organization || 'this company'} — only they can top up the shared balance.`);
+      setLoyaltyNotice(message("{value0} is now the primary owner/contact for {value1} — only they can top up the shared balance.", { value0: (member.name || member.email), value1: (member.organization || message("this company")) }));
       await loadLoyaltyDashboard();
     } catch (error) {
       setLoyaltyError(error.message || 'Unable to update the primary contact.');
@@ -4723,10 +4723,8 @@ function AdminPortal({
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || 'Unable to record membership payment.');
-      const emailStatus = data.emailFailures?.length
-        ? ` ${data.emailFailures.length} payment notification(s) failed.`
-        : ` Payment confirmations emailed to ${data.emailsSent} member(s).`;
-      setLoyaltyNotice(`Payment recorded through ${data.paidThrough} for ${data.updatedCount} member(s).${emailStatus}`);
+      const emailStatus = data.emailFailures?.length ? message(" {value0} payment notification(s) failed.", { value0: data.emailFailures.length }) : message(" Payment confirmations emailed to {value0} member(s).", { value0: data.emailsSent });
+      setLoyaltyNotice(message("Payment recorded through {value0} for {value1} member(s).{value2}", { value0: data.paidThrough, value1: data.updatedCount, value2: emailStatus }));
       setSelectedMembershipPayment(null);
       setMembershipPaidThrough('');
       await loadLoyaltyDashboard();
@@ -4750,7 +4748,7 @@ function AdminPortal({
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || 'Unable to remove this member.');
-      setLoyaltyNotice(`${memberPendingRemoval.name || memberPendingRemoval.email} was removed from the loyalty program.${data.emailSent ? ' Removal notice emailed.' : data.emailError ? ` Removal notice failed: ${data.emailError}` : ''}`);
+      setLoyaltyNotice(message("{value0} was removed from the loyalty program.{value1}", { value0: (memberPendingRemoval.name || memberPendingRemoval.email), value1: data.emailSent ? message(" Removal notice emailed.") : data.emailError ? message(" Removal notice failed: {value0}", { value0: data.emailError }) : '' }));
       setMemberPendingRemoval(null);
       await loadLoyaltyDashboard();
     } catch (error) {
@@ -4785,9 +4783,7 @@ function AdminPortal({
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || 'Unable to clear the loyalty ledger.');
-      setLoyaltyNotice(ledgerResetScope === 'all'
-        ? `Cleared all ${data.clearedCount} loyalty ledger entries. Every member's points and prepaid hours are now reset to zero.`
-        : `Cleared ${data.clearedCount} ledger entr${data.clearedCount === 1 ? 'y' : 'ies'} for ${data.email}. Their points and prepaid hours are now reset to zero.`);
+      setLoyaltyNotice(ledgerResetScope === 'all' ? message("Cleared all {value0} loyalty ledger entries. Every member's points and prepaid hours are now reset to zero.", { value0: data.clearedCount }) : message("Cleared {value0} ledger entr{value1} for {value2}. Their points and prepaid hours are now reset to zero.", { value0: data.clearedCount, value1: data.clearedCount === 1 ? message("y") : message("ies"), value2: data.email }));
       setIsLedgerResetOpen(false);
       setLedgerResetEmail('');
       setLedgerResetConfirm('');
@@ -4812,7 +4808,7 @@ function AdminPortal({
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || 'Unable to remove this company.');
-      setLoyaltyNotice(`Removed ${data.removedCount} member(s) from ${data.organization}.${data.emailsSent ? ` ${data.emailsSent} removal notice(s) emailed.` : ''}${data.emailsFailed ? ` ${data.emailsFailed} notice(s) failed.` : ''}`);
+      setLoyaltyNotice(message("Removed {value0} member(s) from {value1}.{value2}{value3}", { value0: data.removedCount, value1: data.organization, value2: data.emailsSent ? message(" {value0} removal notice(s) emailed.", { value0: data.emailsSent }) : '', value3: data.emailsFailed ? message(" {value0} notice(s) failed.", { value0: data.emailsFailed }) : '' }));
       setCompanyPendingRemoval('');
       await loadLoyaltyDashboard();
     } catch (error) {
@@ -4840,9 +4836,7 @@ function AdminPortal({
       const url = kind === 'join' ? data.joinUrl : data.portalUrl;
       if (!url) throw new Error('Unable to create a company portal link.');
       if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(url);
-      setLoyaltyNotice(navigator.clipboard?.writeText
-        ? `${label} for ${member.organization} copied to clipboard.`
-        : `${label} for ${member.organization}: ${url}`);
+      setLoyaltyNotice(navigator.clipboard?.writeText ? message("{value0} for {value1} copied to clipboard.", { value0: message(label), value1: member.organization }) : message("{value0} for {value1}: {value2}", { value0: message(label), value1: member.organization, value2: url }));
     } catch (error) {
       setLoyaltyError(error.message || 'Unable to create a company portal link.');
     } finally {
@@ -4998,7 +4992,7 @@ function AdminPortal({
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || 'Unable to create dashboard account.');
-      setDashboardUserMessage(`Created ${data.user.role.replaceAll('_', ' ')} access for ${data.user.email}. Share the initial password through a secure channel.`);
+      setDashboardUserMessage(message("Created {value0} access for {value1}. Share the initial password through a secure channel.", { value0: message(data.user.role.replaceAll('_', ' ')), value1: data.user.email }));
       setNewDashboardUser({ name: '', email: '', password: '', role: 'branch_manager', branchIds: [] });
       await loadDashboardUsers();
     } catch (error) {
@@ -5010,7 +5004,7 @@ function AdminPortal({
 
   const updateDashboardUserStatus = async (account) => {
     const status = account.status === 'active' ? 'disabled' : 'active';
-    if (status === 'disabled' && !window.confirm(`Disable dashboard access for ${account.email}?`)) return;
+    if (status === 'disabled' && !window.confirm(tr("Disable dashboard access for {value0}?", { value0: account.email }))) return;
     setDashboardUserError('');
     try {
       const response = await fetch('/api/booking?view=dashboard-user-status', {
@@ -5200,7 +5194,7 @@ function AdminPortal({
   };
 
   const deleteBooking = async (bookingId) => {
-    if (!confirm(`Permanently remove booking ${bookingId} and its calendar event? This cannot be undone.`)) return;
+    if (!confirm(tr("Permanently remove booking {value0} and its calendar event? This cannot be undone.", { value0: bookingId }))) return;
     setDeletingBookingId(bookingId);
     setDeleteBookingError('');
     try {
@@ -5244,7 +5238,7 @@ function AdminPortal({
       }
       if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
       setIssuedReceipt(data);
-      setReceiptNotice(data.alreadyIssued ? `Receipt ${data.receipt.number} was already emailed.` : `Receipt ${data.receipt.number} was emailed to ${data.booking.email}.`);
+      setReceiptNotice(data.alreadyIssued ? message("Receipt {value0} was already emailed.", { value0: data.receipt.number }) : message("Receipt {value0} was emailed to {value1}.", { value0: data.receipt.number, value1: data.booking.email }));
       await Promise.all([loadCalendar(), loadBookingsFromBackend()]);
     } catch (error) {
       setReceiptError(error.message || 'Unable to issue receipt');
@@ -5273,9 +5267,7 @@ function AdminPortal({
       setBookings((current) => current.map((item) => item.id === data.booking.id
         ? { ...item, paidAmount: data.booking.paidAmount }
         : item));
-      setReceiptNotice(data.alreadyPaid
-        ? 'This appointment was already marked as paid.'
-        : `Payment of $${Number(data.booking.paidAmount).toFixed(2)} recorded. You can now issue the receipt.`);
+      setReceiptNotice(data.alreadyPaid ? message("This appointment was already marked as paid.") : message("Payment of ${value0} recorded. You can now issue the receipt.", { value0: Number(data.booking.paidAmount).toFixed(2) }));
       await loadCalendar();
     } catch (error) {
       setReceiptError(error.message || 'Unable to record payment');
@@ -5398,7 +5390,7 @@ function AdminPortal({
         : current);
       setBookings((current) => current.map((item) => item.id === booking.id ? { ...item, therapistName: data.therapistName } : item));
       setTherapistReassignTo('');
-      setReceiptNotice(`Reassigned from ${data.previousTherapist || 'Unassigned'} to ${data.therapistName}.`);
+      setReceiptNotice(message("Reassigned from {value0} to {value1}.", { value0: (data.previousTherapist || message("Unassigned")), value1: data.therapistName }));
     } catch (error) {
       setReceiptError(error.message || 'Unable to change the therapist for this appointment.');
     } finally {
@@ -5484,7 +5476,7 @@ function AdminPortal({
       setCampaignAudience({ query: '', mode: 'manual', filters, ...data });
       setCampaignConversation((current) => [...current, {
         role: 'assistant',
-        text: `${data.description} I found ${data.count} matching ${data.count === 1 ? 'person' : 'people'} from ${data.subscriberCount} active opted-in subscribers.${data.sendReady ? '' : ` ${data.sendBlockReason}`}`,
+        text: message("{value0} I found {value1} matching {value2} from {value3} active opted-in subscribers.{value4}", { value0: data.description, value1: data.count, value2: data.count === 1 ? message("person") : message("people"), value3: data.subscriberCount, value4: data.sendReady ? '' : message(" {value0}", { value0: data.sendBlockReason }) }),
       }]);
     } catch (error) {
       setCampaignAudience(null);
@@ -5515,13 +5507,11 @@ function AdminPortal({
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
       setCampaignAudience({ query: cleanQuery, mode: 'assistant', filters: null, ...data });
-      const readinessMessage = data.sendReady ? '' : ` ${data.sendBlockReason}`;
-      const filterMessage = data.count < data.subscriberCount
-        ? ' A filter can exclude subscribers who do not have matching booking history. Choose “All active opted-in subscribers” to include everyone.'
-        : '';
+      const readinessMessage = data.sendReady ? '' : message(" {value0}", { value0: message(data.sendBlockReason) });
+      const filterMessage = data.count < data.subscriberCount ? message(" A filter can exclude subscribers who do not have matching booking history. Choose “All active opted-in subscribers” to include everyone.") : '';
       setCampaignConversation((current) => [...current, {
         role: 'assistant',
-        text: `${data.description} I found ${data.count} matching ${data.count === 1 ? 'person' : 'people'} from ${data.subscriberCount} active opted-in subscribers.${filterMessage}${readinessMessage}`,
+        text: message("{value0} I found {value1} matching {value2} from {value3} active opted-in subscribers.{value4}{value5}", { value0: data.description, value1: data.count, value2: data.count === 1 ? message("person") : message("people"), value3: data.subscriberCount, value4: filterMessage, value5: readinessMessage }),
       }]);
     } catch (error) {
       setCampaignAudience(null);
@@ -5559,7 +5549,7 @@ function AdminPortal({
       setCampaignSubject(data.draft.subject);
       setCampaignPreview(data.draft.preview);
       setCampaignMessage(data.draft.message);
-      setCampaignNotice(`AI drafted a message for ${data.audienceCount} matching opted-in recipients. Review and edit it before saving or sending.`);
+      setCampaignNotice(message("AI drafted a message for {value0} matching opted-in recipients. Review and edit it before saving or sending.", { value0: data.audienceCount }));
     } catch (error) {
       setCampaignError(error.message || 'Unable to generate a campaign draft');
     } finally {
@@ -5574,7 +5564,7 @@ function AdminPortal({
       return;
     }
     const confirmed = window.confirm(
-      `Send “${campaignSubject.trim()}” to ${campaignAudience.count} opted-in recipients?\n\nAudience: ${campaignAudience.description}\n\nThis sends immediately from ${campaignAudience.senderEmail || 'mythaithaimassage@gmail.com'}.`,
+      tr("Send “{value0}” to {value1} opted-in recipients?\n\nAudience: {value2}\n\nThis sends immediately from {value3}.", { value0: campaignSubject.trim(), value1: campaignAudience.count, value2: campaignAudience.description, value3: campaignAudience.senderEmail || 'mythaithaimassage@gmail.com' }),
     );
     if (!confirmed) return;
     setIsSendingCampaign(true);
@@ -5596,12 +5586,12 @@ function AdminPortal({
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
-      setCampaignNotice(`Campaign sent to ${data.sent} of ${data.audienceCount} opted-in recipients.${data.failed ? ` ${data.failed} message${data.failed === 1 ? '' : 's'} failed; check server logs before retrying to avoid duplicate emails.` : ''}`);
+      setCampaignNotice(message("Campaign sent to {value0} of {value1} opted-in recipients.{value2}", { value0: data.sent, value1: data.audienceCount, value2: data.failed ? message(" {value0} message{value1} failed; check server logs before retrying to avoid duplicate emails.", { value0: data.failed, value1: data.failed === 1 ? '' : message("s") }) : '' }));
       setCampaignAudience(null);
       if (data.failed) setCampaignError('Some campaign emails failed to send. Do not resend until you have checked which messages were delivered.');
       setCampaignConversation((current) => [...current, {
         role: 'assistant',
-        text: `Campaign delivery finished: ${data.sent} sent and ${data.failed} failed.`,
+        text: message("Campaign delivery finished: {value0} sent and {value1} failed.", { value0: data.sent, value1: data.failed }),
       }]);
       loadCampaignHistory();
     } catch (error) {
@@ -5635,14 +5625,15 @@ function AdminPortal({
     const safe = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
     }[char]));
+    const label = (value) => safe(tr(value));
     const { receipt, booking: originalBooking, businessProfile: profile } = data;
-    const booking = { ...originalBooking, paymentOption: `${originalBooking.paymentOption}${receipt.packageUsage ? ` — ${receipt.packageUsage.description} Allocated session value $${receipt.packageUsage.allocatedTotal.toFixed(2)}; new payment $0.00.` : ''}` };
-    popup.document.write(`<!doctype html><html><head><title>Receipt ${safe(receipt.number)}</title><meta charset="utf-8"><style>body{font:15px Arial,sans-serif;color:#17231e;max-width:760px;margin:48px auto;padding:32px}header{display:flex;justify-content:space-between;border-bottom:3px solid #087765;padding-bottom:20px}h1{font-size:28px;margin:0}small,.muted{color:#65716b}.row{display:flex;justify-content:space-between;padding:12px 0;border-bottom:1px solid #e5ebe7}.total{font-size:20px;font-weight:bold;border-top:2px solid #087765;margin-top:18px;padding-top:18px}.balance{margin-top:20px;padding:12px;background:#eff6f3;border-radius:8px}button{margin:24px 0;padding:10px 18px;background:#073d32;color:white;border:0;border-radius:8px}@media print{button{display:none}body{margin:0 auto}}</style></head><body><header><div><h1>${safe(profile.businessName)}</h1><p class="muted">${safe(profile.legalName)}</p><p class="muted">${safe(profile.address)}</p><p class="muted">${safe(profile.phone)} · ${safe(profile.email)}</p>${profile.taxRegistrationNumber ? `<p class="muted">GST/HST No.: ${safe(profile.taxRegistrationNumber)}</p>` : ''}</div><h1>RECEIPT</h1></header><p><strong>Receipt No.</strong> ${safe(receipt.number)}<br><strong>Issued</strong> ${safe(receipt.issuedAt.slice(0, 10))}</p><p><strong>Client</strong> ${safe(booking.customerName)}<br>${safe(booking.email)}<br>${safe(booking.phone)}</p><p><strong>Service date</strong> ${safe(booking.date)}<br><strong>Payment method</strong> ${safe(booking.paymentOption)}</p><div class="row"><strong>${safe(booking.serviceName)}</strong><span>$${receipt.subtotal.toFixed(2)}</span></div>${receipt.membershipDiscountAmount > 0 ? `<div class="row"><span>${safe(receipt.membershipDiscountLabel)} (${receipt.membershipDiscountPercent}%)</span><span>-$${receipt.membershipDiscountAmount.toFixed(2)}</span></div>` : ''}${receipt.loyaltyDiscount > 0 ? `<div class="row"><span>Loyalty discount · ${receipt.pointsRedeemed.toLocaleString()} points</span><span>-$${receipt.loyaltyDiscount.toFixed(2)}</span></div>` : ''}<div class="row"><span>${safe(receipt.taxLabel)}</span><span>$${receipt.tax.toFixed(2)}</span></div><div class="row total"><span>Total paid</span><span>$${receipt.total.toFixed(2)}</span></div>${receipt.loyaltyMember ? `<p class="balance"><strong>Loyalty points balance:</strong> ${receipt.pointsBalance.toLocaleString()}</p>` : ''}<p class="muted" style="text-align:center;margin-top:64px">Thank you for choosing ${safe(profile.businessName)}.</p><button onclick="window.print()">Print receipt</button></body></html>`);
+    const booking = { ...originalBooking, paymentOption: `${tr(originalBooking.paymentOption)}${receipt.packageUsage ? ` — ${tr(receipt.packageUsage.description)} ${tr('Allocated session value ${value}; new payment $0.00.', { value: receipt.packageUsage.allocatedTotal.toFixed(2) })}` : ''}` };
+    popup.document.write(`<!doctype html><html lang="${lang}"><head><title>${label('Receipt')} ${safe(receipt.number)}</title><meta charset="utf-8"><style>body{font:15px Arial,sans-serif;color:#17231e;max-width:760px;margin:48px auto;padding:32px}header{display:flex;justify-content:space-between;border-bottom:3px solid #087765;padding-bottom:20px}h1{font-size:28px;margin:0}small,.muted{color:#65716b}.row{display:flex;justify-content:space-between;padding:12px 0;border-bottom:1px solid #e5ebe7}.total{font-size:20px;font-weight:bold;border-top:2px solid #087765;margin-top:18px;padding-top:18px}.balance{margin-top:20px;padding:12px;background:#eff6f3;border-radius:8px}button{margin:24px 0;padding:10px 18px;background:#073d32;color:white;border:0;border-radius:8px}@media print{button{display:none}body{margin:0 auto}}</style></head><body><header><div><h1>${safe(profile.businessName)}</h1><p class="muted">${safe(profile.legalName)}</p><p class="muted">${safe(profile.address)}</p><p class="muted">${safe(profile.phone)} · ${safe(profile.email)}</p>${profile.taxRegistrationNumber ? `<p class="muted">${label('GST/HST No.')}: ${safe(profile.taxRegistrationNumber)}</p>` : ''}</div><h1>${label('RECEIPT')}</h1></header><p><strong>${label('Receipt No.')}</strong> ${safe(receipt.number)}<br><strong>${label('Issued')}</strong> ${safe(receipt.issuedAt.slice(0, 10))}</p><p><strong>${label('Client')}</strong> ${safe(booking.customerName)}<br>${safe(booking.email)}<br>${safe(booking.phone)}</p><p><strong>${label('Service date')}</strong> ${safe(booking.date)}<br><strong>${label('Payment method')}</strong> ${safe(booking.paymentOption)}</p><div class="row"><strong>${label(booking.serviceName)}</strong><span>$${receipt.subtotal.toFixed(2)}</span></div>${receipt.membershipDiscountAmount > 0 ? `<div class="row"><span>${label(receipt.membershipDiscountLabel)} (${receipt.membershipDiscountPercent}%)</span><span>-$${receipt.membershipDiscountAmount.toFixed(2)}</span></div>` : ''}${receipt.loyaltyDiscount > 0 ? `<div class="row"><span>${label('Loyalty discount ·')} ${receipt.pointsRedeemed.toLocaleString(locale)} ${label('points')}</span><span>-$${receipt.loyaltyDiscount.toFixed(2)}</span></div>` : ''}<div class="row"><span>${label(receipt.taxLabel)}</span><span>$${receipt.tax.toFixed(2)}</span></div><div class="row total"><span>${label('Total paid')}</span><span>$${receipt.total.toFixed(2)}</span></div>${receipt.loyaltyMember ? `<p class="balance"><strong>${label('Loyalty points balance:')}</strong> ${receipt.pointsBalance.toLocaleString(locale)}</p>` : ''}<p class="muted" style="text-align:center;margin-top:64px">${safe(tr('Thank you for choosing {business}.', { business: profile.businessName }))}</p><button onclick="window.print()">${label('Print receipt')}</button></body></html>`);
     if (receipt.manualDiscount > 0) {
-      popup.document.querySelector('.total')?.insertAdjacentHTML('beforebegin', `<div class="row"><span>Manual discount</span><span>-$${receipt.manualDiscount.toFixed(2)}</span></div>`);
+      popup.document.querySelector('.total')?.insertAdjacentHTML('beforebegin', `<div class="row"><span>${label('Manual discount')}</span><span>-$${receipt.manualDiscount.toFixed(2)}</span></div>`);
     }
     if (receipt.overpaymentAmount > 0) {
-      popup.document.querySelector('.total')?.insertAdjacentHTML('afterend', `<p class="balance">Recorded payment: $${receipt.recordedPaidAmount.toFixed(2)}. Excess recorded payment: $${receipt.overpaymentAmount.toFixed(2)}. Reconcile manually; no automatic refund has been issued.</p>`);
+      popup.document.querySelector('.total')?.insertAdjacentHTML('afterend', `<p class="balance">${label('Recorded payment: $')}${receipt.recordedPaidAmount.toFixed(2)}${label('. Excess recorded payment: $')}${receipt.overpaymentAmount.toFixed(2)}${label('. Reconcile manually; no automatic refund has been issued.')}</p>`);
     }
     popup.document.close();
     popup.focus();
@@ -5785,7 +5776,7 @@ function AdminPortal({
   const [deletePatientHistoryError, setDeletePatientHistoryError] = useState('');
 
   const deletePatientHistoryRecord = async (profile) => {
-    if (!confirm(`Permanently clear the medical history on file for ${profile.patientName || profile.bookingId}? This cannot be undone.`)) return;
+    if (!confirm(tr("Permanently clear the medical history on file for {value0}? This cannot be undone.", { value0: profile.patientName || profile.bookingId }))) return;
     const key = `${profile.bookingId}-${profile.createdAt}`;
     setDeletingPatientHistoryKey(key);
     setDeletePatientHistoryError('');
@@ -5845,8 +5836,8 @@ function AdminPortal({
   }, [activeTab]);
 
   const updateTherapistAccountStatus = async (account, status) => {
-    if (status === 'rejected' && !confirm(`Reject the therapist account request from ${account.name || account.username}?`)) return;
-    if (status === 'pending' && !confirm(`Revoke access for ${account.name || account.username}? They will not be able to sign in until approved again.`)) return;
+    if (status === 'rejected' && !confirm(tr("Reject the therapist account request from {value0}?", { value0: account.name || account.username }))) return;
+    if (status === 'pending' && !confirm(tr("Revoke access for {value0}? They will not be able to sign in until approved again.", { value0: account.name || account.username }))) return;
     setUpdatingTherapistAccountId(account.id);
     setTherapistAccountsError('');
     try {
@@ -5926,16 +5917,16 @@ function AdminPortal({
           <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-400 text-sm font-black text-slate-950">M</div>
           <div>
             <div className="text-base font-bold tracking-tight text-white">MedBook</div>
-            <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-slate-500">Practice manager</div>
+            <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-slate-500">{tr("Practice manager")}</div>
           </div>
         </div>
         <div className="px-4 py-4">
-          <div className="rounded-lg border border-white/10 bg-white/[0.06] px-3 py-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Quick actions <ChevronRightIcon className="float-right h-3.5 w-3.5 rotate-90" /></div>
+          <div className="rounded-lg border border-white/10 bg-white/[0.06] px-3 py-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">{tr("Quick actions")} <ChevronRightIcon className="float-right h-3.5 w-3.5 rotate-90" /></div>
         </div>
-        <nav aria-label="Owner dashboard navigation" className="flex-1 overflow-y-auto px-3 pb-4">
+        <nav aria-label={tr("Owner dashboard navigation")} className="flex-1 overflow-y-auto px-3 pb-4">
           {navigationSections.map((section) => (
             <div key={section} className="mb-5">
-              <p className="px-3 pb-2 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">{section}</p>
+              <p className="px-3 pb-2 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">{tr(section)}</p>
               <div className="space-y-1">
                 {visibleAdminNavigation.filter((item) => item.section === section).map((item, index) => {
                   const Icon = item.icon;
@@ -5948,7 +5939,7 @@ function AdminPortal({
                       className={`group flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-xs font-medium transition ${selected ? 'bg-white/10 text-white shadow-sm' : 'text-slate-400 hover:bg-white/[0.06] hover:text-white'}`}
                     >
                       <Icon className={`h-4 w-4 shrink-0 ${selected ? 'text-emerald-300' : 'text-slate-500 group-hover:text-slate-300'}`} />
-                      <span className="flex-1">{item.label}</span>
+                      <span className="flex-1">{tr(item.label)}</span>
                       {item.badge > 0 && <span className="rounded-full bg-amber-400 px-1.5 py-0.5 text-[10px] font-bold text-slate-950">{item.badge}</span>}
                       {selected && <span className="h-1.5 w-1.5 rounded-full bg-emerald-300" />}
                     </button>
@@ -5961,7 +5952,7 @@ function AdminPortal({
         <div className="border-t border-white/10 p-4">
           <div className="flex items-center gap-3 rounded-xl bg-white/[0.05] p-3">
             <div className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-100 text-xs font-bold text-emerald-950">MT</div>
-            <div className="min-w-0"><div className="truncate text-xs font-semibold text-white">Practice owner</div><div className="text-[10px] text-slate-500">Owner account</div></div>
+            <div className="min-w-0"><div className="truncate text-xs font-semibold text-white">{tr("Practice owner")}</div><div className="text-[10px] text-slate-500">{tr("Owner account")}</div></div>
             <ShieldCheck className="ml-auto h-4 w-4 shrink-0 text-emerald-300" />
           </div>
         </div>
@@ -5971,14 +5962,14 @@ function AdminPortal({
         <div className="sticky top-[58px] z-20 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur sm:px-6 lg:top-[58px]">
           <div className="flex items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-3">
-              <button type="button" aria-label="Toggle dashboard menu" aria-expanded={mobileNavOpen} onClick={() => setMobileNavOpen((open) => !open)} className="rounded-lg border border-slate-200 p-2 text-slate-600 hover:bg-slate-50 lg:hidden"><Menu className="h-4 w-4" /></button>
+              <button type="button" aria-label={tr("Toggle dashboard menu")} aria-expanded={mobileNavOpen} onClick={() => setMobileNavOpen((open) => !open)} className="rounded-lg border border-slate-200 p-2 text-slate-600 hover:bg-slate-50 lg:hidden"><Menu className="h-4 w-4" /></button>
               <div className="min-w-0">
                 <p className="truncate text-sm font-bold text-slate-900">{businessProfile.businessName || 'MY THAI THAI'}</p>
-                <p className="hidden text-[11px] text-slate-500 sm:block">{pageTitle} <span className="px-1 text-slate-300">/</span> Owner workspace</p>
+                <p className="hidden text-[11px] text-slate-500 sm:block">{tr(pageTitle)} <span className="px-1 text-slate-300">/</span> {tr("Owner workspace")}</p>
               </div>
             </div>
             <div className="flex items-center gap-2 sm:gap-3">
-              <span className="hidden items-center gap-1.5 text-[11px] font-medium text-slate-500 sm:inline-flex"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> Workspace active</span>
+              <span className="hidden items-center gap-1.5 text-[11px] font-medium text-slate-500 sm:inline-flex"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> {tr("Workspace active")}</span>
               <div className="flex items-center rounded-lg border border-slate-200 p-0.5">
                 <button onClick={() => setLang('en')} className={`rounded-md px-2 py-1 text-[10px] font-bold ${lang === 'en' ? 'bg-slate-900 text-white' : 'text-slate-500'}`}>EN</button>
                 <button onClick={() => setLang('th')} className={`rounded-md px-2 py-1 text-[10px] font-bold ${lang === 'th' ? 'bg-slate-900 text-white' : 'text-slate-500'}`}>ไทย</button>
@@ -5987,10 +5978,10 @@ function AdminPortal({
             </div>
           </div>
           {mobileNavOpen && (
-            <nav aria-label="Mobile owner dashboard navigation" className="mt-3 grid grid-cols-2 gap-1 border-t border-slate-100 pt-3 sm:grid-cols-3">
+            <nav aria-label={tr("Mobile owner dashboard navigation")} className="mt-3 grid grid-cols-2 gap-1 border-t border-slate-100 pt-3 sm:grid-cols-3">
               {visibleAdminNavigation.map((item, index) => {
                 const Icon = item.icon;
-                return <button key={`${item.label}-${index}`} onClick={() => { setActiveTab(item.id); setMobileNavOpen(false); }} className={`flex items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-semibold ${activeTab === item.id ? 'bg-emerald-950 text-white' : 'text-slate-600 hover:bg-slate-100'}`}><Icon className="h-4 w-4" />{item.label}{item.badge > 0 && <span className="ml-auto rounded-full bg-amber-400 px-1.5 text-[10px] font-bold text-slate-950">{item.badge}</span>}</button>;
+                return <button key={`${item.label}-${index}`} onClick={() => { setActiveTab(item.id); setMobileNavOpen(false); }} className={`flex items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-semibold ${activeTab === item.id ? 'bg-emerald-950 text-white' : 'text-slate-600 hover:bg-slate-100'}`}><Icon className="h-4 w-4" />{tr(item.label)}{item.badge > 0 && <span className="ml-auto rounded-full bg-amber-400 px-1.5 text-[10px] font-bold text-slate-950">{item.badge}</span>}</button>;
               })}
             </nav>
           )}
@@ -6003,9 +5994,7 @@ function AdminPortal({
         <div className="relative z-10 flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.15em] text-emerald-100">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-300" />
-              Owner dashboard
-            </div>
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-300" />{tr("Owner dashboard")}</div>
             <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">{businessProfile.businessName || 'MY THAI THAI'}</h1>
             <p className="mt-2 max-w-2xl text-sm text-emerald-50/75">{businessProfile.tagline || t.subTitle}</p>
           </div>
@@ -6019,18 +6008,16 @@ function AdminPortal({
               onClick={() => setActiveTab('business-profile')}
               className="inline-flex items-center gap-2 rounded-xl bg-white px-4 py-2.5 text-xs font-bold text-emerald-950 shadow-lg transition hover:bg-emerald-50"
             >
-              <Settings className="h-4 w-4" />
-              Edit business profile
-            </button>
+              <Settings className="h-4 w-4" />{tr("Edit business profile")}</button>
           </div>
         </div>
         <div className="relative z-10 mt-6 flex flex-wrap items-center gap-2 border-t border-white/15 pt-5">
-          <span className="mr-1 text-[11px] font-semibold uppercase tracking-wide text-emerald-100/70">Location</span>
-          <button onClick={() => setSelectedBranchId('all')} className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${selectedBranchId === 'all' ? 'bg-white text-emerald-950' : 'text-white/80 hover:bg-white/10'}`}>{dashboardUser.role === 'owner' ? t.allBranches : 'Assigned branches'}</button>
+          <span className="mr-1 text-[11px] font-semibold uppercase tracking-wide text-emerald-100/70">{tr("Location")}</span>
+          <button onClick={() => setSelectedBranchId('all')} className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${selectedBranchId === 'all' ? 'bg-white text-emerald-950' : 'text-white/80 hover:bg-white/10'}`}>{dashboardUser.role === 'owner' ? t.allBranches : tr("Assigned branches")}</button>
           {dashboardBranches.map((branch) => (
             <button key={branch.id} onClick={() => setSelectedBranchId(branch.id)} className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition ${selectedBranchId === branch.id ? 'bg-white text-emerald-950' : 'text-white/80 hover:bg-white/10'}`}>{branch.name}</button>
           ))}
-          <span className="ml-auto hidden text-xs text-emerald-100/70 sm:inline">Practice & branch management</span>
+          <span className="ml-auto hidden text-xs text-emerald-100/70 sm:inline">{tr("Practice & branch management")}</span>
         </div>
       </section>
 
@@ -6040,34 +6027,34 @@ function AdminPortal({
         <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
           <div className="flex items-center justify-between"><div className="text-xs font-semibold text-slate-500">{t.revenueToday}</div><span className="rounded-xl bg-emerald-50 p-2 text-emerald-800"><TrendingUp className="h-4 w-4" /></span></div>
           <div className="mt-3 text-2xl font-bold tracking-tight text-emerald-900">${totalRevenue.toFixed(2)}</div>
-          <div className="mt-1 text-[11px] text-slate-400">{selectedBranchName || 'All branches'}</div>
+          <div className="mt-1 text-[11px] text-slate-400">{selectedBranchName || tr("All branches")}</div>
         </div>
         <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
           <div className="flex items-center justify-between"><div className="text-xs font-semibold text-slate-500">{t.appointmentsToday}</div><span className="rounded-xl bg-blue-50 p-2 text-blue-800"><CalendarIcon className="h-4 w-4" /></span></div>
           <div className="mt-3 text-2xl font-bold tracking-tight text-slate-900">{dashboardBookings.length}</div>
-          <div className="mt-1 text-[11px] text-slate-400">{selectedBranchName || 'All branches'}</div>
+          <div className="mt-1 text-[11px] text-slate-400">{selectedBranchName || tr("All branches")}</div>
         </div>
         <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
           <div className="flex items-center justify-between"><div className="text-xs font-semibold text-slate-500">{t.activeStaff}</div><span className="rounded-xl bg-amber-50 p-2 text-amber-800"><Users className="h-4 w-4" /></span></div>
           <div className="mt-3 text-2xl font-bold tracking-tight text-slate-900">{dashboardTherapists.length}</div>
-          <div className="mt-1 text-[11px] text-slate-400">{selectedBranchName || 'All branches'}</div>
+          <div className="mt-1 text-[11px] text-slate-400">{selectedBranchName || tr("All branches")}</div>
         </div>
         <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
           <div className="flex items-center justify-between"><div className="text-xs font-semibold text-slate-500">{t.hstCollected}</div><span className="rounded-xl bg-violet-50 p-2 text-violet-800"><DollarSign className="h-4 w-4" /></span></div>
           <div className="mt-3 text-2xl font-bold tracking-tight text-slate-900">${hstCollected.toFixed(2)}</div>
-          <div className="mt-1 text-[11px] text-slate-400">{selectedBranchName || 'All branches'} · Estimated Ontario HST</div>
+          <div className="mt-1 text-[11px] text-slate-400">{selectedBranchName || tr("All branches")} {tr("· Estimated Ontario HST")}</div>
         </div>
         </>}
         {isBranchReceptionist && <>
           <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm">
             <div className="flex items-center justify-between"><div className="text-xs font-semibold text-slate-500">{t.appointmentsToday}</div><span className="rounded-xl bg-blue-50 p-2 text-blue-800"><CalendarIcon className="h-4 w-4" /></span></div>
             <div className="mt-3 text-2xl font-bold tracking-tight text-slate-900">{dashboardBookings.length}</div>
-            <div className="mt-1 text-[11px] text-slate-400">{selectedBranchName || 'Assigned branches'}</div>
+            <div className="mt-1 text-[11px] text-slate-400">{selectedBranchName || tr("Assigned branches")}</div>
           </div>
           <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm">
-            <div className="flex items-center justify-between"><div className="text-xs font-semibold text-slate-500">Active staff</div><span className="rounded-xl bg-amber-50 p-2 text-amber-800"><Users className="h-4 w-4" /></span></div>
+            <div className="flex items-center justify-between"><div className="text-xs font-semibold text-slate-500">{tr("Active staff")}</div><span className="rounded-xl bg-amber-50 p-2 text-amber-800"><Users className="h-4 w-4" /></span></div>
             <div className="mt-3 text-2xl font-bold tracking-tight text-slate-900">{dashboardTherapists.length}</div>
-            <div className="mt-1 text-[11px] text-slate-400">{selectedBranchName || 'Assigned branches'}</div>
+            <div className="mt-1 text-[11px] text-slate-400">{selectedBranchName || tr("Assigned branches")}</div>
           </div>
         </>}
       </div>
@@ -6079,27 +6066,23 @@ function AdminPortal({
       {activeTab === 'dashboard-users' && dashboardUser.role === 'owner' && (
         <section className="space-y-5">
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 className="text-lg font-bold text-slate-950">Dashboard access</h2>
-            <p className="mt-1 text-sm text-slate-600">Create role-limited accounts. Every account must verify sign-in with a one-time code sent to its email address.</p>
+            <h2 className="text-lg font-bold text-slate-950">{tr("Dashboard access")}</h2>
+            <p className="mt-1 text-sm text-slate-600">{tr("Create role-limited accounts. Every account must verify sign-in with a one-time code sent to its email address.")}</p>
             <form onSubmit={createDashboardUser} className="mt-4 grid gap-3 sm:grid-cols-2">
-              <label className="text-xs font-semibold text-slate-600">Name
-                <input required maxLength={120} value={newDashboardUser.name} onChange={(event) => setNewDashboardUser((current) => ({ ...current, name: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm" />
+              <label className="text-xs font-semibold text-slate-600">{tr("Name")}<input required maxLength={120} value={newDashboardUser.name} onChange={(event) => setNewDashboardUser((current) => ({ ...current, name: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm" />
               </label>
-              <label className="text-xs font-semibold text-slate-600">Email
-                <input required type="email" value={newDashboardUser.email} onChange={(event) => setNewDashboardUser((current) => ({ ...current, email: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm" />
+              <label className="text-xs font-semibold text-slate-600">{tr("Email")}<input required type="email" value={newDashboardUser.email} onChange={(event) => setNewDashboardUser((current) => ({ ...current, email: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm" />
               </label>
-              <label className="text-xs font-semibold text-slate-600">Initial password (at least 12 characters)
-                <input required type="password" minLength={12} autoComplete="new-password" value={newDashboardUser.password} onChange={(event) => setNewDashboardUser((current) => ({ ...current, password: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm" />
+              <label className="text-xs font-semibold text-slate-600">{tr("Initial password (at least 12 characters)")}<input required type="password" minLength={12} autoComplete="new-password" value={newDashboardUser.password} onChange={(event) => setNewDashboardUser((current) => ({ ...current, password: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm" />
               </label>
-              <label className="text-xs font-semibold text-slate-600">Role
-                <select value={newDashboardUser.role} onChange={(event) => setNewDashboardUser((current) => ({ ...current, role: event.target.value, branchIds: event.target.value === 'owner' ? [] : current.branchIds }))} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm">
-                  <option value="owner">Owner</option>
-                  <option value="branch_manager">Branch manager</option>
-                  <option value="branch_receptionist">Branch receptionist</option>
+              <label className="text-xs font-semibold text-slate-600">{tr("Role")}<select value={newDashboardUser.role} onChange={(event) => setNewDashboardUser((current) => ({ ...current, role: event.target.value, branchIds: event.target.value === 'owner' ? [] : current.branchIds }))} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm">
+                  <option value="owner">{tr("Owner")}</option>
+                  <option value="branch_manager">{tr("Branch manager")}</option>
+                  <option value="branch_receptionist">{tr("Branch receptionist")}</option>
                 </select>
               </label>
               {newDashboardUser.role !== 'owner' && <fieldset className="sm:col-span-2">
-                <legend className="text-xs font-semibold text-slate-600">Assigned branches</legend>
+                <legend className="text-xs font-semibold text-slate-600">{tr("Assigned branches")}</legend>
                 <div className="mt-2 flex flex-wrap gap-2">
                   {branches.map((branch) => {
                     const id = String(branch.id);
@@ -6111,27 +6094,27 @@ function AdminPortal({
                   })}
                 </div>
               </fieldset>}
-              <button type="submit" disabled={savingDashboardUser} className="rounded-lg bg-emerald-950 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50 sm:col-span-2 sm:w-fit">{savingDashboardUser ? 'Creating…' : 'Create dashboard account'}</button>
+              <button type="submit" disabled={savingDashboardUser} className="rounded-lg bg-emerald-950 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50 sm:col-span-2 sm:w-fit">{savingDashboardUser ? tr("Creating…") : tr("Create dashboard account")}</button>
             </form>
-            <p className="mt-3 text-xs leading-5 text-slate-500">The owner sets the initial password. Share it separately through a secure channel; the account’s email is used for sign-in and OTP delivery.</p>
-            {dashboardUserMessage && <p role="status" className="mt-3 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-900">{dashboardUserMessage}</p>}
-            {dashboardUserError && <p role="alert" className="mt-3 rounded-lg bg-rose-50 p-3 text-sm text-rose-800">{dashboardUserError}</p>}
+            <p className="mt-3 text-xs leading-5 text-slate-500">{tr("The owner sets the initial password. Share it separately through a secure channel; the account’s email is used for sign-in and OTP delivery.")}</p>
+            {dashboardUserMessage && <p role="status" className="mt-3 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-900">{tr(dashboardUserMessage)}</p>}
+            {dashboardUserError && <p role="alert" className="mt-3 rounded-lg bg-rose-50 p-3 text-sm text-rose-800">{tr(dashboardUserError)}</p>}
           </div>
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex items-center justify-between gap-3">
-              <h3 className="text-sm font-bold text-slate-900">Staff accounts</h3>
-              <button type="button" onClick={loadDashboardUsers} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">Refresh</button>
+              <h3 className="text-sm font-bold text-slate-900">{tr("Staff accounts")}</h3>
+              <button type="button" onClick={loadDashboardUsers} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">{tr("Refresh")}</button>
             </div>
             <div className="mt-3 divide-y divide-slate-100">
               {dashboardUsers.length ? dashboardUsers.map((account) => (
                 <div key={account.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
                   <div className="min-w-0">
                     <p className="truncate text-sm font-semibold text-slate-900">{account.name} · {account.email}</p>
-                    <p className="mt-1 text-xs capitalize text-slate-500">{account.role.replaceAll('_', ' ')} · {account.branchIds.map((id) => branches.find((branch) => String(branch.id) === String(id))?.name).filter(Boolean).join(', ') || 'All branches'} · {account.status}</p>
+                    <p className="mt-1 text-xs capitalize text-slate-500">{tr(account.role.replaceAll('_', ' '))} · {account.branchIds.map((id) => branches.find((branch) => String(branch.id) === String(id))?.name).filter(Boolean).join(', ') || tr("All branches")} · {tr(account.status)}</p>
                   </div>
-                  <button type="button" onClick={() => updateDashboardUserStatus(account)} className={`rounded-lg px-3 py-2 text-xs font-bold ${account.status === 'active' ? 'border border-rose-200 text-rose-700 hover:bg-rose-50' : 'border border-emerald-200 text-emerald-800 hover:bg-emerald-50'}`}>{account.status === 'active' ? 'Disable access' : 'Restore access'}</button>
+                  <button type="button" onClick={() => updateDashboardUserStatus(account)} className={`rounded-lg px-3 py-2 text-xs font-bold ${account.status === 'active' ? 'border border-rose-200 text-rose-700 hover:bg-rose-50' : 'border border-emerald-200 text-emerald-800 hover:bg-emerald-50'}`}>{account.status === 'active' ? tr("Disable access") : tr("Restore access")}</button>
                 </div>
-              )) : <p className="py-4 text-sm text-slate-500">No staff accounts have been created.</p>}
+              )) : <p className="py-4 text-sm text-slate-500">{tr("No staff accounts have been created.")}</p>}
             </div>
           </div>
         </section>
@@ -6149,8 +6132,8 @@ function AdminPortal({
                 className="px-3 py-2 border border-stone-300 text-stone-700 rounded-xl text-xs font-bold hover:bg-stone-50 disabled:opacity-50 inline-flex items-center gap-1.5"
               >
                 {isLoadingBookings
-                  ? <><RefreshCw className="w-3.5 h-3.5 animate-spin" /> Loading...</>
-                  : <><Database className="w-3.5 h-3.5" /> Refresh from database</>}
+                  ? <><RefreshCw className="w-3.5 h-3.5 animate-spin" /> {tr("Loading...")}</>
+                  : <><Database className="w-3.5 h-3.5" /> {tr("Refresh from database")}</>}
               </button>
               <button
               onClick={() => {
@@ -6165,12 +6148,12 @@ function AdminPortal({
           </div>
           {bookingLoadError && (
             <div className="p-3 bg-red-50 border border-red-200 text-red-800 rounded-xl text-xs">
-              {bookingLoadError}
+              {tr(bookingLoadError)}
             </div>
           )}
           {deleteBookingError && (
             <div className="p-3 bg-red-50 border border-red-200 text-red-800 rounded-xl text-xs">
-              {deleteBookingError}
+              {tr(deleteBookingError)}
             </div>
           )}
           {dashboardUser.role === 'owner' && <ClearBookingHistory onCleared={loadBookingsFromBackend} />}
@@ -6179,14 +6162,14 @@ function AdminPortal({
             <table className="w-full text-left text-xs sm:text-sm">
               <thead className="bg-stone-50 text-stone-600 font-bold border-b">
                 <tr>
-                  <th className="p-3">Ref ID</th>
-                  <th className="p-3">Customer</th>
-                  <th className="p-3">Service</th>
-                  <th className="p-3">Therapist</th>
-                  <th className="p-3">Time</th>
-                  <th className="p-3"><span className="inline-flex items-center gap-1.5"><Database className="w-3.5 h-3.5" /> Database</span></th>
-                  {!isBranchReceptionist && <th className="p-3">Total</th>}
-                  {dashboardUser.role === 'owner' && <th className="p-3">Actions</th>}
+                  <th className="p-3">{tr("Ref ID")}</th>
+                  <th className="p-3">{tr("Customer")}</th>
+                  <th className="p-3">{tr("Service")}</th>
+                  <th className="p-3">{tr("Therapist")}</th>
+                  <th className="p-3">{tr("Time")}</th>
+                  <th className="p-3"><span className="inline-flex items-center gap-1.5"><Database className="w-3.5 h-3.5" /> {tr("Database")}</span></th>
+                  {!isBranchReceptionist && <th className="p-3">{tr("Total")}</th>}
+                  {dashboardUser.role === 'owner' && <th className="p-3">{tr("Actions")}</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-stone-100">
@@ -6196,20 +6179,17 @@ function AdminPortal({
                     <td className="p-3">
                       <div className="font-bold text-stone-800">{b.customerName}</div>
                       <div className="text-stone-400 text-[11px]">{b.phone}</div>
-                      {b.bookingNote && <div className="mt-1 whitespace-pre-wrap text-[11px] text-blue-800">Team note: {b.bookingNote}</div>}
+                      {b.bookingNote && <div className="mt-1 whitespace-pre-wrap text-[11px] text-blue-800">{tr("Team note:")} {b.bookingNote}</div>}
                     </td>
-                    <td className="p-3 font-medium text-stone-700">{b.serviceName}</td>
+                    <td className="p-3 font-medium text-stone-700">{tr(b.serviceName)}</td>
                     <td className="p-3 text-stone-600">{b.therapistName}</td>
-                    <td className="p-3 font-semibold text-stone-800">{b.time}</td>
+                    <td className="p-3 font-semibold text-stone-800">{formatTime(b.time)}</td>
                     <td className="p-3">
                       {b.syncedToSheets ? (
                         <span className="bg-emerald-100 text-emerald-800 font-bold px-2 py-1 rounded-md text-[10px] inline-flex items-center">
-                          <Check className="w-3 h-3 mr-1" /> Synced
-                        </span>
+                          <Check className="w-3 h-3 mr-1" />{tr("Synced")}</span>
                       ) : (
-                        <span className="bg-stone-100 text-stone-600 font-bold px-2 py-1 rounded-md text-[10px]">
-                          Local Only
-                        </span>
+                        <span className="bg-stone-100 text-stone-600 font-bold px-2 py-1 rounded-md text-[10px]">{tr("Local Only")}</span>
                       )}
                     </td>
                     {!isBranchReceptionist && <td className="p-3 font-bold text-stone-900">${b.total.toFixed(2)}</td>}
@@ -6219,7 +6199,7 @@ function AdminPortal({
                         disabled={deletingBookingId === b.id}
                         className="px-2 py-1 border border-red-300 text-red-700 rounded-lg text-[11px] font-bold hover:bg-red-50 disabled:opacity-50"
                       >
-                        {deletingBookingId === b.id ? 'Removing...' : 'Clear'}
+                        {deletingBookingId === b.id ? tr("Removing...") : tr("Clear")}
                       </button>
                     </td>}
                   </tr>
@@ -6234,35 +6214,35 @@ function AdminPortal({
         <div className="bg-white rounded-2xl p-6 border border-stone-200 shadow-sm space-y-4">
           <div className="flex flex-wrap items-end justify-between gap-3">
             <div>
-              <h2 className="text-lg font-bold text-stone-900">Booking Calendar</h2>
-              <p className="text-xs text-stone-500">Live appointments and quick manual booking.</p>
+              <h2 className="text-lg font-bold text-stone-900">{tr("Booking Calendar")}</h2>
+              <p className="text-xs text-stone-500">{tr("Live appointments and quick manual booking.")}</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <label className="relative"><span className="sr-only">Search appointments</span><Search className="absolute left-3 top-2.5 h-4 w-4 text-blue-600" /><input type="search" value={calendarSearch} onChange={(event) => setCalendarSearch(event.target.value)} placeholder="Search appointments" className="h-9 w-48 rounded-full border border-blue-200 pl-9 pr-3 text-xs" /></label>
-              <label><span className="sr-only">Calendar view</span><select value={calendarViewMode} onChange={(event) => setCalendarViewMode(event.target.value)} className="h-9 rounded-full border border-blue-200 bg-white px-4 text-xs text-blue-700"><option value="daily">Daily</option><option value="agenda">Agenda</option></select></label>
-              <button type="button" aria-label="Calendar filters" aria-expanded={calendarFiltersOpen} onClick={() => setCalendarFiltersOpen(!calendarFiltersOpen)} className="rounded-full border border-blue-200 p-2 text-blue-600"><Filter className="h-4 w-4" /></button>
+              <label className="relative"><span className="sr-only">{tr("Search appointments")}</span><Search className="absolute left-3 top-2.5 h-4 w-4 text-blue-600" /><input type="search" value={calendarSearch} onChange={(event) => setCalendarSearch(event.target.value)} placeholder={tr("Search appointments")} className="h-9 w-48 rounded-full border border-blue-200 pl-9 pr-3 text-xs" /></label>
+              <label><span className="sr-only">{tr("Calendar view")}</span><select value={calendarViewMode} onChange={(event) => setCalendarViewMode(event.target.value)} className="h-9 rounded-full border border-blue-200 bg-white px-4 text-xs text-blue-700"><option value="daily">{tr("Daily")}</option><option value="agenda">{tr("Agenda")}</option></select></label>
+              <button type="button" aria-label={tr("Calendar filters")} aria-expanded={calendarFiltersOpen} onClick={() => setCalendarFiltersOpen(!calendarFiltersOpen)} className="rounded-full border border-blue-200 p-2 text-blue-600"><Filter className="h-4 w-4" /></button>
               <details className="relative">
-                <summary aria-label="Calendar settings" className="cursor-pointer list-none rounded-full border border-blue-200 p-2 text-blue-600"><Settings className="h-4 w-4" /></summary>
+                <summary aria-label={tr("Calendar settings")} className="cursor-pointer list-none rounded-full border border-blue-200 p-2 text-blue-600"><Settings className="h-4 w-4" /></summary>
                 <div className="absolute right-0 z-20 mt-2 w-56 space-y-3 rounded-xl border border-stone-200 bg-white p-4 text-xs shadow-lg">
-                  <label className="flex items-center gap-2"><input type="checkbox" checked={calendarAutoRefresh} onChange={(event) => setCalendarAutoRefresh(event.target.checked)} />Auto-refresh every 15 seconds</label>
-                  <label className="flex items-center gap-2"><input type="checkbox" checked={calendarShowLegend} onChange={(event) => setCalendarShowLegend(event.target.checked)} />Show therapist legend</label>
+                  <label className="flex items-center gap-2"><input type="checkbox" checked={calendarAutoRefresh} onChange={(event) => setCalendarAutoRefresh(event.target.checked)} />{tr("Auto-refresh every 15 seconds")}</label>
+                  <label className="flex items-center gap-2"><input type="checkbox" checked={calendarShowLegend} onChange={(event) => setCalendarShowLegend(event.target.checked)} />{tr("Show therapist legend")}</label>
                 </div>
               </details>
               <details className="relative">
-                <summary className="cursor-pointer list-none rounded-full border border-blue-200 px-4 py-2 text-xs font-semibold text-blue-600">Manage ▾</summary>
+                <summary className="cursor-pointer list-none rounded-full border border-blue-200 px-4 py-2 text-xs font-semibold text-blue-600">{tr("Manage ▾")}</summary>
                 <div className="absolute right-0 z-20 mt-2 w-48 rounded-xl border border-stone-200 bg-white p-2 text-sm shadow-lg">
-                  <button type="button" onClick={() => setActiveTab('schedule')} className="w-full rounded-lg px-3 py-2 text-left hover:bg-blue-50">Appointments</button>
+                  <button type="button" onClick={() => setActiveTab('schedule')} className="w-full rounded-lg px-3 py-2 text-left hover:bg-blue-50">{tr("Appointments")}</button>
                   {dashboardUser.role === 'owner' && <>
-                    <button type="button" onClick={() => setActiveTab('availability')} className="w-full rounded-lg px-3 py-2 text-left hover:bg-blue-50">Staff availability</button>
-                    <button type="button" onClick={() => setActiveTab('services')} className="w-full rounded-lg px-3 py-2 text-left hover:bg-blue-50">Services</button>
+                    <button type="button" onClick={() => setActiveTab('availability')} className="w-full rounded-lg px-3 py-2 text-left hover:bg-blue-50">{tr("Staff availability")}</button>
+                    <button type="button" onClick={() => setActiveTab('services')} className="w-full rounded-lg px-3 py-2 text-left hover:bg-blue-50">{tr("Services")}</button>
                   </>}
                 </div>
               </details>
               <details className="relative">
-                <summary className="cursor-pointer list-none rounded-full bg-blue-600 px-5 py-2 text-xs font-bold text-white hover:bg-blue-700">Add ▾</summary>
+                <summary className="cursor-pointer list-none rounded-full bg-blue-600 px-5 py-2 text-xs font-bold text-white hover:bg-blue-700">{tr("Add ▾")}</summary>
                 <div className="absolute right-0 z-20 mt-2 w-56 rounded-xl border border-stone-200 bg-white p-2 text-sm shadow-lg">
-                  <button type="button" onClick={(event) => { event.currentTarget.closest('details').open = false; openQuickBooking(); }} className="w-full rounded-lg px-4 py-3 text-left hover:bg-blue-50">Quick Sale <span className="block text-[10px] text-stone-500">Quick appointment · no payment</span></button>
-                  <button type="button" onClick={(event) => { event.currentTarget.closest('details').open = false; openQuickBooking(); }} className="w-full border-t border-stone-100 px-4 py-3 text-left hover:bg-blue-50">Appointment</button>
+                  <button type="button" onClick={(event) => { event.currentTarget.closest('details').open = false; openQuickBooking(); }} className="w-full rounded-lg px-4 py-3 text-left hover:bg-blue-50">{tr("Quick Sale")} <span className="block text-[10px] text-stone-500">{tr("Quick appointment · no payment")}</span></button>
+                  <button type="button" onClick={(event) => { event.currentTarget.closest('details').open = false; openQuickBooking(); }} className="w-full border-t border-stone-100 px-4 py-3 text-left hover:bg-blue-50">{tr("Appointment")}</button>
                   {dashboardUser.role === 'owner' && <>
                     <button type="button" onClick={() => {
                       setUnavailabilityForm((current) => ({
@@ -6272,99 +6252,89 @@ function AdminPortal({
                         date: calendarDate,
                       }));
                       setActiveTab('availability');
-                    }} className="w-full px-4 py-3 text-left hover:bg-blue-50">Blocked staff time</button>
-                    <button type="button" onClick={() => { addServiceRow(); setActiveTab('services'); }} className="w-full border-t border-stone-100 px-4 py-3 text-left hover:bg-blue-50">Create New Service</button>
+                    }} className="w-full px-4 py-3 text-left hover:bg-blue-50">{tr("Blocked staff time")}</button>
+                    <button type="button" onClick={() => { addServiceRow(); setActiveTab('services'); }} className="w-full border-t border-stone-100 px-4 py-3 text-left hover:bg-blue-50">{tr("Create New Service")}</button>
                   </>}
                 </div>
               </details>
             </div>
           </div>
           <div className="flex flex-wrap items-end gap-2 border-t-2 border-blue-600 pt-4">
-              <label className="text-xs font-semibold text-stone-600">
-                Date
-                <input type="date" value={calendarDate} onChange={(event) => setCalendarDate(event.target.value)} className="block mt-1 p-2 rounded-lg border border-stone-300" />
+              <label className="text-xs font-semibold text-stone-600">{tr("Date")}<input type="date" value={calendarDate} onChange={(event) => setCalendarDate(event.target.value)} className="block mt-1 p-2 rounded-lg border border-stone-300" />
               </label>
-              {calendarFiltersOpen && <label className="text-xs font-semibold text-stone-600">
-                Branch
-                <select value={calendarBranch} onChange={(event) => setCalendarBranch(event.target.value)} className="block mt-1 p-2 rounded-lg border border-stone-300">
-                  <option value="all">All branches</option>
+              {calendarFiltersOpen && <label className="text-xs font-semibold text-stone-600">{tr("Branch")}<select value={calendarBranch} onChange={(event) => setCalendarBranch(event.target.value)} className="block mt-1 p-2 rounded-lg border border-stone-300">
+                  <option value="all">{tr("All branches")}</option>
                   {dashboardBranches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
                 </select>
               </label>}
-              {calendarFiltersOpen && <label className="text-xs font-semibold text-stone-600">
-                Therapist
-                <select value={calendarTherapist} onChange={(event) => setCalendarTherapist(event.target.value)} className="block mt-1 p-2 rounded-lg border border-stone-300">
-                  <option value="all">All therapists</option>
+              {calendarFiltersOpen && <label className="text-xs font-semibold text-stone-600">{tr("Therapist")}<select value={calendarTherapist} onChange={(event) => setCalendarTherapist(event.target.value)} className="block mt-1 p-2 rounded-lg border border-stone-300">
+                  <option value="all">{tr("All therapists")}</option>
                   {therapists.map((therapist) => <option key={therapist.id} value={therapist.id}>{therapist.name}</option>)}
                 </select>
               </label>}
               <button onClick={loadCalendar} disabled={isLoadingCalendar} className="h-9 px-3 bg-emerald-800 text-white rounded-lg text-xs font-bold disabled:opacity-50">
-                {isLoadingCalendar ? 'Loading...' : 'Refresh'}
+                {isLoadingCalendar ? tr("Loading...") : tr("Refresh")}
               </button>
-              {!calendarFiltersOpen && (calendarBranch !== 'all' || calendarTherapist !== 'all') && <button type="button" onClick={() => setCalendarFiltersOpen(true)} className="h-9 rounded-lg border border-blue-200 px-3 text-xs text-blue-700">
-                Filters: {branches.find((item) => String(item.id) === calendarBranch)?.name || 'All branches'} · {therapists.find((item) => String(item.id) === calendarTherapist)?.name || 'All therapists'}
+              {!calendarFiltersOpen && (calendarBranch !== 'all' || calendarTherapist !== 'all') && <button type="button" onClick={() => setCalendarFiltersOpen(true)} className="h-9 rounded-lg border border-blue-200 px-3 text-xs text-blue-700">{tr("Filters:")}{branches.find((item) => String(item.id) === calendarBranch)?.name || tr("All branches")} · {therapists.find((item) => String(item.id) === calendarTherapist)?.name || tr("All therapists")}
               </button>}
           </div>
-          {quickBookingNotice && <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">{quickBookingNotice}</p>}
-          {calendarLoadError && <div className="p-3 bg-red-50 border border-red-200 text-red-800 rounded-xl text-xs">{calendarLoadError}</div>}
+          {quickBookingNotice && <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">{tr(quickBookingNotice)}</p>}
+          {calendarLoadError && <div className="p-3 bg-red-50 border border-red-200 text-red-800 rounded-xl text-xs">{tr(calendarLoadError)}</div>}
           <WixCalendarSync onSynced={async () => {
             await Promise.all([loadCalendar(), loadBookingsFromBackend()]);
           }} />
           {calendarWarnings.length > 0 && (
-            <div className="p-3 bg-amber-50 border border-amber-200 text-amber-900 rounded-xl text-xs">
-              Calendar access warning: {calendarWarnings.join(' · ')}
+            <div className="p-3 bg-amber-50 border border-amber-200 text-amber-900 rounded-xl text-xs">{tr("Calendar access warning:")}{calendarWarnings.join(' · ')}
             </div>
           )}
           {calendarUnavailability.length > 0 && (
             <div className="p-3 bg-stone-100 border border-stone-300 text-stone-800 rounded-xl text-xs space-y-1.5">
-              <p className="font-bold uppercase tracking-wide text-stone-600">Blocked / unavailable this day</p>
+              <p className="font-bold uppercase tracking-wide text-stone-600">{tr("Blocked / unavailable this day")}</p>
               {calendarUnavailability.map((block) => (
                 <p key={block.id} className="flex items-center gap-1.5">
                   <CalendarX className="w-3.5 h-3.5 shrink-0 text-stone-500" />
-                  <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase ${block.scope === 'business' ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800'}`}>{block.scope === 'business' ? 'Business-wide' : block.therapistName}</span>
-                  {block.startTime}–{block.endTime}{block.reason ? ` · ${block.reason}` : ''}
+                  <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase ${block.scope === 'business' ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800'}`}>{block.scope === 'business' ? tr("Business-wide") : block.therapistName}</span>
+                  {block.startTime}–{block.endTime}{block.reason ? tr(" · {value0}", { value0: block.reason }) : ''}
                 </p>
               ))}
             </div>
           )}
           {calendarUrl && (
-            <a href={calendarUrl} target="_blank" rel="noreferrer" className="inline-flex text-xs font-semibold text-emerald-800 underline">
-              Open the primary Google Calendar
-            </a>
+            <a href={calendarUrl} target="_blank" rel="noreferrer" className="inline-flex text-xs font-semibold text-emerald-800 underline">{tr("Open the primary Google Calendar")}</a>
           )}
           {calendarViewMode === 'daily' && <div className="rounded-xl overflow-hidden border border-stone-200 bg-white">
             <div className="flex items-center justify-between px-4 py-3 bg-stone-50 border-b border-stone-200">
               <div>
-                <p className="font-bold text-stone-900">{new Date(`${calendarDate}T12:00:00`).toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</p>
-                <p className="text-xs text-stone-500">MY THAI THAI · live primary calendar view</p>
+                <p className="font-bold text-stone-900">{new Date(`${calendarDate}T12:00:00`).toLocaleDateString(locale, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</p>
+                <p className="text-xs text-stone-500">{tr("MY THAI THAI · live primary calendar view")}</p>
               </div>
               <CalendarIcon className="w-5 h-5 text-emerald-700" />
             </div>
             <div className="max-h-[620px] overflow-y-auto">
               {Array.from({ length: 12 }, (_, index) => index + 8).map((hour) => {
-                const hourLabel = new Date(2000, 0, 1, hour).toLocaleTimeString([], { hour: 'numeric' });
+                const hourLabel = new Date(2000, 0, 1, hour).toLocaleTimeString(locale, { hour: 'numeric' });
                 const hourEvents = visibleCalendarEvents.filter((event) => Number(event.localTime?.split(':')[0]) === hour);
                 const hourBlocks = calendarUnavailability.filter((block) => Number(block.startTime?.split(':')[0]) <= hour && Number(block.endTime?.split(':')[0]) > hour);
                 return (
                   <div key={hour} className="grid grid-cols-[72px_1fr] min-h-[58px] border-b border-stone-100">
-                    <div className="p-2 text-[11px] text-stone-400 text-right border-r border-stone-100">{hourLabel}</div>
+                    <div className="p-2 text-[11px] text-stone-400 text-right border-r border-stone-100">{formatTime(hourLabel)}</div>
                     <div className="p-1.5 space-y-1">
-                      {hour >= 10 && <button type="button" onClick={() => openQuickBooking(AVAILABLE_TIMES[(hour - 10) * 4])} aria-label={`Add appointment at ${hourLabel}`} className="rounded-lg px-2 py-1 text-[11px] font-semibold text-blue-600 hover:bg-blue-50">+ Book {hourLabel}</button>}
+                      {hour >= 10 && <button type="button" onClick={() => openQuickBooking(AVAILABLE_TIMES[(hour - 10) * 4])} aria-label={tr("Add appointment at {value0}", { value0: hourLabel })} className="rounded-lg px-2 py-1 text-[11px] font-semibold text-blue-600 hover:bg-blue-50">{tr("+ Book")} {formatTime(hourLabel)}</button>}
                       {hourBlocks.map((block) => (
                         <div key={`block-${block.id}`} className="flex items-center gap-1.5 rounded-lg border-l-4 border-stone-400 bg-stone-100 px-3 py-2 text-xs text-stone-600">
                           <CalendarX className="w-3.5 h-3.5 shrink-0" />
-                          <span>{block.scope === 'business' ? 'Business-wide unavailable' : `${block.therapistName} unavailable`}{block.reason ? ` · ${block.reason}` : ''}</span>
+                          <span>{block.scope === 'business' ? tr("Business-wide unavailable") : tr("{value0} unavailable", { value0: block.therapistName })}{block.reason ? tr(" · {value0}", { value0: block.reason }) : ''}</span>
                         </div>
                       ))}
                       {hourEvents.map((event) => (
                         <button key={event.id} type="button" onClick={() => { setSelectedCalendarEvent(event); setIssuedReceipt(null); setReceiptError(''); setReceiptNotice(''); }} className={`block w-full rounded-lg border-l-4 px-3 py-2 text-left text-xs transition hover:brightness-95 ${getTherapistCalendarColor(event.therapistName, therapists).event}`}>
                           <div className={`font-bold flex items-center gap-1.5 ${getTherapistCalendarColor(event.therapistName, therapists).text}`}>
-                            {event.isCouple && <Users className="w-3 h-3 shrink-0" aria-label="Couple massage" />}
+                            {event.isCouple && <Users className="w-3 h-3 shrink-0" aria-label={tr("Couple massage")} />}
                             <span className="truncate">{event.summary}</span>
-                            {event.booking?.status === 'Cancelled' && <span className="shrink-0 text-[9px] font-bold uppercase tracking-wide text-red-700 bg-red-100 px-1.5 py-0.5 rounded-full">Cancelled</span>}
+                            {event.booking?.status === 'Cancelled' && <span className="shrink-0 text-[9px] font-bold uppercase tracking-wide text-red-700 bg-red-100 px-1.5 py-0.5 rounded-full">{tr("Cancelled")}</span>}
                           </div>
-                          <div className={getTherapistCalendarColor(event.therapistName, therapists).text}>{event.timeRange || event.localTime} · {event.therapistName || event.calendarName.replace(' - MY THAI THAI', '')}</div>
-                          {event.booking?.bookingNote && <div className="mt-1 whitespace-pre-wrap text-[11px]">Team note: {event.booking.bookingNote}</div>}
+                          <div className={getTherapistCalendarColor(event.therapistName, therapists).text}>{formatTime(event.timeRange || event.localTime)} · {event.therapistName || event.calendarName.replace(' - MY THAI THAI', '')}</div>
+                          {event.booking?.bookingNote && <div className="mt-1 whitespace-pre-wrap text-[11px]">{tr("Team note:")} {event.booking.bookingNote}</div>}
                         </button>
                       ))}
                     </div>
@@ -6374,10 +6344,9 @@ function AdminPortal({
             </div>
           </div>}
           <p className="text-xs text-stone-500">
-            {calendarAutoRefresh ? 'Updates automatically every 15 seconds while this tab is visible.' : 'Auto-refresh is paused. Use Refresh to load current appointments.'} The daily view and appointment list use the same search, date, branch, and therapist filters.
-          </p>
+            {calendarAutoRefresh ? tr("Updates automatically every 15 seconds while this tab is visible.") : tr("Auto-refresh is paused. Use Refresh to load current appointments.")}{tr("The daily view and appointment list use the same search, date, branch, and therapist filters.")}</p>
           {calendarShowLegend && <div className="flex flex-wrap gap-3 items-center rounded-xl bg-stone-50 border border-stone-200 px-3 py-2">
-            <span className="text-xs font-bold text-stone-700">Therapists:</span>
+            <span className="text-xs font-bold text-stone-700">{tr("Therapists:")}</span>
             {(calendarTherapist === 'all' ? therapists : therapists.filter((therapist) => String(therapist.id) === calendarTherapist)).map((therapist) => {
               const color = getTherapistCalendarColor(therapist.name, therapists);
               return (
@@ -6389,13 +6358,11 @@ function AdminPortal({
             })}
             {calendarTherapist === 'all' && (
               <span className="inline-flex items-center gap-1.5 text-xs text-stone-500">
-                <span className="w-2.5 h-2.5 rounded-full bg-stone-400" />
-                Any Available
-              </span>
+                <span className="w-2.5 h-2.5 rounded-full bg-stone-400" />{tr("Any Available")}</span>
             )}
           </div>}
           {visibleCalendarEvents.length === 0 && !isLoadingCalendar ? (
-            <p className="py-8 text-center text-sm text-stone-500">No appointments match this date, search, branch and therapist. Adjust your filters or add an appointment.</p>
+            <p className="py-8 text-center text-sm text-stone-500">{tr("No appointments match this date, search, branch and therapist. Adjust your filters or add an appointment.")}</p>
           ) : (
             <div className="space-y-3">
               {visibleCalendarEvents.map((event) => (
@@ -6403,16 +6370,16 @@ function AdminPortal({
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <button type="button" onClick={() => { setSelectedCalendarEvent(event); setIssuedReceipt(null); setReceiptError(''); setReceiptNotice(''); }} className="min-w-0 text-left">
                       <span className="font-bold text-stone-900 inline-flex items-center gap-1.5">
-                        {event.isCouple && <Users className="w-3.5 h-3.5 text-rose-500 shrink-0" aria-label="Couple massage" />}
+                        {event.isCouple && <Users className="w-3.5 h-3.5 text-rose-500 shrink-0" aria-label={tr("Couple massage")} />}
                         {event.summary}
-                        {event.booking?.status === 'Cancelled' && <span className="text-[10px] font-bold uppercase tracking-wide text-red-700 bg-red-100 px-1.5 py-0.5 rounded-full">Cancelled</span>}
+                        {event.booking?.status === 'Cancelled' && <span className="text-[10px] font-bold uppercase tracking-wide text-red-700 bg-red-100 px-1.5 py-0.5 rounded-full">{tr("Cancelled")}</span>}
                       </span>
                       <span className="mt-1 block text-xs text-stone-500">{event.therapistName || event.calendarName} · {event.location}</span>
-                      {event.booking?.bookingNote && <span className="mt-1 block whitespace-pre-wrap text-xs text-blue-800">Team note: {event.booking.bookingNote}</span>}
+                      {event.booking?.bookingNote && <span className="mt-1 block whitespace-pre-wrap text-xs text-blue-800">{tr("Team note:")} {event.booking.bookingNote}</span>}
                     </button>
                     <div className="flex shrink-0 flex-col items-end gap-2">
-                      <span className="text-sm font-semibold text-emerald-800">{event.timeRange || event.localTime}</span>
-                      <button type="button" onClick={() => { setSelectedCalendarEvent(event); setIssuedReceipt(null); setReceiptError(''); setReceiptNotice(''); }} className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-white px-2.5 py-1.5 text-[11px] font-bold text-emerald-900 transition hover:bg-emerald-50"><ReceiptText className="h-3.5 w-3.5" />Open appointment</button>
+                      <span className="text-sm font-semibold text-emerald-800">{formatTime(event.timeRange || event.localTime)}</span>
+                      <button type="button" onClick={() => { setSelectedCalendarEvent(event); setIssuedReceipt(null); setReceiptError(''); setReceiptNotice(''); }} className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-white px-2.5 py-1.5 text-[11px] font-bold text-emerald-900 transition hover:bg-emerald-50"><ReceiptText className="h-3.5 w-3.5" />{tr("Open appointment")}</button>
                     </div>
                   </div>
                 </div>
@@ -6448,7 +6415,7 @@ function AdminPortal({
           <div className="flex justify-between items-center">
             <div>
               <h2 className="text-lg font-bold text-stone-900">{t.services}</h2>
-              <p className="text-xs text-stone-500">Add, edit, deactivate, or remove services. Changes appear on the booking portal immediately after saving.</p>
+              <p className="text-xs text-stone-500">{tr("Add, edit, deactivate, or remove services. Changes appear on the booking portal immediately after saving.")}</p>
             </div>
             <button
               onClick={addServiceRow}
@@ -6459,13 +6426,13 @@ function AdminPortal({
           </div>
 
           {servicesError && (
-            <p role="alert" className="text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">{servicesError}</p>
+            <p role="alert" className="text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">{tr(servicesError)}</p>
           )}
           {serviceSaveError && (
-            <p role="alert" className="text-xs font-semibold text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{serviceSaveError}</p>
+            <p role="alert" className="text-xs font-semibold text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{tr(serviceSaveError)}</p>
           )}
           {serviceSaveMessage && (
-            <p role="status" className="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">{serviceSaveMessage}</p>
+            <p role="status" className="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">{tr(serviceSaveMessage)}</p>
           )}
 
           <div className="overflow-x-auto">
@@ -6477,9 +6444,9 @@ function AdminPortal({
                   <th className="p-2">{t.duration}</th>
                   <th className="p-2">{t.price}</th>
                   <th className="p-2">{t.deposit}</th>
-                  <th className="p-2">Tax rate</th>
+                  <th className="p-2">{tr("Tax rate")}</th>
                   <th className="p-2">{t.isRmt}</th>
-                  <th className="p-2">Active</th>
+                  <th className="p-2">{tr("Active")}</th>
                   <th className="p-2">{t.actions}</th>
                 </tr>
               </thead>
@@ -6495,7 +6462,7 @@ function AdminPortal({
                       />
                       <input
                         type="text"
-                        placeholder="Description"
+                        placeholder={tr("Description")}
                         value={s.description}
                         onChange={(e) => updateServiceField(s.id, 'description', e.target.value)}
                         className="mt-1 w-full p-1.5 text-[11px] rounded-lg border border-stone-200 focus:ring-2 focus:ring-emerald-600 focus:outline-none text-stone-500"
@@ -6508,7 +6475,7 @@ function AdminPortal({
                         className="w-full p-1.5 text-xs rounded-lg border border-stone-300 focus:ring-2 focus:ring-emerald-600 focus:outline-none"
                       >
                         {['Thai Traditional', 'Thai Combo Swedish', 'Hot Stone Combo', 'Add-On & Packages', 'RMT Healthcare'].map((cat) => (
-                          <option key={cat} value={cat}>{cat}</option>
+                          <option key={cat} value={cat}>{tr(cat)}</option>
                         ))}
                       </select>
                     </td>
@@ -6571,7 +6538,7 @@ function AdminPortal({
                         type="button"
                         onClick={() => removeServiceRow(s.id)}
                         className="inline-flex items-center justify-center text-red-600 hover:text-red-800"
-                        aria-label={`Remove ${s.name || 'service'}`}
+                        aria-label={tr("Remove {value0}", { value0: s.name || 'service' })}
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
@@ -6588,7 +6555,7 @@ function AdminPortal({
               disabled={isSavingServices}
               className="px-5 py-2.5 bg-emerald-800 text-white font-semibold rounded-xl hover:bg-emerald-900 disabled:opacity-50 transition text-sm"
             >
-              {isSavingServices ? 'Saving…' : 'Save services'}
+              {isSavingServices ? tr("Saving…") : tr("Save services")}
             </button>
           </div>
         </div>
@@ -6599,25 +6566,24 @@ function AdminPortal({
         <div className="bg-white rounded-2xl p-6 border border-stone-200 shadow-sm space-y-4">
           <div className="flex justify-between items-center">
             <div>
-              <h2 className="text-lg font-bold text-stone-900">Branches</h2>
-              <p className="text-xs text-stone-500">Add, edit, or deactivate locations. Changes appear on the booking portal immediately after saving.</p>
+              <h2 className="text-lg font-bold text-stone-900">{tr("Branches")}</h2>
+              <p className="text-xs text-stone-500">{tr("Add, edit, or deactivate locations. Changes appear on the booking portal immediately after saving.")}</p>
             </div>
             <button
               onClick={addBranchRow}
               className="px-4 py-2 bg-amber-700 text-white rounded-xl text-xs font-bold hover:bg-amber-800 transition flex items-center"
             >
-              <Plus className="w-4 h-4 mr-1" /> Add branch
-            </button>
+              <Plus className="w-4 h-4 mr-1" />{tr("Add branch")}</button>
           </div>
 
           {branchesError && (
-            <p role="alert" className="text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">{branchesError}</p>
+            <p role="alert" className="text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">{tr(branchesError)}</p>
           )}
           {branchSaveError && (
-            <p role="alert" className="text-xs font-semibold text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{branchSaveError}</p>
+            <p role="alert" className="text-xs font-semibold text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{tr(branchSaveError)}</p>
           )}
           {branchSaveMessage && (
-            <p role="status" className="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">{branchSaveMessage}</p>
+            <p role="status" className="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">{tr(branchSaveMessage)}</p>
           )}
 
           <div className="space-y-3">
@@ -6625,28 +6591,28 @@ function AdminPortal({
               <div key={branch.id} className="grid gap-2.5 sm:grid-cols-12 items-center border border-stone-200 rounded-xl p-3">
                 <input
                   type="text"
-                  placeholder="Branch name"
+                  placeholder={tr("Branch name")}
                   value={branch.name}
                   onChange={(e) => updateBranchField(branch.id, 'name', e.target.value)}
                   className="sm:col-span-3 p-2 text-xs rounded-lg border border-stone-300 focus:ring-2 focus:ring-emerald-600 focus:outline-none"
                 />
                 <input
                   type="text"
-                  placeholder="Street address"
+                  placeholder={tr("Street address")}
                   value={branch.address}
                   onChange={(e) => updateBranchField(branch.id, 'address', e.target.value)}
                   className="sm:col-span-3 p-2 text-xs rounded-lg border border-stone-300 focus:ring-2 focus:ring-emerald-600 focus:outline-none"
                 />
                 <input
                   type="text"
-                  placeholder="City, Province"
+                  placeholder={tr("City, Province")}
                   value={branch.city}
                   onChange={(e) => updateBranchField(branch.id, 'city', e.target.value)}
                   className="sm:col-span-2 p-2 text-xs rounded-lg border border-stone-300 focus:ring-2 focus:ring-emerald-600 focus:outline-none"
                 />
                 <input
                   type="text"
-                  placeholder="Phone"
+                  placeholder={tr("Phone")}
                   value={branch.phone}
                   onChange={(e) => updateBranchField(branch.id, 'phone', e.target.value)}
                   className="sm:col-span-2 p-2 text-xs rounded-lg border border-stone-300 focus:ring-2 focus:ring-emerald-600 focus:outline-none"
@@ -6656,24 +6622,22 @@ function AdminPortal({
                     type="checkbox"
                     checked={branch.active !== false}
                     onChange={(e) => updateBranchField(branch.id, 'active', e.target.checked)}
-                  />
-                  Active
-                </label>
+                  />{tr("Active")}</label>
                 <button
                   type="button"
                   onClick={() => removeBranchRow(branch.id)}
                   className="sm:col-span-1 inline-flex items-center justify-center text-red-600 hover:text-red-800"
-                  aria-label={`Remove ${branch.name || 'branch'}`}
+                  aria-label={tr("Remove {value0}", { value0: branch.name || 'branch' })}
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
                 <fieldset className="sm:col-span-12 pt-1 border-t border-stone-100 mt-1">
-                  <legend className="text-xs font-bold text-stone-700">Customer payment choices (enable at least one)</legend>
+                  <legend className="text-xs font-bold text-stone-700">{tr("Customer payment choices (enable at least one)")}</legend>
                   <div className="flex flex-wrap gap-4 mt-2">
                     {[['clinic', 'allowClinicPayment', 'Pay at clinic (no deposit)'], ['deposit', 'allowDepositPayment', '$10 deposit'], ['full', 'allowFullPayment', 'Pay in full online']].map(([option, field, label]) => (
                       <label key={option} className="flex items-center gap-1.5 text-xs text-stone-600">
                         <input type="checkbox" checked={branchPaymentOptions(branch)[option]} onChange={(e) => updateBranchField(branch.id, field, e.target.checked)} />
-                        {label}
+                        {tr(label)}
                       </label>
                     ))}
                   </div>
@@ -6688,7 +6652,7 @@ function AdminPortal({
               disabled={isSavingBranches}
               className="px-5 py-2.5 bg-emerald-800 text-white font-semibold rounded-xl hover:bg-emerald-900 disabled:opacity-50 transition text-sm"
             >
-              {isSavingBranches ? 'Saving…' : 'Save branches'}
+              {isSavingBranches ? tr("Saving…") : tr("Save branches")}
             </button>
           </div>
         </div>
@@ -6699,69 +6663,62 @@ function AdminPortal({
         <div className="space-y-4">
           <div className="bg-white rounded-2xl p-6 border border-stone-200 shadow-sm space-y-4">
             <div>
-              <h2 className="text-lg font-bold text-stone-900">Availability</h2>
-              <p className="text-xs text-stone-500">Block off business-wide closures or a single therapist's breaks/time off. Blocks automatically stop new bookings and show up on the Booking Calendar and in the therapist portal.</p>
+              <h2 className="text-lg font-bold text-stone-900">{tr("Availability")}</h2>
+              <p className="text-xs text-stone-500">{tr("Block off business-wide closures or a single therapist's breaks/time off. Blocks automatically stop new bookings and show up on the Booking Calendar and in the therapist portal.")}</p>
             </div>
             <form onSubmit={createUnavailabilityBlock} className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <label className="text-xs font-semibold text-stone-600">Scope
-                <select value={unavailabilityForm.scope} onChange={(e) => setUnavailabilityForm((current) => ({ ...current, scope: e.target.value, therapistName: e.target.value === 'business' ? '' : current.therapistName }))} className="mt-1 w-full rounded-lg border border-stone-300 px-3 py-2 text-sm">
-                  <option value="business">Business-wide closure</option>
-                  <option value="therapist">Single therapist</option>
+              <label className="text-xs font-semibold text-stone-600">{tr("Scope")}<select value={unavailabilityForm.scope} onChange={(e) => setUnavailabilityForm((current) => ({ ...current, scope: e.target.value, therapistName: e.target.value === 'business' ? '' : current.therapistName }))} className="mt-1 w-full rounded-lg border border-stone-300 px-3 py-2 text-sm">
+                  <option value="business">{tr("Business-wide closure")}</option>
+                  <option value="therapist">{tr("Single therapist")}</option>
                 </select>
               </label>
-              <label className="text-xs font-semibold text-stone-600">Branch (optional)
-                <select value={unavailabilityForm.branchName} onChange={(e) => setUnavailabilityForm((current) => ({ ...current, branchName: e.target.value }))} className="mt-1 w-full rounded-lg border border-stone-300 px-3 py-2 text-sm">
-                  <option value="">All branches</option>
+              <label className="text-xs font-semibold text-stone-600">{tr("Branch (optional)")}<select value={unavailabilityForm.branchName} onChange={(e) => setUnavailabilityForm((current) => ({ ...current, branchName: e.target.value }))} className="mt-1 w-full rounded-lg border border-stone-300 px-3 py-2 text-sm">
+                  <option value="">{tr("All branches")}</option>
                   {branches.map((branch) => <option key={branch.id} value={branch.address || branch.name}>{branch.name}</option>)}
                 </select>
               </label>
               {unavailabilityForm.scope === 'therapist' && (
-                <label className="text-xs font-semibold text-stone-600">Therapist
-                  <select required value={unavailabilityForm.therapistName} onChange={(e) => setUnavailabilityForm((current) => ({ ...current, therapistName: e.target.value }))} className="mt-1 w-full rounded-lg border border-stone-300 px-3 py-2 text-sm">
-                    <option value="">Select therapist</option>
+                <label className="text-xs font-semibold text-stone-600">{tr("Therapist")}<select required value={unavailabilityForm.therapistName} onChange={(e) => setUnavailabilityForm((current) => ({ ...current, therapistName: e.target.value }))} className="mt-1 w-full rounded-lg border border-stone-300 px-3 py-2 text-sm">
+                    <option value="">{tr("Select therapist")}</option>
                     {therapists.map((therapist) => <option key={therapist.id} value={therapist.name}>{therapist.name}</option>)}
                   </select>
                 </label>
               )}
-              <label className="text-xs font-semibold text-stone-600">Date
-                <input type="date" required value={unavailabilityForm.date} onChange={(e) => setUnavailabilityForm((current) => ({ ...current, date: e.target.value }))} className="mt-1 w-full rounded-lg border border-stone-300 px-3 py-2 text-sm" />
+              <label className="text-xs font-semibold text-stone-600">{tr("Date")}<input type="date" required value={unavailabilityForm.date} onChange={(e) => setUnavailabilityForm((current) => ({ ...current, date: e.target.value }))} className="mt-1 w-full rounded-lg border border-stone-300 px-3 py-2 text-sm" />
               </label>
-              <label className="text-xs font-semibold text-stone-600">Start time
-                <input type="time" required value={unavailabilityForm.startTime} onChange={(e) => setUnavailabilityForm((current) => ({ ...current, startTime: e.target.value }))} className="mt-1 w-full rounded-lg border border-stone-300 px-3 py-2 text-sm" />
+              <label className="text-xs font-semibold text-stone-600">{tr("Start time")}<input type="time" required value={unavailabilityForm.startTime} onChange={(e) => setUnavailabilityForm((current) => ({ ...current, startTime: e.target.value }))} className="mt-1 w-full rounded-lg border border-stone-300 px-3 py-2 text-sm" />
               </label>
-              <label className="text-xs font-semibold text-stone-600">End time
-                <input type="time" required value={unavailabilityForm.endTime} onChange={(e) => setUnavailabilityForm((current) => ({ ...current, endTime: e.target.value }))} className="mt-1 w-full rounded-lg border border-stone-300 px-3 py-2 text-sm" />
+              <label className="text-xs font-semibold text-stone-600">{tr("End time")}<input type="time" required value={unavailabilityForm.endTime} onChange={(e) => setUnavailabilityForm((current) => ({ ...current, endTime: e.target.value }))} className="mt-1 w-full rounded-lg border border-stone-300 px-3 py-2 text-sm" />
               </label>
-              <label className="text-xs font-semibold text-stone-600 sm:col-span-2">Reason (optional)
-                <input type="text" value={unavailabilityForm.reason} onChange={(e) => setUnavailabilityForm((current) => ({ ...current, reason: e.target.value }))} placeholder="Holiday closure, staff training, break…" className="mt-1 w-full rounded-lg border border-stone-300 px-3 py-2 text-sm" />
+              <label className="text-xs font-semibold text-stone-600 sm:col-span-2">{tr("Reason (optional)")}<input type="text" value={unavailabilityForm.reason} onChange={(e) => setUnavailabilityForm((current) => ({ ...current, reason: e.target.value }))} placeholder={tr("Holiday closure, staff training, break…")} className="mt-1 w-full rounded-lg border border-stone-300 px-3 py-2 text-sm" />
               </label>
               <div className="flex items-end">
-                <button type="submit" disabled={isSavingUnavailability} className="w-full rounded-lg bg-emerald-800 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-900 disabled:opacity-50">{isSavingUnavailability ? 'Saving…' : 'Add block'}</button>
+                <button type="submit" disabled={isSavingUnavailability} className="w-full rounded-lg bg-emerald-800 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-900 disabled:opacity-50">{isSavingUnavailability ? tr("Saving…") : tr("Add block")}</button>
               </div>
             </form>
-            {unavailabilitySaveError && <p className="text-sm font-medium text-red-600">{unavailabilitySaveError}</p>}
+            {unavailabilitySaveError && <p className="text-sm font-medium text-red-600">{tr(unavailabilitySaveError)}</p>}
           </div>
           <div className="bg-white rounded-2xl border border-stone-200 shadow-sm overflow-hidden">
             <div className="px-6 py-4 border-b border-stone-100 flex items-center justify-between">
-              <h3 className="text-sm font-bold text-stone-900">Scheduled blocks</h3>
-              <button onClick={loadUnavailability} disabled={isLoadingUnavailability} className="text-xs font-semibold text-emerald-800 hover:underline disabled:opacity-50">Refresh</button>
+              <h3 className="text-sm font-bold text-stone-900">{tr("Scheduled blocks")}</h3>
+              <button onClick={loadUnavailability} disabled={isLoadingUnavailability} className="text-xs font-semibold text-emerald-800 hover:underline disabled:opacity-50">{tr("Refresh")}</button>
             </div>
-            {unavailabilityLoadError && <p className="px-6 py-3 text-sm text-red-600">{unavailabilityLoadError}</p>}
+            {unavailabilityLoadError && <p className="px-6 py-3 text-sm text-red-600">{tr(unavailabilityLoadError)}</p>}
             {unavailabilityBlocks.length ? (
               <div className="divide-y divide-stone-100">
                 {unavailabilityBlocks.map((block) => (
                   <div key={block.id} className="flex flex-wrap items-center justify-between gap-3 px-6 py-3">
                     <div>
-                      <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${block.scope === 'business' ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800'}`}>{block.scope === 'business' ? 'Business-wide' : block.therapistName}</span>
-                      <p className="mt-1 text-sm font-semibold text-stone-800">{block.date} · {block.startTime}–{block.endTime} {block.branchName ? `· ${block.branchName}` : ''}</p>
+                      <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${block.scope === 'business' ? 'bg-red-100 text-red-800' : 'bg-amber-100 text-amber-800'}`}>{block.scope === 'business' ? tr("Business-wide") : block.therapistName}</span>
+                      <p className="mt-1 text-sm font-semibold text-stone-800">{block.date} · {block.startTime}–{block.endTime} {block.branchName ? tr("· {value0}", { value0: block.branchName }) : ''}</p>
                       {block.reason && <p className="text-xs text-stone-500">{block.reason}</p>}
                     </div>
-                    <button onClick={() => deleteUnavailabilityBlock(block.id)} className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-50"><Trash2 className="h-3.5 w-3.5" />Remove</button>
+                    <button onClick={() => deleteUnavailabilityBlock(block.id)} className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-50"><Trash2 className="h-3.5 w-3.5" />{tr("Remove")}</button>
                   </div>
                 ))}
               </div>
             ) : (
-              <p className="px-6 py-6 text-sm text-stone-500">{isLoadingUnavailability ? 'Loading…' : 'No blocks scheduled.'}</p>
+              <p className="px-6 py-6 text-sm text-stone-500">{isLoadingUnavailability ? tr("Loading…") : tr("No blocks scheduled.")}</p>
             )}
           </div>
         </div>
@@ -6773,7 +6730,7 @@ function AdminPortal({
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
             <div>
               <h2 className="text-lg font-bold text-stone-900">{t.staff}</h2>
-              <p className="text-xs text-stone-500">Manage registered therapists, credentials, and which branch each therapist works at on each day of the week — supports rotation between branches. Changes sync to the booking portal and the therapist portal.</p>
+              <p className="text-xs text-stone-500">{tr("Manage registered therapists, credentials, and which branch each therapist works at on each day of the week — supports rotation between branches. Changes sync to the booking portal and the therapist portal.")}</p>
             </div>
             <button
               onClick={addTherapistRow}
@@ -6784,13 +6741,13 @@ function AdminPortal({
           </div>
 
           {therapistsError && (
-            <p role="alert" className="text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">{therapistsError}</p>
+            <p role="alert" className="text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">{tr(therapistsError)}</p>
           )}
           {therapistSaveError && (
-            <p role="alert" className="text-xs font-semibold text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{therapistSaveError}</p>
+            <p role="alert" className="text-xs font-semibold text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{tr(therapistSaveError)}</p>
           )}
           {therapistSaveMessage && (
-            <p role="status" className="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">{therapistSaveMessage}</p>
+            <p role="status" className="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">{tr(therapistSaveMessage)}</p>
           )}
 
           <div className="space-y-4">
@@ -6798,17 +6755,17 @@ function AdminPortal({
               <div key={th.id} className="p-4 rounded-xl border border-stone-200 bg-stone-50/50 space-y-3">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-bold text-stone-700 mb-1">Full Name *</label>
+                    <label className="block text-xs font-bold text-stone-700 mb-1">{tr("Full Name *")}</label>
                     <input
                       type="text"
-                      placeholder="e.g. Somsak P., RMT"
+                      placeholder={tr("e.g. Somsak P., RMT")}
                       value={th.name}
                       onChange={(e) => updateTherapistField(th.id, 'name', e.target.value)}
                       className="w-full p-2.5 rounded-xl border border-stone-300 text-xs focus:ring-2 focus:ring-emerald-600 focus:outline-none font-bold"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-bold text-stone-700 mb-1">Rating (1.0 - 5.0)</label>
+                    <label className="block text-xs font-bold text-stone-700 mb-1">{tr("Rating (1.0 - 5.0)")}</label>
                     <input
                       type="number"
                       step="0.1"
@@ -6822,10 +6779,10 @@ function AdminPortal({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-stone-700 mb-1">Professional Bio / Specialty</label>
+                  <label className="block text-xs font-bold text-stone-700 mb-1">{tr("Professional Bio / Specialty")}</label>
                   <input
                     type="text"
-                    placeholder="e.g. 8+ years deep tissue and Wat Pho traditional practitioner"
+                    placeholder={tr("e.g. 8+ years deep tissue and Wat Pho traditional practitioner")}
                     value={th.bio}
                     onChange={(e) => updateTherapistField(th.id, 'bio', e.target.value)}
                     className="w-full p-2.5 rounded-xl border border-stone-300 text-xs focus:ring-2 focus:ring-emerald-600 focus:outline-none"
@@ -6840,7 +6797,7 @@ function AdminPortal({
                       onChange={(e) => updateTherapistField(th.id, 'thaiCertified', e.target.checked)}
                       className="rounded text-emerald-700 focus:ring-emerald-600 w-4 h-4"
                     />
-                    <span>Traditional Thai Certified</span>
+                    <span>{tr("Traditional Thai Certified")}</span>
                   </label>
 
                   <label className="flex items-center space-x-2 cursor-pointer font-medium text-stone-800">
@@ -6850,7 +6807,7 @@ function AdminPortal({
                       onChange={(e) => updateTherapistField(th.id, 'rmtCertified', e.target.checked)}
                       className="rounded text-blue-700 focus:ring-blue-600 w-4 h-4"
                     />
-                    <span>RMT Healthcare Certified (Ontario CMTO)</span>
+                    <span>{tr("RMT Healthcare Certified (Ontario CMTO)")}</span>
                   </label>
 
                   <label className="flex items-center space-x-2 cursor-pointer font-medium text-stone-800">
@@ -6860,22 +6817,22 @@ function AdminPortal({
                       onChange={(e) => updateTherapistField(th.id, 'active', e.target.checked)}
                       className="rounded text-emerald-700 focus:ring-emerald-600 w-4 h-4"
                     />
-                    <span>Active</span>
+                    <span>{tr("Active")}</span>
                   </label>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-stone-700 mb-1.5">Branch rotation — pick which branch this therapist works at on each day (leave "Off" if they don't work that day)</label>
+                  <label className="block text-xs font-bold text-stone-700 mb-1.5">{tr("Branch rotation — pick which branch this therapist works at on each day (leave \"Off\" if they don't work that day)")}</label>
                   <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2">
                     {WEEKDAYS.map((day) => (
                       <div key={day.key}>
-                        <label className="block text-[10px] font-bold text-stone-500 mb-0.5 uppercase">{day.label}</label>
+                        <label className="block text-[10px] font-bold text-stone-500 mb-0.5 uppercase">{tr(day.label)}</label>
                         <select
                           value={th.schedule?.[day.key] ?? ''}
                           onChange={(e) => updateTherapistScheduleDay(th.id, day.key, e.target.value)}
                           className="w-full p-1.5 text-[11px] rounded-lg border border-stone-300 focus:ring-2 focus:ring-emerald-600 focus:outline-none"
                         >
-                          <option value="">Off</option>
+                          <option value="">{tr("Off")}</option>
                           {branches.map((branch) => (
                             <option key={branch.id} value={branch.id}>{branch.name}</option>
                           ))}
@@ -6898,9 +6855,7 @@ function AdminPortal({
             ))}
 
             {therapistForm.length === 0 && (
-              <div className="col-span-full py-8 text-center text-stone-400 text-xs">
-                No therapists listed. Click "{t.addTherapist}" above to register staff members.
-              </div>
+              <div className="col-span-full py-8 text-center text-stone-400 text-xs">{tr("No therapists listed. Click \"")}{t.addTherapist}{tr("\" above to register staff members.")}</div>
             )}
           </div>
 
@@ -6910,7 +6865,7 @@ function AdminPortal({
               disabled={isSavingTherapists}
               className="px-5 py-2.5 bg-emerald-800 text-white font-semibold rounded-xl hover:bg-emerald-900 disabled:opacity-50 transition text-sm"
             >
-              {isSavingTherapists ? 'Saving…' : 'Save therapists & rotation'}
+              {isSavingTherapists ? tr("Saving…") : tr("Save therapists & rotation")}
             </button>
           </div>
         </div>
@@ -6924,33 +6879,32 @@ function AdminPortal({
                 <div className="flex items-start gap-4">
                   <span className="rounded-xl bg-white/10 p-3 text-indigo-100"><Award className="h-5 w-5" /></span>
                   <div>
-                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-indigo-200">Reward your regulars</p>
-                    <h2 className="mt-1 text-xl font-bold">MY THAI THAI Rewards</h2>
-                    <p className="mt-1 max-w-2xl text-sm text-indigo-100">Manage member tiers, award points for completed visits, and record in-clinic reward redemptions.</p>
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-indigo-200">{tr("Reward your regulars")}</p>
+                    <h2 className="mt-1 text-xl font-bold">{tr("MY THAI THAI Rewards")}</h2>
+                    <p className="mt-1 max-w-2xl text-sm text-indigo-100">{tr("Manage member tiers, award points for completed visits, and record in-clinic reward redemptions.")}</p>
                   </div>
                 </div>
                 <button type="button" onClick={loadLoyaltyDashboard} disabled={isLoadingLoyalty} className="inline-flex items-center gap-2 rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-xs font-semibold text-white transition hover:bg-white/15 disabled:opacity-50">
-                  <RefreshCw className={`h-3.5 w-3.5 ${isLoadingLoyalty ? 'animate-spin' : ''}`} />Refresh
-                </button>
+                  <RefreshCw className={`h-3.5 w-3.5 ${isLoadingLoyalty ? 'animate-spin' : ''}`} />{tr("Refresh")}</button>
               </div>
             </div>
           </section>
 
-          {loyaltyError && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{loyaltyError}</div>}
-          {loyaltyNotice && <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{loyaltyNotice}</div>}
-          {isLoadingLoyalty && !loyaltyDashboard && <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">Loading loyalty members and rewards…</div>}
+          {loyaltyError && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{tr(loyaltyError)}</div>}
+          {loyaltyNotice && <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">{tr(loyaltyNotice)}</div>}
+          {isLoadingLoyalty && !loyaltyDashboard && <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">{tr("Loading loyalty members and rewards…")}</div>}
 
           {loyaltyDashboard && (
             <>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 {[
-                  ['Members', loyaltyDashboard.summary.members.toLocaleString(), Users, 'bg-blue-50 text-blue-700'],
-                  ['Points outstanding', loyaltyDashboard.summary.availablePoints.toLocaleString(), Sparkles, 'bg-indigo-50 text-indigo-700'],
-                  ['Visits ready to award', loyaltyDashboard.summary.pendingVisits.toLocaleString(), CheckCircle2, 'bg-emerald-50 text-emerald-700'],
+                  ['Members', loyaltyDashboard.summary.members.toLocaleString(locale), Users, 'bg-blue-50 text-blue-700'],
+                  ['Points outstanding', loyaltyDashboard.summary.availablePoints.toLocaleString(locale), Sparkles, 'bg-indigo-50 text-indigo-700'],
+                  ['Visits ready to award', loyaltyDashboard.summary.pendingVisits.toLocaleString(locale), CheckCircle2, 'bg-emerald-50 text-emerald-700'],
                 ].map(([label, value, Icon, style]) => (
                   <section key={label} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-                    <div className="flex items-center justify-between"><span className="text-xs font-medium text-slate-500">{label}</span><span className={`rounded-lg p-2 ${style}`}><Icon className="h-4 w-4" /></span></div>
-                    <p className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">{value}</p>
+                    <div className="flex items-center justify-between"><span className="text-xs font-medium text-slate-500">{tr(label)}</span><span className={`rounded-lg p-2 ${style}`}><Icon className="h-4 w-4" /></span></div>
+                    <p className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">{typeof value === 'string' ? tr(value) : value}</p>
                   </section>
                 ))}
               </div>
@@ -6958,95 +6912,80 @@ function AdminPortal({
               <form onSubmit={saveLoyaltySettings} className="space-y-5 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
                 <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 pb-4">
                   <div>
-                    <h3 className="text-base font-semibold text-slate-900">Program settings</h3>
-                    <p className="mt-1 text-xs leading-5 text-slate-500">Configure Standard, Gold and Platinum benefits. Point awards use service amounts actually paid, and existing ledger entries are unchanged.</p>
+                    <h3 className="text-base font-semibold text-slate-900">{tr("Program settings")}</h3>
+                    <p className="mt-1 text-xs leading-5 text-slate-500">{tr("Configure Standard, Gold and Platinum benefits. Point awards use service amounts actually paid, and existing ledger entries are unchanged.")}</p>
                   </div>
                   <label className="inline-flex cursor-pointer items-center gap-2 text-xs font-semibold text-slate-700">
-                    <input type="checkbox" checked={loyaltySettings.enabled} onChange={(event) => setLoyaltySettings((current) => ({ ...current, enabled: event.target.checked }))} className="h-4 w-4 rounded border-slate-300 text-indigo-700 focus:ring-indigo-600" />
-                    Program accepting members
-                  </label>
+                    <input type="checkbox" checked={loyaltySettings.enabled} onChange={(event) => setLoyaltySettings((current) => ({ ...current, enabled: event.target.checked }))} className="h-4 w-4 rounded border-slate-300 text-indigo-700 focus:ring-indigo-600" />{tr("Program accepting members")}</label>
                 </div>
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                  <label className="text-xs font-semibold text-slate-600">Standard points per $1 paid
-                    <input type="number" min="0.01" max="100" step="0.01" required value={loyaltySettings.pointsPerDollar} onChange={(event) => setLoyaltySettings((current) => ({ ...current, pointsPerDollar: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900" />
+                  <label className="text-xs font-semibold text-slate-600">{tr("Standard points per $1 paid")}<input type="number" min="0.01" max="100" step="0.01" required value={loyaltySettings.pointsPerDollar} onChange={(event) => setLoyaltySettings((current) => ({ ...current, pointsPerDollar: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900" />
                   </label>
-                  <label className="text-xs font-semibold text-slate-600">First single-session multiplier
-                    <input type="number" min="1" max="100" step="0.1" required value={loyaltySettings.firstSessionMultiplier} onChange={(event) => setLoyaltySettings((current) => ({ ...current, firstSessionMultiplier: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900" />
+                  <label className="text-xs font-semibold text-slate-600">{tr("First single-session multiplier")}<input type="number" min="1" max="100" step="0.1" required value={loyaltySettings.firstSessionMultiplier} onChange={(event) => setLoyaltySettings((current) => ({ ...current, firstSessionMultiplier: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900" />
                   </label>
-                  <label className="text-xs font-semibold text-slate-600">Points per reward
-                    <input type="number" min="1" max="1000000" step="1" required value={loyaltySettings.redemptionPoints} onChange={(event) => setLoyaltySettings((current) => ({ ...current, redemptionPoints: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900" />
+                  <label className="text-xs font-semibold text-slate-600">{tr("Points per reward")}<input type="number" min="1" max="1000000" step="1" required value={loyaltySettings.redemptionPoints} onChange={(event) => setLoyaltySettings((current) => ({ ...current, redemptionPoints: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900" />
                   </label>
-                  <label className="text-xs font-semibold text-slate-600">Reward value ($)
-                    <input type="number" min="0.01" max="10000" step="0.01" required value={loyaltySettings.redemptionValue} onChange={(event) => setLoyaltySettings((current) => ({ ...current, redemptionValue: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900" />
+                  <label className="text-xs font-semibold text-slate-600">{tr("Reward value ($)")}<input type="number" min="0.01" max="10000" step="0.01" required value={loyaltySettings.redemptionValue} onChange={(event) => setLoyaltySettings((current) => ({ ...current, redemptionValue: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900" />
                   </label>
                 </div>
                 <section className="space-y-3 rounded-xl border border-indigo-100 bg-indigo-50/50 p-4">
-                  <h4 className="text-sm font-semibold text-indigo-950">Gold monthly</h4>
+                  <h4 className="text-sm font-semibold text-indigo-950">{tr("Gold monthly")}</h4>
                   <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                    <label className="text-xs font-semibold text-slate-700">Monthly fee ($)
-                    <input type="number" min="0" max="100000" step="0.01" required value={loyaltySettings.membershipPlans.gold.monthlyFee} onChange={(event) => setLoyaltySettings((current) => ({ ...current, membershipPlans: { ...current.membershipPlans, gold: { ...current.membershipPlans.gold, monthlyFee: event.target.value } } }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" />
+                    <label className="text-xs font-semibold text-slate-700">{tr("Monthly fee ($)")}<input type="number" min="0" max="100000" step="0.01" required value={loyaltySettings.membershipPlans.gold.monthlyFee} onChange={(event) => setLoyaltySettings((current) => ({ ...current, membershipPlans: { ...current.membershipPlans, gold: { ...current.membershipPlans.gold, monthlyFee: event.target.value } } }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" />
                     </label>
-                    <label className="text-xs font-semibold text-slate-700">Service discount (%)
-                    <input type="number" min="0" max="100" step="0.1" required value={loyaltySettings.membershipPlans.gold.discountPercent} onChange={(event) => setLoyaltySettings((current) => ({ ...current, membershipPlans: { ...current.membershipPlans, gold: { ...current.membershipPlans.gold, discountPercent: event.target.value } } }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" />
+                    <label className="text-xs font-semibold text-slate-700">{tr("Service discount (%)")}<input type="number" min="0" max="100" step="0.1" required value={loyaltySettings.membershipPlans.gold.discountPercent} onChange={(event) => setLoyaltySettings((current) => ({ ...current, membershipPlans: { ...current.membershipPlans, gold: { ...current.membershipPlans.gold, discountPercent: event.target.value } } }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" />
                     </label>
-                    <label className="text-xs font-semibold text-slate-700">Points multiplier
-                    <input type="number" min="0" max="100" step="0.1" required value={loyaltySettings.membershipPlans.gold.pointsMultiplier} onChange={(event) => setLoyaltySettings((current) => ({ ...current, membershipPlans: { ...current.membershipPlans, gold: { ...current.membershipPlans.gold, pointsMultiplier: event.target.value } } }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" />
+                    <label className="text-xs font-semibold text-slate-700">{tr("Points multiplier")}<input type="number" min="0" max="100" step="0.1" required value={loyaltySettings.membershipPlans.gold.pointsMultiplier} onChange={(event) => setLoyaltySettings((current) => ({ ...current, membershipPlans: { ...current.membershipPlans, gold: { ...current.membershipPlans.gold, pointsMultiplier: event.target.value } } }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" />
                     </label>
-                    <label className="text-xs font-semibold text-slate-700">Free Hot Stone add-ons / month
-                    <input type="number" min="0" max="100" step="1" required value={loyaltySettings.membershipPlans.gold.freeHotStonePerMonth} onChange={(event) => setLoyaltySettings((current) => ({ ...current, membershipPlans: { ...current.membershipPlans, gold: { ...current.membershipPlans.gold, freeHotStonePerMonth: event.target.value } } }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" />
+                    <label className="text-xs font-semibold text-slate-700">{tr("Free Hot Stone add-ons / month")}<input type="number" min="0" max="100" step="1" required value={loyaltySettings.membershipPlans.gold.freeHotStonePerMonth} onChange={(event) => setLoyaltySettings((current) => ({ ...current, membershipPlans: { ...current.membershipPlans, gold: { ...current.membershipPlans.gold, freeHotStonePerMonth: event.target.value } } }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" />
                     </label>
                   </div>
                 </section>
                 <section className="space-y-3 rounded-xl border border-amber-200 bg-amber-50/50 p-4">
-                  <h4 className="text-sm font-semibold text-amber-950">Platinum company top-up</h4>
+                  <h4 className="text-sm font-semibold text-amber-950">{tr("Platinum company top-up")}</h4>
                   <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                    <label className="text-xs font-semibold text-slate-700">Top-up price ($)
-                      <input type="number" min="0" max="100000" step="0.01" required value={loyaltySettings.membershipPlans.platinum.topUpPrice} onChange={(event) => setLoyaltySettings((current) => ({ ...current, membershipPlans: { ...current.membershipPlans, platinum: { ...current.membershipPlans.platinum, topUpPrice: event.target.value } } }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" />
+                    <label className="text-xs font-semibold text-slate-700">{tr("Top-up price ($)")}<input type="number" min="0" max="100000" step="0.01" required value={loyaltySettings.membershipPlans.platinum.topUpPrice} onChange={(event) => setLoyaltySettings((current) => ({ ...current, membershipPlans: { ...current.membershipPlans, platinum: { ...current.membershipPlans.platinum, topUpPrice: event.target.value } } }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" />
                     </label>
-                    <label className="text-xs font-semibold text-slate-700">Prepaid hours
-                      <input type="number" min="0.01" max="10000" step="0.25" required value={loyaltySettings.membershipPlans.platinum.includedHours} onChange={(event) => setLoyaltySettings((current) => ({ ...current, membershipPlans: { ...current.membershipPlans, platinum: { ...current.membershipPlans.platinum, includedHours: event.target.value } } }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" />
+                    <label className="text-xs font-semibold text-slate-700">{tr("Prepaid hours")}<input type="number" min="0.01" max="10000" step="0.25" required value={loyaltySettings.membershipPlans.platinum.includedHours} onChange={(event) => setLoyaltySettings((current) => ({ ...current, membershipPlans: { ...current.membershipPlans, platinum: { ...current.membershipPlans.platinum, includedHours: event.target.value } } }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" />
                     </label>
-                    <label className="text-xs font-semibold text-slate-700">Service discount (%)
-                      <input type="number" min="0" max="100" step="0.1" required value={loyaltySettings.membershipPlans.platinum.discountPercent} onChange={(event) => setLoyaltySettings((current) => ({ ...current, membershipPlans: { ...current.membershipPlans, platinum: { ...current.membershipPlans.platinum, discountPercent: event.target.value } } }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" />
+                    <label className="text-xs font-semibold text-slate-700">{tr("Service discount (%)")}<input type="number" min="0" max="100" step="0.1" required value={loyaltySettings.membershipPlans.platinum.discountPercent} onChange={(event) => setLoyaltySettings((current) => ({ ...current, membershipPlans: { ...current.membershipPlans, platinum: { ...current.membershipPlans.platinum, discountPercent: event.target.value } } }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" />
                     </label>
-                    <label className="text-xs font-semibold text-slate-700">Hot Stone add-on discount ($)
-                      <input type="number" min="0" max="10000" step="0.01" required value={loyaltySettings.membershipPlans.platinum.hotStoneDiscount} onChange={(event) => setLoyaltySettings((current) => ({ ...current, membershipPlans: { ...current.membershipPlans, platinum: { ...current.membershipPlans.platinum, hotStoneDiscount: event.target.value } } }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" />
+                    <label className="text-xs font-semibold text-slate-700">{tr("Hot Stone add-on discount ($)")}<input type="number" min="0" max="10000" step="0.01" required value={loyaltySettings.membershipPlans.platinum.hotStoneDiscount} onChange={(event) => setLoyaltySettings((current) => ({ ...current, membershipPlans: { ...current.membershipPlans, platinum: { ...current.membershipPlans.platinum, hotStoneDiscount: event.target.value } } }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" />
                     </label>
-                    <label className="text-xs font-semibold text-slate-700" title="Charged only when a Platinum member adds the Hot Stone add-on to a booking.">Platinum Hot Stone surcharge ($)
-                      <input type="number" min="0" max="10000" step="0.01" required value={loyaltySettings.membershipPlans.platinum.hotStoneSurcharge} onChange={(event) => setLoyaltySettings((current) => ({ ...current, membershipPlans: { ...current.membershipPlans, platinum: { ...current.membershipPlans.platinum, hotStoneSurcharge: event.target.value } } }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" />
+                    <label className="text-xs font-semibold text-slate-700" title={tr("Charged only when a Platinum member adds the Hot Stone add-on to a booking.")}>{tr("Platinum Hot Stone surcharge ($)")}<input type="number" min="0" max="10000" step="0.01" required value={loyaltySettings.membershipPlans.platinum.hotStoneSurcharge} onChange={(event) => setLoyaltySettings((current) => ({ ...current, membershipPlans: { ...current.membershipPlans, platinum: { ...current.membershipPlans.platinum, hotStoneSurcharge: event.target.value } } }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" />
                     </label>
                   </div>
-                  <p className="text-[11px] leading-5 text-slate-600">Company employees are matched by their enrolled email and optional company ID. Record a confirmed top-up from the member row; completed visits consume their service duration from the hours balance.</p>
+                  <p className="text-[11px] leading-5 text-slate-600">{tr("Company employees are matched by their enrolled email and optional company ID. Record a confirmed top-up from the member row; completed visits consume their service duration from the hours balance.")}</p>
                 </section>
                 <div>
                   <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                    <div><h4 className="text-sm font-semibold text-slate-900">Member tiers</h4><p className="mt-0.5 text-[11px] text-slate-500">Tier level is based on lifetime points earned. The first tier must begin at 0 points.</p></div>
-                    <button type="button" disabled={loyaltySettings.tiers.length >= 6} onClick={() => setLoyaltySettings((current) => ({ ...current, tiers: [...current.tiers, { name: `Tier ${current.tiers.length + 1}`, threshold: Number(current.tiers[current.tiers.length - 1]?.threshold || 0) + 500 }] }))} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40">Add tier</button>
+                    <div><h4 className="text-sm font-semibold text-slate-900">{tr("Member tiers")}</h4><p className="mt-0.5 text-[11px] text-slate-500">{tr("Tier level is based on lifetime points earned. The first tier must begin at 0 points.")}</p></div>
+                    <button type="button" disabled={loyaltySettings.tiers.length >= 6} onClick={() => setLoyaltySettings((current) => ({ ...current, tiers: [...current.tiers, { name: `Tier ${current.tiers.length + 1}`, threshold: Number(current.tiers[current.tiers.length - 1]?.threshold || 0) + 500 }] }))} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40">{tr("Add tier")}</button>
                   </div>
                   <div className="space-y-2">
                     {loyaltySettings.tiers.map((tier, index) => (
                       <div key={`tier-${index}`} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] gap-2">
-                        <label className="sr-only" htmlFor={`loyalty-tier-name-${index}`}>Tier {index + 1} name</label>
-                        <input id={`loyalty-tier-name-${index}`} required maxLength={40} value={tier.name} onChange={(event) => setLoyaltySettings((current) => ({ ...current, tiers: current.tiers.map((item, itemIndex) => itemIndex === index ? { ...item, name: event.target.value } : item) }))} className="min-w-0 rounded-lg border border-slate-200 px-3 py-2 text-xs" placeholder="Tier name" />
-                        <label className="sr-only" htmlFor={`loyalty-tier-points-${index}`}>Tier {index + 1} points threshold</label>
-                        <input id={`loyalty-tier-points-${index}`} type="number" min={index === 0 ? 0 : 1} step="1" required value={tier.threshold} disabled={index === 0} onChange={(event) => setLoyaltySettings((current) => ({ ...current, tiers: current.tiers.map((item, itemIndex) => itemIndex === index ? { ...item, threshold: event.target.value } : item) }))} className="min-w-0 rounded-lg border border-slate-200 px-3 py-2 text-xs disabled:bg-slate-50" placeholder="Points threshold" />
-                        <button type="button" aria-label={`Remove tier ${tier.name || index + 1}`} disabled={index === 0} onClick={() => setLoyaltySettings((current) => ({ ...current, tiers: current.tiers.filter((_, itemIndex) => itemIndex !== index) }))} className="rounded-lg border border-slate-200 px-3 text-slate-500 hover:border-rose-200 hover:text-rose-700 disabled:cursor-not-allowed disabled:opacity-30"><X className="h-4 w-4" /></button>
+                        <label className="sr-only" htmlFor={`loyalty-tier-name-${index}`}>{tr("Tier")} {index + 1} {tr("name")}</label>
+                        <input id={`loyalty-tier-name-${index}`} required maxLength={40} value={tier.name} onChange={(event) => setLoyaltySettings((current) => ({ ...current, tiers: current.tiers.map((item, itemIndex) => itemIndex === index ? { ...item, name: event.target.value } : item) }))} className="min-w-0 rounded-lg border border-slate-200 px-3 py-2 text-xs" placeholder={tr("Tier name")} />
+                        <label className="sr-only" htmlFor={`loyalty-tier-points-${index}`}>{tr("Tier")} {index + 1} {tr("points threshold")}</label>
+                        <input id={`loyalty-tier-points-${index}`} type="number" min={index === 0 ? 0 : 1} step="1" required value={tier.threshold} disabled={index === 0} onChange={(event) => setLoyaltySettings((current) => ({ ...current, tiers: current.tiers.map((item, itemIndex) => itemIndex === index ? { ...item, threshold: event.target.value } : item) }))} className="min-w-0 rounded-lg border border-slate-200 px-3 py-2 text-xs disabled:bg-slate-50" placeholder={tr("Points threshold")} />
+                        <button type="button" aria-label={tr("Remove tier {value0}", { value0: tier.name || index + 1 })} disabled={index === 0} onClick={() => setLoyaltySettings((current) => ({ ...current, tiers: current.tiers.filter((_, itemIndex) => itemIndex !== index) }))} className="rounded-lg border border-slate-200 px-3 text-slate-500 hover:border-rose-200 hover:text-rose-700 disabled:cursor-not-allowed disabled:opacity-30"><X className="h-4 w-4" /></button>
                       </div>
                     ))}
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
-                  <p className="text-[11px] leading-5 text-slate-500">Example reward: {loyaltySettings.redemptionPoints || 0} points = ${Number(loyaltySettings.redemptionValue || 0).toFixed(2)} off in clinic.</p>
-                  <button type="submit" disabled={isSavingLoyalty || isLoadingLoyalty} className="inline-flex items-center gap-2 rounded-lg bg-indigo-950 px-4 py-2.5 text-xs font-semibold text-white hover:bg-indigo-800 disabled:opacity-50">{isSavingLoyalty ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}Save program settings</button>
+                  <p className="text-[11px] leading-5 text-slate-500">{tr("Example reward:")} {loyaltySettings.redemptionPoints || 0} {tr("points = $")}{Number(loyaltySettings.redemptionValue || 0).toFixed(2)} {tr("off in clinic.")}</p>
+                  <button type="submit" disabled={isSavingLoyalty || isLoadingLoyalty} className="inline-flex items-center gap-2 rounded-lg bg-indigo-950 px-4 py-2.5 text-xs font-semibold text-white hover:bg-indigo-800 disabled:opacity-50">{isSavingLoyalty ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}{tr("Save program settings")}</button>
                 </div>
               </form>
 
               <form onSubmit={onboardLoyaltyMember} className="space-y-4 rounded-2xl border border-indigo-200 bg-white p-5 shadow-sm sm:p-6">
-                <div><h3 className="text-base font-semibold text-slate-900">Onboard a member</h3><p className="mt-1 text-xs leading-5 text-slate-500">Find a recent customer by name, email or phone. For Platinum, use the employee's work email, add the company and ID, then optionally confirm the initial payment and add the configured hours in this same step.</p></div>
+                <div><h3 className="text-base font-semibold text-slate-900">{tr("Onboard a member")}</h3><p className="mt-1 text-xs leading-5 text-slate-500">{tr("Find a recent customer by name, email or phone. For Platinum, use the employee's work email, add the company and ID, then optionally confirm the initial payment and add the configured hours in this same step.")}</p></div>
                 <div className="relative max-w-xl">
                   <label className="relative block">
                     <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                    <input type="search" value={loyaltyOnboardingSearch} onChange={(event) => setLoyaltyOnboardingSearch(event.target.value)} placeholder="Find a booking customer by name, email or phone" aria-label="Find a customer to enroll" className="w-full rounded-lg border border-slate-200 py-2.5 pl-10 pr-3 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100" />
+                    <input type="search" value={loyaltyOnboardingSearch} onChange={(event) => setLoyaltyOnboardingSearch(event.target.value)} placeholder={tr("Find a booking customer by name, email or phone")} aria-label={tr("Find a customer to enroll")} className="w-full rounded-lg border border-slate-200 py-2.5 pl-10 pr-3 text-sm outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100" />
                   </label>
                   {!!loyaltyOnboardingSearch.trim() && (() => {
                     const query = loyaltyOnboardingSearch.trim().toLowerCase();
@@ -7066,70 +7005,70 @@ function AdminPortal({
                             setLoyaltyOnboardingSearch('');
                           }} className="block w-full rounded-md px-3 py-2 text-left hover:bg-indigo-50">
                             <span className="block text-xs font-semibold text-slate-800">{customer.name || customer.email}</span>
-                            <span className="block text-[11px] text-slate-500">{customer.email}{customer.phone ? ` · ${customer.phone}` : ''}</span>
+                            <span className="block text-[11px] text-slate-500">{customer.email}{customer.phone ? tr(" · {value0}", { value0: customer.phone }) : ''}</span>
                           </button>
                         ))}
                       </div>
-                    ) : <p className="absolute z-20 mt-1 w-full rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-500 shadow-lg">No booking customer matches that search.</p>;
+                    ) : <p className="absolute z-20 mt-1 w-full rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-500 shadow-lg">{tr("No booking customer matches that search.")}</p>;
                   })()}
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                  <label className="text-xs font-semibold text-slate-600">Member name<input required maxLength={120} value={newLoyaltyMember.name} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, name: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" /></label>
-                  <label className="text-xs font-semibold text-slate-600">Email<input required type="email" maxLength={254} value={newLoyaltyMember.email} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, email: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" /></label>
-                  <label className="text-xs font-semibold text-slate-600">Phone (optional)<input type="tel" maxLength={50} value={newLoyaltyMember.phone} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, phone: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" /></label>
-                  <label className="text-xs font-semibold text-slate-600">Membership type<select value={newLoyaltyMember.membershipType} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, membershipType: event.target.value, organization: event.target.value === 'platinum' ? current.organization : '', companyId: event.target.value === 'platinum' ? current.companyId : '', paidThrough: event.target.value === 'gold' ? current.paidThrough : '', initialTopUpPaid: event.target.value === 'platinum' ? current.initialTopUpPaid : false }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm"><option value="regular">Standard · Free points</option><option value="gold">Gold · Monthly</option><option value="platinum">Platinum · Company top-up</option></select></label>
+                  <label className="text-xs font-semibold text-slate-600">{tr("Member name")}<input required maxLength={120} value={newLoyaltyMember.name} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, name: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" /></label>
+                  <label className="text-xs font-semibold text-slate-600">{tr("Email")}<input required type="email" maxLength={254} value={newLoyaltyMember.email} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, email: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" /></label>
+                  <label className="text-xs font-semibold text-slate-600">{tr("Phone (optional)")}<input type="tel" maxLength={50} value={newLoyaltyMember.phone} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, phone: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" /></label>
+                  <label className="text-xs font-semibold text-slate-600">{tr("Membership type")}<select value={newLoyaltyMember.membershipType} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, membershipType: event.target.value, organization: event.target.value === 'platinum' ? current.organization : '', companyId: event.target.value === 'platinum' ? current.companyId : '', paidThrough: event.target.value === 'gold' ? current.paidThrough : '', initialTopUpPaid: event.target.value === 'platinum' ? current.initialTopUpPaid : false }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm"><option value="regular">{tr("Standard · Free points")}</option><option value="gold">{tr("Gold · Monthly")}</option><option value="platinum">{tr("Platinum · Company top-up")}</option></select></label>
                   {newLoyaltyMember.membershipType === 'platinum' && <>
-                    <label className="text-xs font-semibold text-slate-600">Company name<input required maxLength={120} value={newLoyaltyMember.organization} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, organization: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" /></label>
-                    <label className="text-xs font-semibold text-slate-600">Company ID (optional if using work email)<input maxLength={120} value={newLoyaltyMember.companyId} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, companyId: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" /></label>
-                    <label className="text-xs font-semibold text-slate-600">Company registration/contact email<input type="email" maxLength={254} value={newLoyaltyMember.companyContactEmail} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, companyContactEmail: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" placeholder="Company contact email" /></label>
+                    <label className="text-xs font-semibold text-slate-600">{tr("Company name")}<input required maxLength={120} value={newLoyaltyMember.organization} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, organization: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" /></label>
+                    <label className="text-xs font-semibold text-slate-600">{tr("Company ID (optional if using work email)")}<input maxLength={120} value={newLoyaltyMember.companyId} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, companyId: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" /></label>
+                    <label className="text-xs font-semibold text-slate-600">{tr("Company registration/contact email")}<input type="email" maxLength={254} value={newLoyaltyMember.companyContactEmail} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, companyContactEmail: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" placeholder={tr("Company contact email")} /></label>
                     <label className="sm:col-span-2 flex items-start gap-2 rounded-lg border border-indigo-200 bg-indigo-50 p-3 text-xs leading-5 text-indigo-950">
                       <input type="checkbox" checked={newLoyaltyMember.isPrimaryOwner} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, isPrimaryOwner: event.target.checked, initialTopUpPaid: event.target.checked ? current.initialTopUpPaid : false }))} className="mt-0.5 h-4 w-4 rounded border-indigo-300 text-indigo-700" />
-                      <span><strong>Primary owner/contact:</strong> this person's own top-ups fund the one shared prepaid-hour balance for {newLoyaltyMember.organization || 'this company'}. Every employee draws from that same pool — leave unchecked for a regular employee (they cannot be topped up directly).</span>
+                      <span><strong>{tr("Primary owner/contact:")}</strong> {tr("this person's own top-ups fund the one shared prepaid-hour balance for")} {newLoyaltyMember.organization || tr("this company")}{tr(". Every employee draws from that same pool — leave unchecked for a regular employee (they cannot be topped up directly).")}</span>
                     </label>
                     <label className={`sm:col-span-2 flex items-start gap-2 rounded-lg border p-3 text-xs leading-5 ${newLoyaltyMember.isPrimaryOwner ? 'border-amber-200 bg-amber-50 text-amber-950' : 'border-slate-200 bg-slate-50 text-slate-400'}`}>
                       <input type="checkbox" disabled={!newLoyaltyMember.isPrimaryOwner} checked={newLoyaltyMember.initialTopUpPaid} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, initialTopUpPaid: event.target.checked }))} className="mt-0.5 h-4 w-4 rounded border-amber-300 text-amber-700" />
-                      <span><strong>Payment confirmed:</strong> record the configured ${Number(loyaltySettings.membershipPlans.platinum.topUpPrice).toFixed(2)} top-up and add {loyaltySettings.membershipPlans.platinum.includedHours} hours now.{!newLoyaltyMember.isPrimaryOwner ? ' Only the primary owner/contact can be topped up.' : ' Leave unchecked for a pending company claim.'}</span>
+                      <span><strong>{tr("Payment confirmed:")}</strong> {tr("record the configured $")}{Number(loyaltySettings.membershipPlans.platinum.topUpPrice).toFixed(2)} {tr("top-up and add")} {loyaltySettings.membershipPlans.platinum.includedHours} {tr("hours now.")}{!newLoyaltyMember.isPrimaryOwner ? tr(" Only the primary owner/contact can be topped up.") : tr(" Leave unchecked for a pending company claim.")}</span>
                     </label>
                   </>}
-                  {newLoyaltyMember.membershipType === 'gold' && <label className="text-xs font-semibold text-slate-600">Paid through<input type="date" value={newLoyaltyMember.paidThrough} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, paidThrough: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" /></label>}
+                  {newLoyaltyMember.membershipType === 'gold' && <label className="text-xs font-semibold text-slate-600">{tr("Paid through")}<input type="date" value={newLoyaltyMember.paidThrough} onChange={(event) => setNewLoyaltyMember((current) => ({ ...current, paidThrough: event.target.value }))} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm" /></label>}
                 </div>
-                <button type="submit" disabled={isOnboardingLoyaltyMember || !loyaltySettings.enabled} className="inline-flex items-center gap-2 rounded-lg bg-indigo-950 px-4 py-2.5 text-xs font-semibold text-white hover:bg-indigo-800 disabled:opacity-50">{isOnboardingLoyaltyMember ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}{isOnboardingLoyaltyMember ? 'Saving membership…' : newLoyaltyMember.membershipType === 'platinum' && newLoyaltyMember.initialTopUpPaid ? 'Enroll & record paid top-up' : 'Save member & email details'}</button>
+                <button type="submit" disabled={isOnboardingLoyaltyMember || !loyaltySettings.enabled} className="inline-flex items-center gap-2 rounded-lg bg-indigo-950 px-4 py-2.5 text-xs font-semibold text-white hover:bg-indigo-800 disabled:opacity-50">{isOnboardingLoyaltyMember ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}{isOnboardingLoyaltyMember ? tr("Saving membership…") : newLoyaltyMember.membershipType === 'platinum' && newLoyaltyMember.initialTopUpPaid ? tr("Enroll & record paid top-up") : tr("Save member & email details")}</button>
               </form>
 
               <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
                 <div className="border-b border-slate-100 px-5 py-4">
-                  <h3 className="text-base font-semibold text-slate-900">Confirm completed visits</h3>
-                  <p className="mt-1 text-xs leading-5 text-slate-500">Confirm completed, paid member visits, redeem a Gold monthly Hot Stone add-on, or consume Platinum prepaid hours. Each visit can only be recorded once.</p>
+                  <h3 className="text-base font-semibold text-slate-900">{tr("Confirm completed visits")}</h3>
+                  <p className="mt-1 text-xs leading-5 text-slate-500">{tr("Confirm completed, paid member visits, redeem a Gold monthly Hot Stone add-on, or consume Platinum prepaid hours. Each visit can only be recorded once.")}</p>
                 </div>
                 {loyaltyDashboard.eligibleBookings.length ? (
                   <div className="overflow-x-auto">
                     <table className="w-full min-w-[680px] text-left text-sm">
-                      <thead className="bg-slate-50 text-xs font-semibold text-slate-500"><tr><th className="px-5 py-3">Member</th><th className="px-4 py-3">Visit</th><th className="px-4 py-3 text-right">Paid</th><th className="px-5 py-3 text-right">Points</th><th className="px-5 py-3 text-right">Action</th></tr></thead>
+                      <thead className="bg-slate-50 text-xs font-semibold text-slate-500"><tr><th className="px-5 py-3">{tr("Member")}</th><th className="px-4 py-3">{tr("Visit")}</th><th className="px-4 py-3 text-right">{tr("Paid")}</th><th className="px-5 py-3 text-right">{tr("Points")}</th><th className="px-5 py-3 text-right">{tr("Action")}</th></tr></thead>
                       <tbody className="divide-y divide-slate-100">
                         {loyaltyDashboard.eligibleBookings.map((booking) => (
                           <tr key={booking.id}>
                             <td className="px-5 py-3 font-medium text-slate-900">{booking.customerName}<span className="mt-0.5 block text-[10px] font-normal text-slate-500">{booking.email}</span></td>
-                            <td className="px-4 py-3 text-slate-700">{booking.date}<span className="mt-0.5 block text-[10px] text-slate-500">{booking.serviceName} · {booking.id}</span></td>
+                            <td className="px-4 py-3 text-slate-700">{booking.date}<span className="mt-0.5 block text-[10px] text-slate-500">{tr(booking.serviceName)} · {booking.id}</span></td>
                             <td className="px-4 py-3 text-right tabular-nums text-slate-700">${booking.paidAmount.toFixed(2)}</td>
-                            <td className="px-5 py-3 text-right font-semibold text-indigo-800">{booking.points ? `+${booking.points} pts` : booking.hoursToUse ? `${booking.hoursToUse.toFixed(2)} hrs` : booking.freeHotStone ? 'Free add-on' : '—'}{booking.firstSession && <span className="mt-0.5 block text-[10px] font-normal">First session · {booking.pointsMultiplier}x</span>}</td>
-                            <td className="px-5 py-3 text-right"><button type="button" disabled={loyaltyActionId === booking.id || !loyaltySettings.enabled} onClick={() => awardLoyaltyPoints(booking)} className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-950 px-3 py-2 text-[11px] font-semibold text-white hover:bg-indigo-800 disabled:opacity-50"><CheckCircle2 className="h-3.5 w-3.5" />{loyaltyActionId === booking.id ? 'Awarding…' : 'Confirm & award'}</button></td>
+                            <td className="px-5 py-3 text-right font-semibold text-indigo-800">{booking.points ? tr("+{value0} pts", { value0: booking.points }) : booking.hoursToUse ? tr("{value0} hrs", { value0: booking.hoursToUse.toFixed(2) }) : booking.freeHotStone ? tr("Free add-on") : '—'}{booking.firstSession && <span className="mt-0.5 block text-[10px] font-normal">{tr("First session ·")} {booking.pointsMultiplier}{tr("x")}</span>}</td>
+                            <td className="px-5 py-3 text-right"><button type="button" disabled={loyaltyActionId === booking.id || !loyaltySettings.enabled} onClick={() => awardLoyaltyPoints(booking)} className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-950 px-3 py-2 text-[11px] font-semibold text-white hover:bg-indigo-800 disabled:opacity-50"><CheckCircle2 className="h-3.5 w-3.5" />{loyaltyActionId === booking.id ? tr("Awarding…") : tr("Confirm & award")}</button></td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
                   </div>
-                ) : <p className="p-6 text-center text-sm text-slate-500">No completed member visits or benefits are waiting to be recorded.</p>}
+                ) : <p className="p-6 text-center text-sm text-slate-500">{tr("No completed member visits or benefits are waiting to be recorded.")}</p>}
               </section>
 
               <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
-                  <div><h3 className="text-base font-semibold text-slate-900">Members & balances</h3><p className="mt-1 text-xs text-slate-500">Search by member, email, phone, company or company ID; check eligibility, record top-ups and redeem points.</p></div>
+                  <div><h3 className="text-base font-semibold text-slate-900">{tr("Members & balances")}</h3><p className="mt-1 text-xs text-slate-500">{tr("Search by member, email, phone, company or company ID; check eligibility, record top-ups and redeem points.")}</p></div>
                   <div className="flex w-full flex-wrap gap-2 sm:w-auto">
-                    <label className="sr-only" htmlFor="loyalty-member-type-filter">Filter members by membership type</label>
+                    <label className="sr-only" htmlFor="loyalty-member-type-filter">{tr("Filter members by membership type")}</label>
                     <select id="loyalty-member-type-filter" value={loyaltyMemberTypeFilter} onChange={(event) => setLoyaltyMemberTypeFilter(event.target.value)} className="rounded-lg border border-slate-200 px-3 py-2 text-xs">
-                      <option value="all">All memberships</option><option value="gold">Gold</option><option value="platinum">Platinum company</option><option value="silver">Legacy Silver</option><option value="regular">Standard points</option>
+                      <option value="all">{tr("All memberships")}</option><option value="gold">{tr("Gold")}</option><option value="platinum">{tr("Platinum company")}</option><option value="silver">{tr("Legacy Silver")}</option><option value="regular">{tr("Standard points")}</option>
                     </select>
-                    <label className="relative w-full sm:w-64"><Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" /><input type="search" value={loyaltyMemberSearch} onChange={(event) => setLoyaltyMemberSearch(event.target.value)} placeholder="Search member or company" aria-label="Search loyalty members" className="w-full rounded-lg border border-slate-200 py-2 pl-9 pr-3 text-xs outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100" /></label>
+                    <label className="relative w-full sm:w-64"><Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" /><input type="search" value={loyaltyMemberSearch} onChange={(event) => setLoyaltyMemberSearch(event.target.value)} placeholder={tr("Search member or company")} aria-label={tr("Search loyalty members")} className="w-full rounded-lg border border-slate-200 py-2 pl-9 pr-3 text-xs outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100" /></label>
                   </div>
                 </div>
                 {(() => {
@@ -7139,48 +7078,48 @@ function AdminPortal({
                   return filteredMembers.length ? (
                     <div className="overflow-x-auto">
                       <table className="w-full min-w-[920px] text-left text-sm">
-                        <thead className="bg-slate-50 text-xs font-semibold text-slate-500"><tr><th className="px-5 py-3">Member</th><th className="px-4 py-3">Membership</th><th className="px-4 py-3">Eligibility</th><th className="px-4 py-3 text-right">Balance</th><th className="px-4 py-3 text-right">Lifetime earned</th><th className="px-5 py-3 text-right">Actions</th></tr></thead>
+                        <thead className="bg-slate-50 text-xs font-semibold text-slate-500"><tr><th className="px-5 py-3">{tr("Member")}</th><th className="px-4 py-3">{tr("Membership")}</th><th className="px-4 py-3">{tr("Eligibility")}</th><th className="px-4 py-3 text-right">{tr("Balance")}</th><th className="px-4 py-3 text-right">{tr("Lifetime earned")}</th><th className="px-5 py-3 text-right">{tr("Actions")}</th></tr></thead>
                         <tbody className="divide-y divide-slate-100">
                           {filteredMembers.map((member) => (
                             <tr key={member.email} className="hover:bg-slate-50">
-                              <td className="px-5 py-3 font-medium text-slate-900">{member.name || 'Member'}<span className="mt-0.5 block text-[10px] font-normal text-slate-500">{member.email}{member.phone ? ` · ${member.phone}` : ''}</span></td>
-                              <td className="px-4 py-3"><span className="rounded-full bg-indigo-50 px-2.5 py-1 text-[10px] font-semibold text-indigo-800">{member.membershipType === 'gold' ? 'Gold' : member.membershipType === 'platinum' ? 'Platinum · Company' : member.membershipType === 'silver' ? 'Legacy Silver · Corporate' : `Standard · ${member.tier}`}</span>{member.membershipType === 'platinum' && member.isPrimaryContact && <span className="ml-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">Primary contact</span>}{member.organization && <span className="mt-1 block text-[10px] text-slate-500">{member.organization}{member.companyId ? ` · ID ${member.companyId}` : ''}{member.companyContactEmail ? ` · Contact: ${member.companyContactEmail}` : ''}</span>}</td>
-                              <td className="px-4 py-3 text-xs">{member.membershipType === 'regular' ? <span className="text-slate-500">Points program</span> : member.membershipType === 'platinum' ? <><span className={member.membershipActive ? 'font-semibold text-emerald-700' : 'font-semibold text-amber-700'}>{member.membershipActive ? `${member.membershipDiscountPercent}% off active` : 'Top-up required'}</span><span className="mt-1 block text-[10px] text-slate-500">{member.prepaidHoursBalance.toFixed(2)} shared prepaid hours remain · ${loyaltySettings.membershipPlans.platinum.hotStoneDiscount} off Hot Stone add-on</span></> : <><span className={member.membershipActive ? 'font-semibold text-emerald-700' : 'font-semibold text-amber-700'}>{member.membershipActive ? `${member.membershipDiscountPercent}% off active` : 'Payment required'}</span><span className="mt-1 block text-[10px] text-slate-500">Paid through: {member.paidThrough || 'not recorded'}{member.membershipType === 'gold' ? ` · Hot Stone add-on ${member.freeHotStoneAvailable ? 'available' : 'used'} this month` : ''}</span></>}</td>
-                              <td className="px-4 py-3 text-right font-semibold tabular-nums text-slate-800">{member.pointsBalance.toLocaleString()} pts{member.membershipType === 'platinum' && <span className="mt-1 block text-[10px] font-normal text-slate-500">{member.prepaidHoursBalance.toFixed(2)} hrs shared</span>}</td>
-                              <td className="px-4 py-3 text-right tabular-nums text-slate-600">{member.lifetimePoints.toLocaleString()} pts</td>
+                              <td className="px-5 py-3 font-medium text-slate-900">{member.name || tr("Member")}<span className="mt-0.5 block text-[10px] font-normal text-slate-500">{member.email}{member.phone ? tr(" · {value0}", { value0: member.phone }) : ''}</span></td>
+                              <td className="px-4 py-3"><span className="rounded-full bg-indigo-50 px-2.5 py-1 text-[10px] font-semibold text-indigo-800">{member.membershipType === 'gold' ? tr("Gold") : member.membershipType === 'platinum' ? tr("Platinum · Company") : member.membershipType === 'silver' ? tr("Legacy Silver · Corporate") : tr("Standard · {value0}", { value0: member.tier })}</span>{member.membershipType === 'platinum' && member.isPrimaryContact && <span className="ml-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">{tr("Primary contact")}</span>}{member.organization && <span className="mt-1 block text-[10px] text-slate-500">{member.organization}{member.companyId ? tr(" · ID {value0}", { value0: member.companyId }) : ''}{member.companyContactEmail ? tr(" · Contact: {value0}", { value0: member.companyContactEmail }) : ''}</span>}</td>
+                              <td className="px-4 py-3 text-xs">{member.membershipType === 'regular' ? <span className="text-slate-500">{tr("Points program")}</span> : member.membershipType === 'platinum' ? <><span className={member.membershipActive ? 'font-semibold text-emerald-700' : 'font-semibold text-amber-700'}>{member.membershipActive ? tr("{value0}% off active", { value0: member.membershipDiscountPercent }) : tr("Top-up required")}</span><span className="mt-1 block text-[10px] text-slate-500">{member.prepaidHoursBalance.toFixed(2)} {tr("shared prepaid hours remain · $")}{loyaltySettings.membershipPlans.platinum.hotStoneDiscount} {tr("off Hot Stone add-on")}</span></> : <><span className={member.membershipActive ? 'font-semibold text-emerald-700' : 'font-semibold text-amber-700'}>{member.membershipActive ? tr("{value0}% off active", { value0: member.membershipDiscountPercent }) : tr("Payment required")}</span><span className="mt-1 block text-[10px] text-slate-500">{tr("Paid through:")} {member.paidThrough || tr("not recorded")}{member.membershipType === 'gold' ? tr(" · Hot Stone add-on {value0} this month", { value0: member.freeHotStoneAvailable ? 'available' : 'used' }) : ''}</span></>}</td>
+                              <td className="px-4 py-3 text-right font-semibold tabular-nums text-slate-800">{member.pointsBalance.toLocaleString(locale)} {tr("pts")}{member.membershipType === 'platinum' && <span className="mt-1 block text-[10px] font-normal text-slate-500">{member.prepaidHoursBalance.toFixed(2)} {tr("hrs shared")}</span>}</td>
+                              <td className="px-4 py-3 text-right tabular-nums text-slate-600">{member.lifetimePoints.toLocaleString(locale)} {tr("pts")}</td>
                               <td className="space-y-1 px-5 py-3 text-right">
-                                <button type="button" disabled={!loyaltySettings.enabled || member.pointsBalance < loyaltySettings.redemptionPoints || !member.receiptCandidates?.length} onClick={() => { setSelectedLoyaltyMember(member); setLoyaltyRedeemPoints(String(loyaltySettings.redemptionPoints)); setLoyaltyRedeemBookingId(member.receiptCandidates?.[0]?.bookingId || ''); }} className="rounded-lg border border-indigo-200 px-3 py-2 text-[11px] font-semibold text-indigo-800 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-40">Redeem points</button>
-                                {member.membershipType === 'platinum' && member.isPrimaryContact && <button type="button" disabled={!loyaltySettings.enabled} onClick={() => setSelectedTopUpMember(member)} className="block ml-auto rounded-lg border border-amber-200 px-3 py-2 text-[11px] font-semibold text-amber-900 hover:bg-amber-50 disabled:opacity-40">Record top-up</button>}
-                                {member.membershipType === 'platinum' && !member.isPrimaryContact && <button type="button" disabled={loyaltyActionId === member.email} onClick={() => makePrimaryContact(member)} className="block ml-auto rounded-lg border border-indigo-200 px-3 py-2 text-[11px] font-semibold text-indigo-800 hover:bg-indigo-50 disabled:opacity-40">Make primary contact</button>}
-                                {['gold', 'silver'].includes(member.membershipType) && <button type="button" onClick={() => { setSelectedMembershipPayment(member); setMembershipPaidThrough(member.paidThrough || ''); }} className="block ml-auto rounded-lg border border-emerald-200 px-3 py-2 text-[11px] font-semibold text-emerald-800 hover:bg-emerald-50">Record payment</button>}
-                                {member.membershipType === 'platinum' && member.organization && member.companyContactEmail && <button type="button" disabled={copyingPortalFor === `${member.organization}:portal`} onClick={() => copyCompanyPortalLink(member, 'portal')} className="block ml-auto rounded-lg border border-sky-200 px-3 py-2 text-[11px] font-semibold text-sky-800 hover:bg-sky-50 disabled:opacity-40">{copyingPortalFor === `${member.organization}:portal` ? 'Copying…' : 'Copy portal link'}</button>}
-                                {member.membershipType === 'platinum' && member.organization && member.companyContactEmail && <button type="button" disabled={copyingPortalFor === `${member.organization}:join`} onClick={() => copyCompanyPortalLink(member, 'join')} className="block ml-auto rounded-lg border border-sky-200 px-3 py-2 text-[11px] font-semibold text-sky-800 hover:bg-sky-50 disabled:opacity-40">{copyingPortalFor === `${member.organization}:join` ? 'Copying…' : 'Copy employee signup link'}</button>}
-                                <button type="button" onClick={() => setMemberPendingRemoval(member)} className="block ml-auto rounded-lg border border-rose-200 px-3 py-2 text-[11px] font-semibold text-rose-700 hover:bg-rose-50">Remove member</button>
-                                {['silver', 'platinum'].includes(member.membershipType) && member.organization && <button type="button" onClick={() => setCompanyPendingRemoval(member.organization)} className="block ml-auto rounded-lg border border-rose-200 px-3 py-2 text-[11px] font-semibold text-rose-700 hover:bg-rose-50">Remove company</button>}
+                                <button type="button" disabled={!loyaltySettings.enabled || member.pointsBalance < loyaltySettings.redemptionPoints || !member.receiptCandidates?.length} onClick={() => { setSelectedLoyaltyMember(member); setLoyaltyRedeemPoints(String(loyaltySettings.redemptionPoints)); setLoyaltyRedeemBookingId(member.receiptCandidates?.[0]?.bookingId || ''); }} className="rounded-lg border border-indigo-200 px-3 py-2 text-[11px] font-semibold text-indigo-800 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-40">{tr("Redeem points")}</button>
+                                {member.membershipType === 'platinum' && member.isPrimaryContact && <button type="button" disabled={!loyaltySettings.enabled} onClick={() => setSelectedTopUpMember(member)} className="block ml-auto rounded-lg border border-amber-200 px-3 py-2 text-[11px] font-semibold text-amber-900 hover:bg-amber-50 disabled:opacity-40">{tr("Record top-up")}</button>}
+                                {member.membershipType === 'platinum' && !member.isPrimaryContact && <button type="button" disabled={loyaltyActionId === member.email} onClick={() => makePrimaryContact(member)} className="block ml-auto rounded-lg border border-indigo-200 px-3 py-2 text-[11px] font-semibold text-indigo-800 hover:bg-indigo-50 disabled:opacity-40">{tr("Make primary contact")}</button>}
+                                {['gold', 'silver'].includes(member.membershipType) && <button type="button" onClick={() => { setSelectedMembershipPayment(member); setMembershipPaidThrough(member.paidThrough || ''); }} className="block ml-auto rounded-lg border border-emerald-200 px-3 py-2 text-[11px] font-semibold text-emerald-800 hover:bg-emerald-50">{tr("Record payment")}</button>}
+                                {member.membershipType === 'platinum' && member.organization && member.companyContactEmail && <button type="button" disabled={copyingPortalFor === `${member.organization}:portal`} onClick={() => copyCompanyPortalLink(member, 'portal')} className="block ml-auto rounded-lg border border-sky-200 px-3 py-2 text-[11px] font-semibold text-sky-800 hover:bg-sky-50 disabled:opacity-40">{copyingPortalFor === `${member.organization}:portal` ? tr("Copying…") : tr("Copy portal link")}</button>}
+                                {member.membershipType === 'platinum' && member.organization && member.companyContactEmail && <button type="button" disabled={copyingPortalFor === `${member.organization}:join`} onClick={() => copyCompanyPortalLink(member, 'join')} className="block ml-auto rounded-lg border border-sky-200 px-3 py-2 text-[11px] font-semibold text-sky-800 hover:bg-sky-50 disabled:opacity-40">{copyingPortalFor === `${member.organization}:join` ? tr("Copying…") : tr("Copy employee signup link")}</button>}
+                                <button type="button" onClick={() => setMemberPendingRemoval(member)} className="block ml-auto rounded-lg border border-rose-200 px-3 py-2 text-[11px] font-semibold text-rose-700 hover:bg-rose-50">{tr("Remove member")}</button>
+                                {['silver', 'platinum'].includes(member.membershipType) && member.organization && <button type="button" onClick={() => setCompanyPendingRemoval(member.organization)} className="block ml-auto rounded-lg border border-rose-200 px-3 py-2 text-[11px] font-semibold text-rose-700 hover:bg-rose-50">{tr("Remove company")}</button>}
                               </td>
                             </tr>
                           ))}
                         </tbody>
                       </table>
                     </div>
-                  ) : <p className="p-8 text-center text-sm text-slate-500">{loyaltyDashboard.members.length ? 'No members match your search.' : 'No members yet. Customers can join Rewards during online booking.'}</p>;
+                  ) : <p className="p-8 text-center text-sm text-slate-500">{loyaltyDashboard.members.length ? tr("No members match your search.") : tr("No members yet. Customers can join Rewards during online booking.")}</p>;
                 })()}
               </section>
 
               <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <h3 className="text-base font-semibold text-slate-900">Recent rewards activity</h3>
-                  <button type="button" onClick={openLedgerReset} className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-50"><Trash2 className="h-3.5 w-3.5" />Reset ledger</button>
+                  <h3 className="text-base font-semibold text-slate-900">{tr("Recent rewards activity")}</h3>
+                  <button type="button" onClick={openLedgerReset} className="inline-flex items-center gap-1.5 rounded-lg border border-rose-200 px-3 py-2 text-xs font-semibold text-rose-700 hover:bg-rose-50"><Trash2 className="h-3.5 w-3.5" />{tr("Reset ledger")}</button>
                 </div>
                 <div className="mt-3 divide-y divide-slate-100">
                   {recentLoyaltyTransactions.length ? (
                     recentLoyaltyTransactions.map((transaction) => (
                         <div key={transaction.id} className="flex flex-wrap items-center justify-between gap-2 py-3 text-xs">
-                          <div><p className="font-semibold text-slate-800">{transaction.memberName}</p><p className="mt-0.5 text-slate-500">{transaction.description} · {transaction.createdAt ? new Date(transaction.createdAt).toLocaleDateString() : ''}{transaction.bookingId ? ` · Booking ${transaction.bookingId}` : ''}{transaction.receiptNumber ? ` · Receipt ${transaction.receiptNumber}` : ''}</p></div>
-                          <span className={`font-bold tabular-nums ${transaction.points >= 0 && transaction.hours >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{transaction.hours ? `${transaction.hours > 0 ? '+' : ''}${transaction.hours.toFixed(2)} hrs` : `${transaction.points > 0 ? '+' : ''}${transaction.points} pts`}</span>
+                          <div><p className="font-semibold text-slate-800">{transaction.memberName}</p><p className="mt-0.5 text-slate-500">{transaction.description} · {transaction.createdAt ? new Date(transaction.createdAt).toLocaleDateString(locale) : ''}{transaction.bookingId ? tr(" · Booking {value0}", { value0: transaction.bookingId }) : ''}{transaction.receiptNumber ? tr(" · Receipt {value0}", { value0: transaction.receiptNumber }) : ''}</p></div>
+                          <span className={`font-bold tabular-nums ${transaction.points >= 0 && transaction.hours >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{transaction.hours ? tr("{value0}{value1} hrs", { value0: transaction.hours > 0 ? '+' : '', value1: transaction.hours.toFixed(2) }) : tr("{value0}{value1} pts", { value0: transaction.points > 0 ? '+' : '', value1: transaction.points })}</span>
                         </div>
                       ))
-                  ) : <p className="py-4 text-sm text-slate-500">No reward activity recorded yet.</p>}
+                  ) : <p className="py-4 text-sm text-slate-500">{tr("No reward activity recorded yet.")}</p>}
                 </div>
               </section>
             </>
@@ -7190,22 +7129,20 @@ function AdminPortal({
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedLoyaltyMember(null); }}>
               <form onSubmit={redeemLoyaltyPoints} className="w-full max-w-md space-y-4 rounded-2xl bg-white p-5 shadow-2xl sm:p-6" role="dialog" aria-modal="true" aria-labelledby="redeem-loyalty-title">
                 <div className="flex items-start justify-between gap-3">
-                  <div><p className="text-[10px] font-bold uppercase tracking-wider text-indigo-700">In-clinic reward</p><h3 id="redeem-loyalty-title" className="mt-1 text-lg font-bold text-slate-900">Redeem points</h3><p className="mt-1 text-xs text-slate-500">{selectedLoyaltyMember.name} · {selectedLoyaltyMember.email}</p></div>
-                  <button type="button" onClick={() => setSelectedLoyaltyMember(null)} aria-label="Close redemption dialog" className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700"><X className="h-4 w-4" /></button>
+                  <div><p className="text-[10px] font-bold uppercase tracking-wider text-indigo-700">{tr("In-clinic reward")}</p><h3 id="redeem-loyalty-title" className="mt-1 text-lg font-bold text-slate-900">{tr("Redeem points")}</h3><p className="mt-1 text-xs text-slate-500">{selectedLoyaltyMember.name} · {selectedLoyaltyMember.email}</p></div>
+                  <button type="button" onClick={() => setSelectedLoyaltyMember(null)} aria-label={tr("Close redemption dialog")} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700"><X className="h-4 w-4" /></button>
                 </div>
-                <p className="rounded-xl bg-indigo-50 p-3 text-xs leading-5 text-indigo-900">Available: <strong>{selectedLoyaltyMember.pointsBalance.toLocaleString()} points</strong>. Every {loyaltySettings.redemptionPoints.toLocaleString()} points gives ${Number(loyaltySettings.redemptionValue).toFixed(2)} off. Choose the paid booking below; the discount will be linked to its receipt number when staff issue the receipt.</p>
-                <label className="block text-xs font-semibold text-slate-600">Points to redeem
-                  <input type="number" min={loyaltySettings.redemptionPoints} max={selectedLoyaltyMember.pointsBalance} step={loyaltySettings.redemptionPoints} required value={loyaltyRedeemPoints} onChange={(event) => setLoyaltyRedeemPoints(event.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900" />
+                <p className="rounded-xl bg-indigo-50 p-3 text-xs leading-5 text-indigo-900">{tr("Available:")} <strong>{selectedLoyaltyMember.pointsBalance.toLocaleString(locale)} {tr("points")}</strong>{tr(". Every")} {loyaltySettings.redemptionPoints.toLocaleString(locale)} {tr("points gives $")}{Number(loyaltySettings.redemptionValue).toFixed(2)} {tr("off. Choose the paid booking below; the discount will be linked to its receipt number when staff issue the receipt.")}</p>
+                <label className="block text-xs font-semibold text-slate-600">{tr("Points to redeem")}<input type="number" min={loyaltySettings.redemptionPoints} max={selectedLoyaltyMember.pointsBalance} step={loyaltySettings.redemptionPoints} required value={loyaltyRedeemPoints} onChange={(event) => setLoyaltyRedeemPoints(event.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900" />
                 </label>
-                <label className="block text-xs font-semibold text-slate-600">Paid booking / receipt to apply the discount to
-                  <select required value={loyaltyRedeemBookingId} onChange={(event) => setLoyaltyRedeemBookingId(event.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900">
+                <label className="block text-xs font-semibold text-slate-600">{tr("Paid booking / receipt to apply the discount to")}<select required value={loyaltyRedeemBookingId} onChange={(event) => setLoyaltyRedeemBookingId(event.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900">
                     {(selectedLoyaltyMember.receiptCandidates || []).map((candidate) => (
-                      <option key={candidate.bookingId} value={candidate.bookingId}>{candidate.date} · {candidate.serviceName} · ${candidate.total.toFixed(2)} · {candidate.bookingId}</option>
+                      <option key={candidate.bookingId} value={candidate.bookingId}>{candidate.date} · {tr(candidate.serviceName)} · ${candidate.total.toFixed(2)} · {candidate.bookingId}</option>
                     ))}
                   </select>
                 </label>
-                <div className="flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-xs"><span className="text-slate-600">Discount to apply</span><strong className="text-lg text-indigo-900">${((Number(loyaltyRedeemPoints) / loyaltySettings.redemptionPoints) * loyaltySettings.redemptionValue || 0).toFixed(2)}</strong></div>
-                <div className="flex justify-end gap-2 pt-1"><button type="button" onClick={() => setSelectedLoyaltyMember(null)} className="rounded-lg border border-slate-200 px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">Cancel</button><button type="submit" disabled={!!loyaltyActionId || !loyaltyRedeemBookingId || !Number.isInteger(Number(loyaltyRedeemPoints)) || Number(loyaltyRedeemPoints) < loyaltySettings.redemptionPoints || Number(loyaltyRedeemPoints) > selectedLoyaltyMember.pointsBalance || Number(loyaltyRedeemPoints) % loyaltySettings.redemptionPoints !== 0} className="rounded-lg bg-indigo-950 px-4 py-2.5 text-xs font-semibold text-white hover:bg-indigo-800 disabled:opacity-50">{loyaltyActionId ? 'Recording…' : 'Confirm redemption'}</button></div>
+                <div className="flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 text-xs"><span className="text-slate-600">{tr("Discount to apply")}</span><strong className="text-lg text-indigo-900">${((Number(loyaltyRedeemPoints) / loyaltySettings.redemptionPoints) * loyaltySettings.redemptionValue || 0).toFixed(2)}</strong></div>
+                <div className="flex justify-end gap-2 pt-1"><button type="button" onClick={() => setSelectedLoyaltyMember(null)} className="rounded-lg border border-slate-200 px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">{tr("Cancel")}</button><button type="submit" disabled={!!loyaltyActionId || !loyaltyRedeemBookingId || !Number.isInteger(Number(loyaltyRedeemPoints)) || Number(loyaltyRedeemPoints) < loyaltySettings.redemptionPoints || Number(loyaltyRedeemPoints) > selectedLoyaltyMember.pointsBalance || Number(loyaltyRedeemPoints) % loyaltySettings.redemptionPoints !== 0} className="rounded-lg bg-indigo-950 px-4 py-2.5 text-xs font-semibold text-white hover:bg-indigo-800 disabled:opacity-50">{loyaltyActionId ? tr("Recording…") : tr("Confirm redemption")}</button></div>
               </form>
             </div>
           )}
@@ -7213,14 +7150,13 @@ function AdminPortal({
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedMembershipPayment(null); }}>
               <form onSubmit={recordMembershipPayment} className="w-full max-w-md space-y-4 rounded-2xl bg-white p-5 shadow-2xl sm:p-6" role="dialog" aria-modal="true" aria-labelledby="membership-payment-title">
                 <div className="flex items-start justify-between gap-3">
-                  <div><p className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">External payment record</p><h3 id="membership-payment-title" className="mt-1 text-lg font-bold text-slate-900">Record membership payment</h3><p className="mt-1 text-xs text-slate-500">{selectedMembershipPayment.membershipType === 'silver' ? selectedMembershipPayment.organization : selectedMembershipPayment.email}</p></div>
-                  <button type="button" onClick={() => setSelectedMembershipPayment(null)} aria-label="Close payment dialog" className="rounded-lg p-2 text-slate-400 hover:bg-slate-100"><X className="h-4 w-4" /></button>
+                  <div><p className="text-[10px] font-bold uppercase tracking-wider text-emerald-700">{tr("External payment record")}</p><h3 id="membership-payment-title" className="mt-1 text-lg font-bold text-slate-900">{tr("Record membership payment")}</h3><p className="mt-1 text-xs text-slate-500">{selectedMembershipPayment.membershipType === 'silver' ? selectedMembershipPayment.organization : selectedMembershipPayment.email}</p></div>
+                  <button type="button" onClick={() => setSelectedMembershipPayment(null)} aria-label={tr("Close payment dialog")} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100"><X className="h-4 w-4" /></button>
                 </div>
-                <p className="rounded-xl bg-emerald-50 p-3 text-xs leading-5 text-emerald-900">Record the date through which the payment was received. {selectedMembershipPayment.membershipType === 'silver' ? 'This updates all employees onboarded under this corporate account and emails each one.' : 'This activates the member discount and emails a payment confirmation.'}</p>
-                <label className="block text-xs font-semibold text-slate-600">Paid through
-                  <input type="date" required value={membershipPaidThrough} onChange={(event) => setMembershipPaidThrough(event.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900" />
+                <p className="rounded-xl bg-emerald-50 p-3 text-xs leading-5 text-emerald-900">{tr("Record the date through which the payment was received.")} {selectedMembershipPayment.membershipType === 'silver' ? tr("This updates all employees onboarded under this corporate account and emails each one.") : tr("This activates the member discount and emails a payment confirmation.")}</p>
+                <label className="block text-xs font-semibold text-slate-600">{tr("Paid through")}<input type="date" required value={membershipPaidThrough} onChange={(event) => setMembershipPaidThrough(event.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900" />
                 </label>
-                <div className="flex justify-end gap-2 pt-1"><button type="button" onClick={() => setSelectedMembershipPayment(null)} className="rounded-lg border border-slate-200 px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">Cancel</button><button type="submit" disabled={!!loyaltyActionId || !membershipPaidThrough} className="rounded-lg bg-emerald-900 px-4 py-2.5 text-xs font-semibold text-white hover:bg-emerald-800 disabled:opacity-50">{loyaltyActionId ? 'Recording…' : 'Record payment & notify'}</button></div>
+                <div className="flex justify-end gap-2 pt-1"><button type="button" onClick={() => setSelectedMembershipPayment(null)} className="rounded-lg border border-slate-200 px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">{tr("Cancel")}</button><button type="submit" disabled={!!loyaltyActionId || !membershipPaidThrough} className="rounded-lg bg-emerald-900 px-4 py-2.5 text-xs font-semibold text-white hover:bg-emerald-800 disabled:opacity-50">{loyaltyActionId ? tr("Recording…") : tr("Record payment & notify")}</button></div>
               </form>
             </div>
           )}
@@ -7228,11 +7164,11 @@ function AdminPortal({
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedTopUpMember(null); }}>
               <div className="w-full max-w-md space-y-4 rounded-2xl bg-white p-5 shadow-2xl sm:p-6" role="dialog" aria-modal="true" aria-labelledby="platinum-topup-title">
                 <div className="flex items-start justify-between gap-3">
-                  <div><p className="text-[10px] font-bold uppercase tracking-wider text-amber-700">Confirm external payment</p><h3 id="platinum-topup-title" className="mt-1 text-lg font-bold text-slate-900">Record Platinum top-up</h3><p className="mt-1 text-xs text-slate-500">{selectedTopUpMember.name} · {selectedTopUpMember.email}</p></div>
-                  <button type="button" onClick={() => setSelectedTopUpMember(null)} aria-label="Close Platinum top-up dialog" className="rounded-lg p-2 text-slate-400 hover:bg-slate-100"><X className="h-4 w-4" /></button>
+                  <div><p className="text-[10px] font-bold uppercase tracking-wider text-amber-700">{tr("Confirm external payment")}</p><h3 id="platinum-topup-title" className="mt-1 text-lg font-bold text-slate-900">{tr("Record Platinum top-up")}</h3><p className="mt-1 text-xs text-slate-500">{selectedTopUpMember.name} · {selectedTopUpMember.email}</p></div>
+                  <button type="button" onClick={() => setSelectedTopUpMember(null)} aria-label={tr("Close Platinum top-up dialog")} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100"><X className="h-4 w-4" /></button>
                 </div>
-                <p className="rounded-xl bg-amber-50 p-3 text-xs leading-5 text-amber-950">Only continue after confirming receipt of <strong>${Number(loyaltySettings.membershipPlans.platinum.topUpPrice).toFixed(2)}</strong>. This adds <strong>{loyaltySettings.membershipPlans.platinum.includedHours} prepaid hours</strong> to {selectedTopUpMember.organization || 'the employee account'}; completed sessions deduct their duration.</p>
-                <div className="flex justify-end gap-2 pt-1"><button type="button" onClick={() => setSelectedTopUpMember(null)} className="rounded-lg border border-slate-200 px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">Cancel</button><button type="button" onClick={recordPlatinumTopUp} disabled={!!loyaltyActionId} className="rounded-lg bg-amber-800 px-4 py-2.5 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-50">{loyaltyActionId ? 'Recording…' : 'Payment received · add hours'}</button></div>
+                <p className="rounded-xl bg-amber-50 p-3 text-xs leading-5 text-amber-950">{tr("Only continue after confirming receipt of")} <strong>${Number(loyaltySettings.membershipPlans.platinum.topUpPrice).toFixed(2)}</strong>{tr(". This adds")} <strong>{loyaltySettings.membershipPlans.platinum.includedHours} {tr("prepaid hours")}</strong> {tr("to")} {selectedTopUpMember.organization || tr("the employee account")}{tr("; completed sessions deduct their duration.")}</p>
+                <div className="flex justify-end gap-2 pt-1"><button type="button" onClick={() => setSelectedTopUpMember(null)} className="rounded-lg border border-slate-200 px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">{tr("Cancel")}</button><button type="button" onClick={recordPlatinumTopUp} disabled={!!loyaltyActionId} className="rounded-lg bg-amber-800 px-4 py-2.5 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-50">{loyaltyActionId ? tr("Recording…") : tr("Payment received · add hours")}</button></div>
               </div>
             </div>
           )}
@@ -7240,11 +7176,11 @@ function AdminPortal({
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setMemberPendingRemoval(null); }}>
               <div className="w-full max-w-md space-y-4 rounded-2xl bg-white p-5 shadow-2xl sm:p-6" role="dialog" aria-modal="true" aria-labelledby="remove-member-title">
                 <div className="flex items-start justify-between gap-3">
-                  <div><p className="text-[10px] font-bold uppercase tracking-wider text-rose-700">Remove from loyalty program</p><h3 id="remove-member-title" className="mt-1 text-lg font-bold text-slate-900">Remove {memberPendingRemoval.name || memberPendingRemoval.email}?</h3><p className="mt-1 text-xs text-slate-500">{memberPendingRemoval.email} · {memberPendingRemoval.membershipType}</p></div>
-                  <button type="button" onClick={() => setMemberPendingRemoval(null)} aria-label="Close remove member dialog" className="rounded-lg p-2 text-slate-400 hover:bg-slate-100"><X className="h-4 w-4" /></button>
+                  <div><p className="text-[10px] font-bold uppercase tracking-wider text-rose-700">{tr("Remove from loyalty program")}</p><h3 id="remove-member-title" className="mt-1 text-lg font-bold text-slate-900">{tr("Remove")} {memberPendingRemoval.name || memberPendingRemoval.email}?</h3><p className="mt-1 text-xs text-slate-500">{memberPendingRemoval.email} · {tr(memberPendingRemoval.membershipType)}</p></div>
+                  <button type="button" onClick={() => setMemberPendingRemoval(null)} aria-label={tr("Close remove member dialog")} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100"><X className="h-4 w-4" /></button>
                 </div>
-                <p className="rounded-xl bg-rose-50 p-3 text-xs leading-5 text-rose-950">This immediately removes the member from the loyalty program. Their points/hours balance and membership benefits will no longer apply. This does not affect past receipts. They will be emailed a notice.</p>
-                <div className="flex justify-end gap-2 pt-1"><button type="button" onClick={() => setMemberPendingRemoval(null)} className="rounded-lg border border-slate-200 px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">Cancel</button><button type="button" onClick={removeLoyaltyMember} disabled={isRemovingLoyaltyEntry} className="rounded-lg bg-rose-800 px-4 py-2.5 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50">{isRemovingLoyaltyEntry ? 'Removing…' : 'Remove member'}</button></div>
+                <p className="rounded-xl bg-rose-50 p-3 text-xs leading-5 text-rose-950">{tr("This immediately removes the member from the loyalty program. Their points/hours balance and membership benefits will no longer apply. This does not affect past receipts. They will be emailed a notice.")}</p>
+                <div className="flex justify-end gap-2 pt-1"><button type="button" onClick={() => setMemberPendingRemoval(null)} className="rounded-lg border border-slate-200 px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">{tr("Cancel")}</button><button type="button" onClick={removeLoyaltyMember} disabled={isRemovingLoyaltyEntry} className="rounded-lg bg-rose-800 px-4 py-2.5 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50">{isRemovingLoyaltyEntry ? tr("Removing…") : tr("Remove member")}</button></div>
               </div>
             </div>
           )}
@@ -7252,32 +7188,30 @@ function AdminPortal({
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setIsLedgerResetOpen(false); }}>
               <div className="w-full max-w-md space-y-4 rounded-2xl bg-white p-5 shadow-2xl sm:p-6" role="dialog" aria-modal="true" aria-labelledby="reset-ledger-title">
                 <div className="flex items-start justify-between gap-3">
-                  <div><p className="text-[10px] font-bold uppercase tracking-wider text-rose-700">Manual reset</p><h3 id="reset-ledger-title" className="mt-1 text-lg font-bold text-slate-900">Clear loyalty ledger</h3><p className="mt-1 text-xs text-slate-500">Deletes recorded points, prepaid hours and redemptions.</p></div>
-                  <button type="button" onClick={() => setIsLedgerResetOpen(false)} aria-label="Close reset ledger dialog" className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700"><X className="h-4 w-4" /></button>
+                  <div><p className="text-[10px] font-bold uppercase tracking-wider text-rose-700">{tr("Manual reset")}</p><h3 id="reset-ledger-title" className="mt-1 text-lg font-bold text-slate-900">{tr("Clear loyalty ledger")}</h3><p className="mt-1 text-xs text-slate-500">{tr("Deletes recorded points, prepaid hours and redemptions.")}</p></div>
+                  <button type="button" onClick={() => setIsLedgerResetOpen(false)} aria-label={tr("Close reset ledger dialog")} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100 hover:text-slate-700"><X className="h-4 w-4" /></button>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   {[['member', 'One member'], ['all', 'Entire ledger']].map(([value, label]) => (
-                    <button key={value} type="button" onClick={() => { setLedgerResetScope(value); setLedgerResetConfirm(''); }} className={`rounded-lg border px-3 py-2.5 text-xs font-semibold ${ledgerResetScope === value ? 'border-rose-700 bg-rose-50 text-rose-900' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>{label}</button>
+                    <button key={value} type="button" onClick={() => { setLedgerResetScope(value); setLedgerResetConfirm(''); }} className={`rounded-lg border px-3 py-2.5 text-xs font-semibold ${ledgerResetScope === value ? 'border-rose-700 bg-rose-50 text-rose-900' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}>{tr(label)}</button>
                   ))}
                 </div>
                 {ledgerResetScope === 'member' ? (
-                  <label className="block text-xs font-semibold text-slate-600">Member
-                    <select value={ledgerResetEmail} onChange={(event) => setLedgerResetEmail(event.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900">
-                      <option value="">Select a member…</option>
+                  <label className="block text-xs font-semibold text-slate-600">{tr("Member")}<select value={ledgerResetEmail} onChange={(event) => setLedgerResetEmail(event.target.value)} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900">
+                      <option value="">{tr("Select a member…")}</option>
                       {(loyaltyDashboard?.members || []).map((member) => (
                         <option key={member.email} value={member.email}>{member.name || member.email} · {member.email}</option>
                       ))}
                     </select>
                   </label>
                 ) : (
-                  <label className="block text-xs font-semibold text-slate-600">Type CLEAR LEDGER to confirm
-                    <input type="text" value={ledgerResetConfirm} onChange={(event) => setLedgerResetConfirm(event.target.value)} placeholder="CLEAR LEDGER" className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900" />
+                  <label className="block text-xs font-semibold text-slate-600">{tr("Type CLEAR LEDGER to confirm")}<input type="text" value={ledgerResetConfirm} onChange={(event) => setLedgerResetConfirm(event.target.value)} placeholder={tr("CLEAR LEDGER")} className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm text-slate-900" />
                   </label>
                 )}
                 <p className="rounded-xl bg-rose-50 p-3 text-xs leading-5 text-rose-950">{ledgerResetScope === 'all'
-                  ? 'This permanently deletes every ledger entry for every member. All point balances and Platinum prepaid hours reset to zero. Members themselves are not removed, and past receipts are unaffected. This cannot be undone.'
-                  : 'This permanently deletes every ledger entry for the selected member. Their point balance and Platinum prepaid hours reset to zero. Their membership stays active and past receipts are unaffected. This cannot be undone.'}</p>
-                <div className="flex justify-end gap-2 pt-1"><button type="button" onClick={() => setIsLedgerResetOpen(false)} className="rounded-lg border border-slate-200 px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">Cancel</button><button type="button" onClick={clearLoyaltyLedger} disabled={isClearingLedger || (ledgerResetScope === 'member' ? !ledgerResetEmail : ledgerResetConfirm.trim().toUpperCase() !== 'CLEAR LEDGER')} className="rounded-lg bg-rose-800 px-4 py-2.5 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50">{isClearingLedger ? 'Clearing…' : ledgerResetScope === 'all' ? 'Clear entire ledger' : 'Clear member ledger'}</button></div>
+                  ? tr("This permanently deletes every ledger entry for every member. All point balances and Platinum prepaid hours reset to zero. Members themselves are not removed, and past receipts are unaffected. This cannot be undone.")
+                  : tr("This permanently deletes every ledger entry for the selected member. Their point balance and Platinum prepaid hours reset to zero. Their membership stays active and past receipts are unaffected. This cannot be undone.")}</p>
+                <div className="flex justify-end gap-2 pt-1"><button type="button" onClick={() => setIsLedgerResetOpen(false)} className="rounded-lg border border-slate-200 px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">{tr("Cancel")}</button><button type="button" onClick={clearLoyaltyLedger} disabled={isClearingLedger || (ledgerResetScope === 'member' ? !ledgerResetEmail : ledgerResetConfirm.trim().toUpperCase() !== 'CLEAR LEDGER')} className="rounded-lg bg-rose-800 px-4 py-2.5 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50">{isClearingLedger ? tr("Clearing…") : ledgerResetScope === 'all' ? tr("Clear entire ledger") : tr("Clear member ledger")}</button></div>
               </div>
             </div>
           )}
@@ -7285,11 +7219,11 @@ function AdminPortal({
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setCompanyPendingRemoval(''); }}>
               <div className="w-full max-w-md space-y-4 rounded-2xl bg-white p-5 shadow-2xl sm:p-6" role="dialog" aria-modal="true" aria-labelledby="remove-company-title">
                 <div className="flex items-start justify-between gap-3">
-                  <div><p className="text-[10px] font-bold uppercase tracking-wider text-rose-700">Remove corporate account</p><h3 id="remove-company-title" className="mt-1 text-lg font-bold text-slate-900">Remove all members from {companyPendingRemoval}?</h3></div>
-                  <button type="button" onClick={() => setCompanyPendingRemoval('')} aria-label="Close remove company dialog" className="rounded-lg p-2 text-slate-400 hover:bg-slate-100"><X className="h-4 w-4" /></button>
+                  <div><p className="text-[10px] font-bold uppercase tracking-wider text-rose-700">{tr("Remove corporate account")}</p><h3 id="remove-company-title" className="mt-1 text-lg font-bold text-slate-900">{tr("Remove all members from")} {companyPendingRemoval}?</h3></div>
+                  <button type="button" onClick={() => setCompanyPendingRemoval('')} aria-label={tr("Close remove company dialog")} className="rounded-lg p-2 text-slate-400 hover:bg-slate-100"><X className="h-4 w-4" /></button>
                 </div>
-                <p className="rounded-xl bg-rose-50 p-3 text-xs leading-5 text-rose-950">This removes every Platinum or Legacy Silver employee enrolled under <strong>{companyPendingRemoval}</strong> from the loyalty program. Each employee will be emailed a removal notice (with the company contact copied, if one is on file). This does not affect past receipts.</p>
-                <div className="flex justify-end gap-2 pt-1"><button type="button" onClick={() => setCompanyPendingRemoval('')} className="rounded-lg border border-slate-200 px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">Cancel</button><button type="button" onClick={removeLoyaltyCompany} disabled={isRemovingLoyaltyEntry} className="rounded-lg bg-rose-800 px-4 py-2.5 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50">{isRemovingLoyaltyEntry ? 'Removing…' : 'Remove company'}</button></div>
+                <p className="rounded-xl bg-rose-50 p-3 text-xs leading-5 text-rose-950">{tr("This removes every Platinum or Legacy Silver employee enrolled under")} <strong>{companyPendingRemoval}</strong> {tr("from the loyalty program. Each employee will be emailed a removal notice (with the company contact copied, if one is on file). This does not affect past receipts.")}</p>
+                <div className="flex justify-end gap-2 pt-1"><button type="button" onClick={() => setCompanyPendingRemoval('')} className="rounded-lg border border-slate-200 px-4 py-2.5 text-xs font-semibold text-slate-600 hover:bg-slate-50">{tr("Cancel")}</button><button type="button" onClick={removeLoyaltyCompany} disabled={isRemovingLoyaltyEntry} className="rounded-lg bg-rose-800 px-4 py-2.5 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50">{isRemovingLoyaltyEntry ? tr("Removing…") : tr("Remove company")}</button></div>
               </div>
             </div>
           )}
@@ -7304,17 +7238,15 @@ function AdminPortal({
                 <div className="flex items-start gap-4">
                   <span className="rounded-xl bg-white/10 p-3 text-blue-200"><TrendingUp className="h-5 w-5" /></span>
                   <div>
-                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-blue-200">Grow your practice</p>
-                    <h2 className="mt-1 text-xl font-bold">Google Ads performance</h2>
-                    <p className="mt-1 max-w-2xl text-sm text-slate-300">Explore campaign results over a date range you choose.</p>
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-blue-200">{tr("Grow your practice")}</p>
+                    <h2 className="mt-1 text-xl font-bold">{tr("Google Ads performance")}</h2>
+                    <p className="mt-1 max-w-2xl text-sm text-slate-300">{tr("Explore campaign results over a date range you choose.")}</p>
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <button type="button" onClick={loadGoogleAdsReport} disabled={isLoadingGoogleAds} className="inline-flex items-center gap-2 rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-xs font-semibold text-white transition hover:bg-white/15 disabled:opacity-50">
-                    <RefreshCw className={`h-3.5 w-3.5 ${isLoadingGoogleAds ? 'animate-spin' : ''}`} />Refresh report
-                  </button>
-                  <a href="https://ads.google.com/" target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-900 transition hover:bg-blue-50">
-                    Open Google Ads <Globe className="h-3.5 w-3.5" />
+                    <RefreshCw className={`h-3.5 w-3.5 ${isLoadingGoogleAds ? 'animate-spin' : ''}`} />{tr("Refresh report")}</button>
+                  <a href="https://ads.google.com/" target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-900 transition hover:bg-blue-50">{tr("Open Google Ads")}<Globe className="h-3.5 w-3.5" />
                   </a>
                 </div>
               </div>
@@ -7323,95 +7255,93 @@ function AdminPortal({
 
           <section className="flex flex-wrap items-end justify-between gap-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
             <div className="flex flex-wrap items-end gap-3">
-              <label className="block text-[11px] font-semibold text-slate-500">From
-                <input type="date" value={googleAdsStartDate} max={googleAdsEndDate} onChange={(event) => setGoogleAdsStartDate(event.target.value)} className="mt-1 block rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-800" />
+              <label className="block text-[11px] font-semibold text-slate-500">{tr("From")}<input type="date" value={googleAdsStartDate} max={googleAdsEndDate} onChange={(event) => setGoogleAdsStartDate(event.target.value)} className="mt-1 block rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-800" />
               </label>
-              <label className="block text-[11px] font-semibold text-slate-500">To
-                <input type="date" value={googleAdsEndDate} min={googleAdsStartDate} max={new Date().toISOString().slice(0, 10)} onChange={(event) => setGoogleAdsEndDate(event.target.value)} className="mt-1 block rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-800" />
+              <label className="block text-[11px] font-semibold text-slate-500">{tr("To")}<input type="date" value={googleAdsEndDate} min={googleAdsStartDate} max={new Date().toISOString().slice(0, 10)} onChange={(event) => setGoogleAdsEndDate(event.target.value)} className="mt-1 block rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-800" />
               </label>
-              <button type="button" onClick={() => loadGoogleAdsReport()} disabled={isLoadingGoogleAds || !googleAdsStartDate || !googleAdsEndDate || googleAdsStartDate > googleAdsEndDate} className="rounded-lg bg-slate-950 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-slate-800 disabled:opacity-50">Apply range</button>
+              <button type="button" onClick={() => loadGoogleAdsReport()} disabled={isLoadingGoogleAds || !googleAdsStartDate || !googleAdsEndDate || googleAdsStartDate > googleAdsEndDate} className="rounded-lg bg-slate-950 px-4 py-2.5 text-xs font-semibold text-white transition hover:bg-slate-800 disabled:opacity-50">{tr("Apply range")}</button>
             </div>
             <div className="flex flex-wrap items-center gap-1.5">
-              <span className="mr-1 text-[11px] font-semibold text-slate-500">Quick range</span>
+              <span className="mr-1 text-[11px] font-semibold text-slate-500">{tr("Quick range")}</span>
               {[7, 30, 90].map((days) => (
-                <button key={days} type="button" onClick={() => applyGoogleAdsPreset(days)} disabled={isLoadingGoogleAds} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 transition hover:border-slate-400 hover:bg-slate-50 disabled:opacity-50">Last {days} days</button>
+                <button key={days} type="button" onClick={() => applyGoogleAdsPreset(days)} disabled={isLoadingGoogleAds} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600 transition hover:border-slate-400 hover:bg-slate-50 disabled:opacity-50">{tr("Last")} {days} {tr("days")}</button>
               ))}
             </div>
           </section>
 
-          {googleAdsError && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{googleAdsError}</div>}
-          {isLoadingGoogleAds && !googleAdsReport && <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">Connecting securely to Google Ads…</div>}
+          {googleAdsError && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{tr(googleAdsError)}</div>}
+          {isLoadingGoogleAds && !googleAdsReport && <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">{tr("Connecting securely to Google Ads…")}</div>}
 
           {googleAdsReport?.configured === false && (
-            <div role="alert" className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"><AlertCircle className="h-4 w-4 shrink-0" />Google Ads reporting is unavailable. Check the server integration settings and refresh.</div>
+            <div role="alert" className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"><AlertCircle className="h-4 w-4 shrink-0" />{tr("Google Ads reporting is unavailable. Check the server integration settings and refresh.")}</div>
           )}
 
           {googleAdsReport?.configured && (
             <>
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-xs text-slate-500">Account <span className="font-semibold text-slate-700">{googleAdsReport.customerId}</span> · {googleAdsReport.dateRange}</p>
-                <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-800"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />Connected</span>
+                <p className="text-xs text-slate-500">{tr("Account")} <span className="font-semibold text-slate-700">{googleAdsReport.customerId}</span> · {googleAdsReport.dateRange}</p>
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-800"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />{tr("Connected")}</span>
               </div>
               <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
                 {[
-                  ['Impressions', Number(googleAdsReport.totals.impressions).toLocaleString(), Eye, 'bg-blue-50 text-blue-700'],
-                  ['Clicks', Number(googleAdsReport.totals.clicks).toLocaleString(), MousePointerClick, 'bg-violet-50 text-violet-700'],
-                  ['Ad spend', googleAdsReport.currencyCode ? new Intl.NumberFormat(undefined, { style: 'currency', currency: googleAdsReport.currencyCode }).format(googleAdsReport.totals.cost) : `${Number(googleAdsReport.totals.cost).toLocaleString()} (currency unavailable)`, DollarSign, 'bg-amber-50 text-amber-700'],
-                  ['Conversions', Number(googleAdsReport.totals.conversions).toLocaleString(undefined, { maximumFractionDigits: 1 }), CheckCircle2, 'bg-emerald-50 text-emerald-700'],
+                  ['Impressions', Number(googleAdsReport.totals.impressions).toLocaleString(locale), Eye, 'bg-blue-50 text-blue-700'],
+                  ['Clicks', Number(googleAdsReport.totals.clicks).toLocaleString(locale), MousePointerClick, 'bg-violet-50 text-violet-700'],
+                  ['Ad spend', googleAdsReport.currencyCode ? new Intl.NumberFormat(locale, { style: 'currency', currency: googleAdsReport.currencyCode }).format(googleAdsReport.totals.cost) : `${Number(googleAdsReport.totals.cost).toLocaleString(locale)} (currency unavailable)`, DollarSign, 'bg-amber-50 text-amber-700'],
+                  ['Conversions', Number(googleAdsReport.totals.conversions).toLocaleString(locale, { maximumFractionDigits: 1 }), CheckCircle2, 'bg-emerald-50 text-emerald-700'],
                 ].map(([label, value, Icon, iconStyle]) => (
                   <section key={label} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-                    <div className="flex items-center justify-between gap-2"><span className="text-xs font-medium text-slate-500">{label}</span><span className={`rounded-lg p-2 ${iconStyle}`}><Icon className="h-4 w-4" /></span></div>
-                    <p className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">{value}</p>
+                    <div className="flex items-center justify-between gap-2"><span className="text-xs font-medium text-slate-500">{tr(label)}</span><span className={`rounded-lg p-2 ${iconStyle}`}><Icon className="h-4 w-4" /></span></div>
+                    <p className="mt-3 text-2xl font-semibold tracking-tight text-slate-950">{typeof value === 'string' ? tr(value) : value}</p>
                     <p className="mt-1 text-[11px] text-slate-400">{googleAdsReport.dateRange}</p>
                   </section>
                 ))}
               </div>
               <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
-                  <div><h3 className="text-base font-semibold text-slate-900">Campaigns</h3><p className="mt-1 text-xs text-slate-500">Search, filter and sort results for the selected reporting period.</p></div>
-                  <span className="text-xs text-slate-500">{visibleGoogleAdsCampaigns.length} of {googleAdsReport.campaigns.length} campaigns</span>
+                  <div><h3 className="text-base font-semibold text-slate-900">{tr("Campaigns")}</h3><p className="mt-1 text-xs text-slate-500">{tr("Search, filter and sort results for the selected reporting period.")}</p></div>
+                  <span className="text-xs text-slate-500">{visibleGoogleAdsCampaigns.length} {tr("of")} {googleAdsReport.campaigns.length} {tr("campaigns")}</span>
                 </div>
                 <div className="flex flex-wrap gap-2 border-b border-slate-100 bg-slate-50/70 px-5 py-3">
                   <label className="relative min-w-[190px] flex-1">
                     <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
-                    <input type="search" value={googleAdsCampaignSearch} onChange={(event) => setGoogleAdsCampaignSearch(event.target.value)} placeholder="Search campaigns" aria-label="Search campaigns" className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-xs outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100" />
+                    <input type="search" value={googleAdsCampaignSearch} onChange={(event) => setGoogleAdsCampaignSearch(event.target.value)} placeholder={tr("Search campaigns")} aria-label={tr("Search campaigns")} className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-3 text-xs outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100" />
                   </label>
-                  <label className="sr-only" htmlFor="google-ads-status">Campaign status</label>
+                  <label className="sr-only" htmlFor="google-ads-status">{tr("Campaign status")}</label>
                   <select id="google-ads-status" value={googleAdsCampaignStatus} onChange={(event) => setGoogleAdsCampaignStatus(event.target.value)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700">
-                    <option value="all">All statuses</option>
-                    <option value="ENABLED">Enabled</option>
-                    <option value="PAUSED">Paused</option>
+                    <option value="all">{tr("All statuses")}</option>
+                    <option value="ENABLED">{tr("Enabled")}</option>
+                    <option value="PAUSED">{tr("Paused")}</option>
                   </select>
-                  <label className="sr-only" htmlFor="google-ads-sort">Sort campaigns by</label>
+                  <label className="sr-only" htmlFor="google-ads-sort">{tr("Sort campaigns by")}</label>
                   <select id="google-ads-sort" value={googleAdsCampaignSort} onChange={(event) => setGoogleAdsCampaignSort(event.target.value)} className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700">
-                    <option value="impressions">Sort: Impressions</option>
-                    <option value="clicks">Sort: Clicks</option>
-                    <option value="cost">Sort: Spend</option>
-                    <option value="conversions">Sort: Conversions</option>
-                    <option value="name">Sort: Name</option>
+                    <option value="impressions">{tr("Sort: Impressions")}</option>
+                    <option value="clicks">{tr("Sort: Clicks")}</option>
+                    <option value="cost">{tr("Sort: Spend")}</option>
+                    <option value="conversions">{tr("Sort: Conversions")}</option>
+                    <option value="name">{tr("Sort: Name")}</option>
                   </select>
                 </div>
                 {visibleGoogleAdsCampaigns.length ? (
                   <div className="overflow-x-auto">
                     <table className="w-full min-w-[700px] text-left text-sm">
-                      <thead className="bg-slate-50 text-xs font-semibold text-slate-500"><tr><th className="px-5 py-3">Campaign</th><th className="px-4 py-3">Status</th><th className="px-4 py-3 text-right">Impressions</th><th className="px-4 py-3 text-right">Clicks</th><th className="px-4 py-3 text-right">Spend</th><th className="px-5 py-3 text-right">Conversions</th></tr></thead>
+                      <thead className="bg-slate-50 text-xs font-semibold text-slate-500"><tr><th className="px-5 py-3">{tr("Campaign")}</th><th className="px-4 py-3">{tr("Status")}</th><th className="px-4 py-3 text-right">{tr("Impressions")}</th><th className="px-4 py-3 text-right">{tr("Clicks")}</th><th className="px-4 py-3 text-right">{tr("Spend")}</th><th className="px-5 py-3 text-right">{tr("Conversions")}</th></tr></thead>
                       <tbody className="divide-y divide-slate-100">
                         {visibleGoogleAdsCampaigns.map((campaign) => (
                           <tr key={campaign.id} className="hover:bg-slate-50">
-                            <td className="px-5 py-3 font-medium text-slate-900">{campaign.name}<span className="mt-0.5 block text-[10px] font-normal text-slate-400">ID {campaign.id}</span></td>
-                            <td className="px-4 py-3"><span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold ${campaign.status === 'ENABLED' ? 'bg-emerald-50 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}>{campaign.status.toLowerCase().replaceAll('_', ' ')}</span></td>
-                            <td className="px-4 py-3 text-right tabular-nums text-slate-700">{campaign.impressions.toLocaleString()}</td>
-                            <td className="px-4 py-3 text-right tabular-nums text-slate-700">{campaign.clicks.toLocaleString()}</td>
-                            <td className="px-4 py-3 text-right tabular-nums text-slate-700">{googleAdsReport.currencyCode ? new Intl.NumberFormat(undefined, { style: 'currency', currency: googleAdsReport.currencyCode }).format(campaign.cost) : campaign.cost.toLocaleString()}</td>
-                            <td className="px-5 py-3 text-right tabular-nums text-slate-700">{campaign.conversions.toLocaleString(undefined, { maximumFractionDigits: 1 })}</td>
+                            <td className="px-5 py-3 font-medium text-slate-900">{campaign.name}<span className="mt-0.5 block text-[10px] font-normal text-slate-400">{tr("ID")} {campaign.id}</span></td>
+                            <td className="px-4 py-3"><span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold ${campaign.status === 'ENABLED' ? 'bg-emerald-50 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}>{tr(campaign.status.toLowerCase().replaceAll('_', ' '))}</span></td>
+                            <td className="px-4 py-3 text-right tabular-nums text-slate-700">{campaign.impressions.toLocaleString(locale)}</td>
+                            <td className="px-4 py-3 text-right tabular-nums text-slate-700">{campaign.clicks.toLocaleString(locale)}</td>
+                            <td className="px-4 py-3 text-right tabular-nums text-slate-700">{googleAdsReport.currencyCode ? new Intl.NumberFormat(locale, { style: 'currency', currency: googleAdsReport.currencyCode }).format(campaign.cost) : campaign.cost.toLocaleString(locale)}</td>
+                            <td className="px-5 py-3 text-right tabular-nums text-slate-700">{campaign.conversions.toLocaleString(locale, { maximumFractionDigits: 1 })}</td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
                   </div>
-                ) : <p className="p-8 text-center text-sm text-slate-500">{googleAdsReport.campaigns.length ? 'No campaigns match the current search and filters.' : 'No campaigns were returned for the selected dates.'}</p>}
+                ) : <p className="p-8 text-center text-sm text-slate-500">{googleAdsReport.campaigns.length ? tr("No campaigns match the current search and filters.") : tr("No campaigns were returned for the selected dates.")}</p>}
               </section>
-              <p className="text-xs leading-5 text-slate-500">Reporting is read-only. Create, edit, and manage budgets from Google Ads. Metrics are provided by Google Ads and may be delayed.</p>
+              <p className="text-xs leading-5 text-slate-500">{tr("Reporting is read-only. Create, edit, and manage budgets from Google Ads. Metrics are provided by Google Ads and may be delayed.")}</p>
             </>
           )}
         </div>
@@ -7425,45 +7355,39 @@ function AdminPortal({
                 <div className="flex items-start gap-4">
                   <span className="rounded-xl bg-white/10 p-3 text-amber-200"><Star className="h-5 w-5" /></span>
                   <div>
-                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-200">Grow your practice</p>
-                    <h2 className="mt-1 text-xl font-bold">Google Reviews</h2>
-                    <p className="mt-1 max-w-2xl text-sm text-slate-300">See your latest Google Business Profile reviews and rating at a glance.</p>
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-200">{tr("Grow your practice")}</p>
+                    <h2 className="mt-1 text-xl font-bold">{tr("Google Reviews")}</h2>
+                    <p className="mt-1 max-w-2xl text-sm text-slate-300">{tr("See your latest Google Business Profile reviews and rating at a glance.")}</p>
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <button type="button" onClick={loadGoogleReviews} disabled={isLoadingGoogleReviews} className="inline-flex items-center gap-2 rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-xs font-semibold text-white transition hover:bg-white/15 disabled:opacity-50">
-                    <RefreshCw className={`h-3.5 w-3.5 ${isLoadingGoogleReviews ? 'animate-spin' : ''}`} />Refresh
-                  </button>
+                    <RefreshCw className={`h-3.5 w-3.5 ${isLoadingGoogleReviews ? 'animate-spin' : ''}`} />{tr("Refresh")}</button>
                   {googleReviews?.reviewUrl && (
-                    <button type="button" onClick={openReviewRequests} className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-900 transition hover:bg-amber-50">
-                      Ask for a review <Mail className="h-3.5 w-3.5" />
+                    <button type="button" onClick={openReviewRequests} className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-900 transition hover:bg-amber-50">{tr("Ask for a review")}<Mail className="h-3.5 w-3.5" />
                     </button>
                   )}
                   {googleReviews?.mapsUrl && (
-                    <a href={googleReviews.mapsUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-900 transition hover:bg-amber-50">
-                      View on Google
-                    </a>
+                    <a href={googleReviews.mapsUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-900 transition hover:bg-amber-50">{tr("View on Google")}</a>
                   )}
                 </div>
               </div>
             </div>
           </section>
 
-          {googleReviewsError && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{googleReviewsError}</div>}
-          {isLoadingGoogleReviews && !googleReviews && <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">Fetching your Google reviews…</div>}
+          {googleReviewsError && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{tr(googleReviewsError)}</div>}
+          {isLoadingGoogleReviews && !googleReviews && <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">{tr("Fetching your Google reviews…")}</div>}
 
           {googleReviews?.enabled === false && (
             <div role="alert" className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-              <AlertCircle className="h-4 w-4 shrink-0" />
-              Google Reviews are not connected yet. Add <code className="mx-1 rounded bg-amber-100 px-1 py-0.5 font-mono">GOOGLE_PLACES_API_KEY</code> and <code className="mx-1 rounded bg-amber-100 px-1 py-0.5 font-mono">GOOGLE_PLACE_ID</code> to the server environment, then refresh.
-            </div>
+              <AlertCircle className="h-4 w-4 shrink-0" />{tr("Google Reviews are not connected yet. Add")}<code className="mx-1 rounded bg-amber-100 px-1 py-0.5 font-mono">GOOGLE_PLACES_API_KEY</code> {tr("and")} <code className="mx-1 rounded bg-amber-100 px-1 py-0.5 font-mono">GOOGLE_PLACE_ID</code>{tr("to the server environment, then refresh.")}</div>
           )}
 
           {googleReviews?.enabled && (
             <>
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-                  <p className="text-xs font-medium text-slate-500">Average rating</p>
+                  <p className="text-xs font-medium text-slate-500">{tr("Average rating")}</p>
                   <div className="mt-2 flex items-baseline gap-2">
                     <span className="text-3xl font-bold text-slate-950">{googleReviews.rating?.toFixed(1) ?? '—'}</span>
                     <div className="flex items-center gap-0.5">
@@ -7474,22 +7398,22 @@ function AdminPortal({
                   </div>
                 </section>
                 <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-                  <p className="text-xs font-medium text-slate-500">Total ratings</p>
-                  <p className="mt-2 text-3xl font-bold text-slate-950">{Number(googleReviews.totalRatings || 0).toLocaleString()}</p>
+                  <p className="text-xs font-medium text-slate-500">{tr("Total ratings")}</p>
+                  <p className="mt-2 text-3xl font-bold text-slate-950">{Number(googleReviews.totalRatings || 0).toLocaleString(locale)}</p>
                 </section>
                 <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-                  <p className="text-xs font-medium text-slate-500">Business</p>
-                  <p className="mt-2 truncate text-lg font-semibold text-slate-950">{googleReviews.businessName || 'Not available'}</p>
+                  <p className="text-xs font-medium text-slate-500">{tr("Business")}</p>
+                  <p className="mt-2 truncate text-lg font-semibold text-slate-950">{googleReviews.businessName || tr("Not available")}</p>
                 </section>
               </div>
 
               <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
                 <div className="border-b border-slate-100 px-5 py-4">
-                  <h3 className="text-base font-semibold text-slate-900">Most recent reviews</h3>
-                  <p className="mt-1 text-xs text-slate-500">Google surfaces up to 5 recent reviews through the Places API.</p>
+                  <h3 className="text-base font-semibold text-slate-900">{tr("Most recent reviews")}</h3>
+                  <p className="mt-1 text-xs text-slate-500">{tr("Google surfaces up to 5 recent reviews through the Places API.")}</p>
                 </div>
                 {googleReviews.reviews.length === 0 ? (
-                  <p className="p-8 text-center text-sm text-slate-500">No reviews are available yet.</p>
+                  <p className="p-8 text-center text-sm text-slate-500">{tr("No reviews are available yet.")}</p>
                 ) : (
                   <ul className="divide-y divide-slate-100">
                     {googleReviews.reviews.map((review, index) => (
@@ -7516,7 +7440,7 @@ function AdminPortal({
                   </ul>
                 )}
               </section>
-              <p className="text-xs leading-5 text-slate-500">Reviews are read-only and refresh from Google every few minutes. Use "Ask for a review" to email past customers a link to your Google review form.</p>
+              <p className="text-xs leading-5 text-slate-500">{tr("Reviews are read-only and refresh from Google every few minutes. Use \"Ask for a review\" to email past customers a link to your Google review form.")}</p>
             </>
           )}
 
@@ -7525,35 +7449,27 @@ function AdminPortal({
               <div className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white shadow-xl">
                 <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
                   <div>
-                    <h3 className="text-base font-bold text-slate-950">Ask past customers for a review</h3>
-                    <p className="mt-1 text-xs text-slate-500">
-                      Emails a Google review link to customers who have already attended an appointment
-                      {reviewRequestData?.lookbackDays ? ` in the last ${reviewRequestData.lookbackDays} days` : ''}.
-                      {reviewRequestData?.senderEmail ? ` Sent from ${reviewRequestData.senderEmail}.` : ''}
+                    <h3 className="text-base font-bold text-slate-950">{tr("Ask past customers for a review")}</h3>
+                    <p className="mt-1 text-xs text-slate-500">{tr("Emails a Google review link to customers who have already attended an appointment")}{reviewRequestData?.lookbackDays ? tr(" in the last {value0} days", { value0: reviewRequestData.lookbackDays }) : ''}.
+                      {reviewRequestData?.senderEmail ? tr(" Sent from {value0}.", { value0: reviewRequestData.senderEmail }) : ''}
                     </p>
                   </div>
                   <button type="button" onClick={() => setReviewRequestOpen(false)} className="rounded-lg p-1.5 text-slate-500 transition hover:bg-slate-100"><X className="h-4 w-4" /></button>
                 </div>
 
                 <div className="max-h-[55vh] overflow-y-auto px-5 py-4">
-                  {reviewRequestError && <div role="alert" className="mb-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">{reviewRequestError}</div>}
+                  {reviewRequestError && <div role="alert" className="mb-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">{tr(reviewRequestError)}</div>}
                   {reviewRequestResult && <div className="mb-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">{reviewRequestResult}</div>}
-                  {reviewRequestData?.sendBlockReason && <div role="alert" className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">{reviewRequestData.sendBlockReason}</div>}
+                  {reviewRequestData?.sendBlockReason && <div role="alert" className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">{tr(reviewRequestData.sendBlockReason)}</div>}
 
-                  {isLoadingReviewRequests && <p className="py-8 text-center text-sm text-slate-500">Finding customers who have visited…</p>}
+                  {isLoadingReviewRequests && <p className="py-8 text-center text-sm text-slate-500">{tr("Finding customers who have visited…")}</p>}
 
                   {!isLoadingReviewRequests && reviewRequestData && !reviewRequestData.candidates?.length && (
                     <div className="py-8 text-center text-sm text-slate-500">
-                      <p className="font-semibold text-slate-700">No completed visits to ask yet.</p>
+                      <p className="font-semibold text-slate-700">{tr("No completed visits to ask yet.")}</p>
                       {reviewRequestData.stats && (
-                        <p className="mx-auto mt-2 max-w-sm text-xs leading-5">
-                          Checked {reviewRequestData.stats.totalBookings} booking{reviewRequestData.stats.totalBookings === 1 ? '' : 's'}:
-                          {' '}{reviewRequestData.stats.notVisitedYet} not finished yet,
-                          {' '}{reviewRequestData.stats.cancelled} cancelled,
-                          {' '}{reviewRequestData.stats.missingEmail} without a valid email,
-                          {' '}{reviewRequestData.stats.tooOld} older than {reviewRequestData.lookbackDays} days.
-                          A customer appears here once their appointment end time has passed.
-                        </p>
+                        <p className="mx-auto mt-2 max-w-sm text-xs leading-5">{tr("Checked")}{reviewRequestData.stats.totalBookings} {tr("booking")}{reviewRequestData.stats.totalBookings === 1 ? '' : tr("s")}:
+                          {' '}{reviewRequestData.stats.notVisitedYet}{tr("not finished yet,")}{' '}{reviewRequestData.stats.cancelled}{tr("cancelled,")}{' '}{reviewRequestData.stats.missingEmail}{tr("without a valid email,")}{' '}{reviewRequestData.stats.tooOld} {tr("older than")} {reviewRequestData.lookbackDays}{tr("days. A customer appears here once their appointment end time has passed.")}</p>
                       )}
                     </div>
                   )}
@@ -7561,10 +7477,10 @@ function AdminPortal({
                   {!isLoadingReviewRequests && !!reviewRequestData?.candidates?.length && (
                     <>
                       <div className="mb-2 flex items-center justify-between text-xs">
-                        <span className="font-semibold text-slate-600">{reviewRequestSelected.length} of {reviewRequestData.candidates.length} selected</span>
+                        <span className="font-semibold text-slate-600">{reviewRequestSelected.length} {tr("of")} {reviewRequestData.candidates.length} {tr("selected")}</span>
                         <div className="flex gap-3">
-                          <button type="button" onClick={() => setReviewRequestSelected(reviewRequestData.candidates.filter((c) => !c.unsubscribed).map((c) => c.email))} className="font-semibold text-emerald-800 hover:underline">Select all</button>
-                          <button type="button" onClick={() => setReviewRequestSelected([])} className="font-semibold text-slate-500 hover:underline">Clear</button>
+                          <button type="button" onClick={() => setReviewRequestSelected(reviewRequestData.candidates.filter((c) => !c.unsubscribed).map((c) => c.email))} className="font-semibold text-emerald-800 hover:underline">{tr("Select all")}</button>
+                          <button type="button" onClick={() => setReviewRequestSelected([])} className="font-semibold text-slate-500 hover:underline">{tr("Clear")}</button>
                         </div>
                       </div>
                       <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200">
@@ -7580,12 +7496,11 @@ function AdminPortal({
                             <div className="min-w-0 flex-1">
                               <p className="truncate text-sm font-semibold text-slate-900">{candidate.name || candidate.email}</p>
                               <p className="truncate text-xs text-slate-500">{candidate.email}</p>
-                              <p className="mt-0.5 text-xs text-slate-500">
-                                Last visit {candidate.visitDate}{candidate.serviceName ? ` · ${candidate.serviceName}` : ''}
+                              <p className="mt-0.5 text-xs text-slate-500">{tr("Last visit")}{candidate.visitDate}{candidate.serviceName ? tr(" · {value0}", { value0: candidate.serviceName }) : ''}
                               </p>
-                              {candidate.unsubscribed && <p className="mt-0.5 text-xs font-semibold text-amber-800">Unsubscribed from emails</p>}
+                              {candidate.unsubscribed && <p className="mt-0.5 text-xs font-semibold text-amber-800">{tr("Unsubscribed from emails")}</p>}
                               {!candidate.unsubscribed && candidate.lastRequestedAt && (
-                                <p className="mt-0.5 text-xs text-slate-400">Already asked on {candidate.lastRequestedAt.slice(0, 10)}</p>
+                                <p className="mt-0.5 text-xs text-slate-400">{tr("Already asked on")} {candidate.lastRequestedAt.slice(0, 10)}</p>
                               )}
                             </div>
                           </li>
@@ -7597,15 +7512,14 @@ function AdminPortal({
 
                 <div className="flex items-center justify-between gap-3 border-t border-slate-200 px-5 py-4">
                   <button type="button" onClick={loadReviewRequests} disabled={isLoadingReviewRequests || isSendingReviewRequests} className="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50">
-                    <RefreshCw className={`h-3.5 w-3.5 ${isLoadingReviewRequests ? 'animate-spin' : ''}`} />Refresh
-                  </button>
+                    <RefreshCw className={`h-3.5 w-3.5 ${isLoadingReviewRequests ? 'animate-spin' : ''}`} />{tr("Refresh")}</button>
                   <button
                     type="button"
                     onClick={sendReviewRequests}
                     disabled={isSendingReviewRequests || isLoadingReviewRequests || !reviewRequestSelected.length || reviewRequestData?.sendReady === false}
                     className="inline-flex items-center gap-2 rounded-xl bg-emerald-950 px-4 py-2.5 text-xs font-bold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-45"
                   >
-                    <Mail className="h-4 w-4" />{isSendingReviewRequests ? 'Sending…' : `Send to ${reviewRequestSelected.length}`}
+                    <Mail className="h-4 w-4" />{isSendingReviewRequests ? tr("Sending…") : tr("Send to {value0}", { value0: reviewRequestSelected.length })}
                   </button>
                 </div>
               </div>
@@ -7620,35 +7534,33 @@ function AdminPortal({
             <div className="flex items-start gap-4">
               <span className="rounded-xl bg-violet-50 p-3 text-violet-800"><Megaphone className="h-5 w-5" /></span>
               <div>
-                <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-violet-800">Grow your practice</p>
-                <h2 className="mt-1 text-xl font-bold text-slate-950">Email marketing</h2>
-                <p className="mt-1 max-w-2xl text-sm text-slate-500">Build an audience with chat, review your message, and send from mythaithaimassage@gmail.com.</p>
+                <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-violet-800">{tr("Grow your practice")}</p>
+                <h2 className="mt-1 text-xl font-bold text-slate-950">{tr("Email marketing")}</h2>
+                <p className="mt-1 max-w-2xl text-sm text-slate-500">{tr("Build an audience with chat, review your message, and send from mythaithaimassage@gmail.com.")}</p>
               </div>
             </div>
-            <div className="mt-5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs leading-5 text-emerald-950">
-              Campaigns go only to people who checked the optional marketing consent box when booking and remain subscribed. Each email includes an unsubscribe link. Appointment confirmations and receipts are separate.
-            </div>
+            <div className="mt-5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs leading-5 text-emerald-950">{tr("Campaigns go only to people who checked the optional marketing consent box when booking and remain subscribed. Each email includes an unsubscribe link. Appointment confirmations and receipts are separate.")}</div>
           </section>
-          {campaignError && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{campaignError}</div>}
-          {campaignNotice && <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">{campaignNotice}</div>}
+          {campaignError && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{tr(campaignError)}</div>}
+          {campaignNotice && <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">{tr(campaignNotice)}</div>}
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
             <div className="flex flex-wrap items-start justify-between gap-3">
-              <div><h3 className="font-bold text-slate-900">Audience assistant</h3><p className="mt-1 text-xs leading-5 text-slate-500">Describe a segment in your own words, or switch to manual filters to pick it yourself. The list is rebuilt from the live database every time, so deleted customers are removed automatically. Gemini only ever receives your description and the branch, service, and membership names — never customer or patient data.</p></div>
-              {campaignAudience && <span className="rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-900">{campaignAudience.count} matched / {campaignAudience.subscriberCount} opted in</span>}
+              <div><h3 className="font-bold text-slate-900">{tr("Audience assistant")}</h3><p className="mt-1 text-xs leading-5 text-slate-500">{tr("Describe a segment in your own words, or switch to manual filters to pick it yourself. The list is rebuilt from the live database every time, so deleted customers are removed automatically. Gemini only ever receives your description and the branch, service, and membership names — never customer or patient data.")}</p></div>
+              {campaignAudience && <span className="rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-900">{campaignAudience.count} {tr("matched /")} {campaignAudience.subscriberCount} {tr("opted in")}</span>}
             </div>
             <div className="mt-4 inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1">
               {[['assistant', 'Describe with Gemini'], ['manual', 'Manual filters']].map(([mode, label]) => (
-                <button key={mode} type="button" onClick={() => setCampaignAudienceMode(mode)} disabled={isBuildingCampaignAudience || isSendingCampaign} className={`rounded-lg px-3.5 py-2 text-xs font-bold transition disabled:opacity-50 ${campaignAudienceMode === mode ? 'bg-emerald-950 text-white' : 'text-slate-600 hover:text-emerald-900'}`}>{label}</button>
+                <button key={mode} type="button" onClick={() => setCampaignAudienceMode(mode)} disabled={isBuildingCampaignAudience || isSendingCampaign} className={`rounded-lg px-3.5 py-2 text-xs font-bold transition disabled:opacity-50 ${campaignAudienceMode === mode ? 'bg-emerald-950 text-white' : 'text-slate-600 hover:text-emerald-900'}`}>{tr(label)}</button>
               ))}
             </div>
-            {campaignAudienceMode === 'assistant' && campaignAudienceOptions && !campaignAudienceOptions.geminiReady && <p className="mt-2 text-xs font-semibold text-amber-800">{campaignAudienceOptions.geminiBlockReason}</p>}
+            {campaignAudienceMode === 'assistant' && campaignAudienceOptions && !campaignAudienceOptions.geminiReady && <p className="mt-2 text-xs font-semibold text-amber-800">{tr(campaignAudienceOptions.geminiBlockReason)}</p>}
             <div aria-live="polite" className="mt-4 max-h-56 space-y-2 overflow-y-auto rounded-xl bg-slate-50 p-3">
-              {campaignConversation.map((entry, index) => <div key={`${entry.role}-${index}`} className={`max-w-[90%] rounded-xl px-3.5 py-2.5 text-xs leading-5 ${entry.role === 'user' ? 'ml-auto bg-emerald-950 text-white' : 'bg-white text-slate-700 shadow-sm'}`}>{entry.text}</div>)}
-              {isBuildingCampaignAudience && <p className="text-xs text-slate-500">Checking opted-in contacts and booking history…</p>}
+              {campaignConversation.map((entry, index) => <div key={`${entry.role}-${index}`} className={`max-w-[90%] rounded-xl px-3.5 py-2.5 text-xs leading-5 ${entry.role === 'user' ? 'ml-auto bg-emerald-950 text-white' : 'bg-white text-slate-700 shadow-sm'}`}>{entry.role === "assistant" ? tr(entry.text) : entry.text}</div>)}
+              {isBuildingCampaignAudience && <p className="text-xs text-slate-500">{tr("Checking opted-in contacts and booking history…")}</p>}
             </div>
             <form onSubmit={(event) => { event.preventDefault(); askCampaignAudience(); }} className={`mt-3 gap-2 ${campaignAudienceMode === 'assistant' ? 'flex' : 'hidden'}`}>
-              <input value={campaignChatInput} onChange={(event) => setCampaignChatInput(event.target.value)} maxLength={300} disabled={isSendingCampaign} placeholder="e.g. All active opted-in subscribers" className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3.5 py-3 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100 disabled:bg-slate-50" />
-              <button type="submit" disabled={isBuildingCampaignAudience || isSendingCampaign || !campaignChatInput.trim()} className="shrink-0 rounded-xl bg-emerald-950 px-4 py-2.5 text-xs font-bold text-white hover:bg-emerald-800 disabled:opacity-50">{isBuildingCampaignAudience ? 'Thinking…' : 'Find audience'}</button>
+              <input value={campaignChatInput} onChange={(event) => setCampaignChatInput(event.target.value)} maxLength={300} disabled={isSendingCampaign} placeholder={tr("e.g. All active opted-in subscribers")} className="min-w-0 flex-1 rounded-xl border border-slate-200 px-3.5 py-3 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100 disabled:bg-slate-50" />
+              <button type="submit" disabled={isBuildingCampaignAudience || isSendingCampaign || !campaignChatInput.trim()} className="shrink-0 rounded-xl bg-emerald-950 px-4 py-2.5 text-xs font-bold text-white hover:bg-emerald-800 disabled:opacity-50">{isBuildingCampaignAudience ? tr("Thinking…") : tr("Find audience")}</button>
             </form>
             <div className={`mt-3 flex-wrap gap-2 ${campaignAudienceMode === 'assistant' ? 'flex' : 'hidden'}`}>
               {[
@@ -7656,122 +7568,122 @@ function AdminPortal({
                 'Customers who visit every Wednesday',
                 `Most recent customers at ${branches[0]?.name || 'a branch'} in the last 30 days`,
                 `All opted-in customers at ${branches[0]?.name || 'a branch'}`,
-              ].map((example) => <button key={example} type="button" onClick={() => { setCampaignChatInput(example); askCampaignAudience(example); }} disabled={isBuildingCampaignAudience || isSendingCampaign} className="rounded-full border border-slate-200 px-3 py-1.5 text-[10px] font-semibold text-slate-600 hover:border-emerald-300 hover:bg-emerald-50 disabled:opacity-50">{example}</button>)}
+              ].map((example) => <button key={example} type="button" onClick={() => { setCampaignChatInput(example); askCampaignAudience(example); }} disabled={isBuildingCampaignAudience || isSendingCampaign} className="rounded-full border border-slate-200 px-3 py-1.5 text-[10px] font-semibold text-slate-600 hover:border-emerald-300 hover:bg-emerald-50 disabled:opacity-50">{tr(example)}</button>)}
             </div>
             {campaignAudienceMode === 'manual' && <form onSubmit={(event) => { event.preventDefault(); findCampaignAudienceManually(); }} className="mt-3 rounded-xl border border-slate-200 bg-slate-50/70 p-4">
               <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                <label className="block"><span className="mb-1.5 block text-xs font-semibold text-slate-700">Membership</span>
+                <label className="block"><span className="mb-1.5 block text-xs font-semibold text-slate-700">{tr("Membership")}</span>
                   <select value={campaignManualFilters.membershipType} onChange={(event) => setCampaignManualFilters((current) => ({ ...current, membershipType: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100">
-                    <option value="">Any membership</option>
-                    {(campaignAudienceOptions?.membershipTypes || []).map((tier) => <option key={tier} value={tier}>{tier.charAt(0).toUpperCase() + tier.slice(1)}</option>)}
+                    <option value="">{tr("Any membership")}</option>
+                    {(campaignAudienceOptions?.membershipTypes || []).map((tier) => <option key={tier} value={tier}>{tr(tier.charAt(0).toUpperCase() + tier.slice(1))}</option>)}
                   </select>
                 </label>
-                <label className="block"><span className="mb-1.5 block text-xs font-semibold text-slate-700">Branch</span>
+                <label className="block"><span className="mb-1.5 block text-xs font-semibold text-slate-700">{tr("Branch")}</span>
                   <select value={campaignManualFilters.branch} onChange={(event) => setCampaignManualFilters((current) => ({ ...current, branch: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100">
-                    <option value="">Any branch</option>
+                    <option value="">{tr("Any branch")}</option>
                     {(campaignAudienceOptions?.branches || []).map((branch) => <option key={branch} value={branch}>{branch}</option>)}
                   </select>
                 </label>
-                <label className="block"><span className="mb-1.5 block text-xs font-semibold text-slate-700">Service</span>
+                <label className="block"><span className="mb-1.5 block text-xs font-semibold text-slate-700">{tr("Service")}</span>
                   <select value={campaignManualFilters.service} onChange={(event) => setCampaignManualFilters((current) => ({ ...current, service: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100">
-                    <option value="">Any service</option>
+                    <option value="">{tr("Any service")}</option>
                     {(campaignAudienceOptions?.services || []).map((service) => <option key={service} value={service}>{service}</option>)}
                   </select>
                 </label>
-                <label className="block"><span className="mb-1.5 block text-xs font-semibold text-slate-700">Visits on a weekday</span>
+                <label className="block"><span className="mb-1.5 block text-xs font-semibold text-slate-700">{tr("Visits on a weekday")}</span>
                   <select value={campaignManualFilters.weekday} onChange={(event) => setCampaignManualFilters((current) => ({ ...current, weekday: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100">
-                    <option value="">Any day</option>
-                    {(campaignAudienceOptions?.weekdays || []).map((day) => <option key={day} value={day}>{day.charAt(0).toUpperCase() + day.slice(1)}</option>)}
+                    <option value="">{tr("Any day")}</option>
+                    {(campaignAudienceOptions?.weekdays || []).map((day) => <option key={day} value={day}>{tr(day.charAt(0).toUpperCase() + day.slice(1))}</option>)}
                   </select>
                 </label>
-                <label className="block"><span className="mb-1.5 block text-xs font-semibold text-slate-700">Booked in the last (days)</span>
-                  <input type="number" min={1} max={365} value={campaignManualFilters.days} onChange={(event) => setCampaignManualFilters((current) => ({ ...current, days: event.target.value }))} placeholder="e.g. 30" className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" />
+                <label className="block"><span className="mb-1.5 block text-xs font-semibold text-slate-700">{tr("Booked in the last (days)")}</span>
+                  <input type="number" min={1} max={365} value={campaignManualFilters.days} onChange={(event) => setCampaignManualFilters((current) => ({ ...current, days: event.target.value }))} placeholder={tr("e.g. 30")} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" />
                 </label>
-                <label className="block"><span className="mb-1.5 block text-xs font-semibold text-slate-700">Most recent customers</span>
-                  <input type="number" min={1} max={50} value={campaignManualFilters.limit} onChange={(event) => setCampaignManualFilters((current) => ({ ...current, limit: event.target.value }))} placeholder="e.g. 20" className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" />
+                <label className="block"><span className="mb-1.5 block text-xs font-semibold text-slate-700">{tr("Most recent customers")}</span>
+                  <input type="number" min={1} max={50} value={campaignManualFilters.limit} onChange={(event) => setCampaignManualFilters((current) => ({ ...current, limit: event.target.value }))} placeholder={tr("e.g. 20")} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" />
                 </label>
               </div>
               <div className="mt-3 flex flex-wrap items-center gap-4">
-                <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700"><input type="checkbox" checked={campaignManualFilters.recurring} disabled={!campaignManualFilters.weekday} onChange={(event) => setCampaignManualFilters((current) => ({ ...current, recurring: event.target.checked }))} className="h-4 w-4 rounded border-slate-300" />Only regulars (two or more visits that weekday)</label>
-                <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700"><input type="checkbox" checked={campaignManualFilters.allOptedIn} onChange={(event) => setCampaignManualFilters((current) => ({ ...current, allOptedIn: event.target.checked }))} className="h-4 w-4 rounded border-slate-300" />All active opted-in subscribers</label>
+                <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700"><input type="checkbox" checked={campaignManualFilters.recurring} disabled={!campaignManualFilters.weekday} onChange={(event) => setCampaignManualFilters((current) => ({ ...current, recurring: event.target.checked }))} className="h-4 w-4 rounded border-slate-300" />{tr("Only regulars (two or more visits that weekday)")}</label>
+                <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700"><input type="checkbox" checked={campaignManualFilters.allOptedIn} onChange={(event) => setCampaignManualFilters((current) => ({ ...current, allOptedIn: event.target.checked }))} className="h-4 w-4 rounded border-slate-300" />{tr("All active opted-in subscribers")}</label>
               </div>
               <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
-                <p className="text-[10px] leading-4 text-slate-500">Manual filters run entirely on your own data — nothing is sent to an AI service.</p>
+                <p className="text-[10px] leading-4 text-slate-500">{tr("Manual filters run entirely on your own data — nothing is sent to an AI service.")}</p>
                 <div className="flex gap-2">
-                  <button type="button" onClick={() => setCampaignManualFilters({ membershipType: '', branch: '', service: '', weekday: '', recurring: false, days: '', limit: '', allOptedIn: false })} disabled={isBuildingCampaignAudience || isSendingCampaign} className="rounded-xl border border-slate-200 px-4 py-2.5 text-xs font-bold text-slate-600 hover:border-emerald-300 hover:bg-emerald-50 disabled:opacity-50">Clear filters</button>
-                  <button type="submit" disabled={isBuildingCampaignAudience || isSendingCampaign} className="rounded-xl bg-emerald-950 px-4 py-2.5 text-xs font-bold text-white hover:bg-emerald-800 disabled:opacity-50">{isBuildingCampaignAudience ? 'Matching…' : 'Find audience'}</button>
+                  <button type="button" onClick={() => setCampaignManualFilters({ membershipType: '', branch: '', service: '', weekday: '', recurring: false, days: '', limit: '', allOptedIn: false })} disabled={isBuildingCampaignAudience || isSendingCampaign} className="rounded-xl border border-slate-200 px-4 py-2.5 text-xs font-bold text-slate-600 hover:border-emerald-300 hover:bg-emerald-50 disabled:opacity-50">{tr("Clear filters")}</button>
+                  <button type="submit" disabled={isBuildingCampaignAudience || isSendingCampaign} className="rounded-xl bg-emerald-950 px-4 py-2.5 text-xs font-bold text-white hover:bg-emerald-800 disabled:opacity-50">{isBuildingCampaignAudience ? tr("Matching…") : tr("Find audience")}</button>
                 </div>
               </div>
             </form>}
             {campaignAudience && <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
-              <p className="text-sm font-bold text-slate-900">{campaignAudience.description}</p>
-              <p className="mt-1 text-xs text-slate-500">{campaignAudience.count ? `Examples: ${campaignAudience.sampleNames.join(', ')}` : campaignAudience.subscriberCount ? 'No opted-in subscribers match that description yet.' : 'There are no opted-in subscribers yet. New customers can choose marketing emails in the booking form.'}</p>
-              {campaignAudience.count < campaignAudience.subscriberCount && campaignAudience.subscriberCount > 0 && <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">This filter matches {campaignAudience.count} of {campaignAudience.subscriberCount} active opted-in subscribers. A branch, weekday, or date filter requires a matching booking in the history. Choose “All active opted-in subscribers” above to include everyone.</p>}
-              {campaignAudience.removedContacts?.length > 0 && <p className="mt-2 rounded-lg bg-slate-100 px-3 py-2 text-xs leading-5 text-slate-600">{campaignAudience.removedContacts.length} contact{campaignAudience.removedContacts.length === 1 ? '' : 's'} with no remaining customer records {campaignAudience.removedContacts.length === 1 ? 'was' : 'were'} removed from the marketing list.</p>}
-              {!campaignAudience.sendReady && <p className="mt-2 text-xs font-semibold text-amber-800">{campaignAudience.sendBlockReason}</p>}
-              {campaignAudience.count > 50 && <p className="mt-2 text-xs font-semibold text-amber-800">Campaigns are limited to 50 recipients per send. Narrow this group before sending.</p>}
-              <p className="mt-2 text-[10px] leading-4 text-slate-400">Audience matching uses historical booking dates, not verified attendance or visit frequency.</p>
+              <p className="text-sm font-bold text-slate-900">{tr(campaignAudience.description)}</p>
+              <p className="mt-1 text-xs text-slate-500">{campaignAudience.count ? tr("Examples: {value0}", { value0: campaignAudience.sampleNames.join(', ') }) : campaignAudience.subscriberCount ? tr("No opted-in subscribers match that description yet.") : tr("There are no opted-in subscribers yet. New customers can choose marketing emails in the booking form.")}</p>
+              {campaignAudience.count < campaignAudience.subscriberCount && campaignAudience.subscriberCount > 0 && <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">{tr("This filter matches")} {campaignAudience.count} {tr("of")} {campaignAudience.subscriberCount} {tr("active opted-in subscribers. A branch, weekday, or date filter requires a matching booking in the history. Choose “All active opted-in subscribers” above to include everyone.")}</p>}
+              {campaignAudience.removedContacts?.length > 0 && <p className="mt-2 rounded-lg bg-slate-100 px-3 py-2 text-xs leading-5 text-slate-600">{campaignAudience.removedContacts.length} {tr("contact")}{campaignAudience.removedContacts.length === 1 ? '' : tr("s")} {tr("with no remaining customer records")} {campaignAudience.removedContacts.length === 1 ? tr("was") : tr("were")} {tr("removed from the marketing list.")}</p>}
+              {!campaignAudience.sendReady && <p className="mt-2 text-xs font-semibold text-amber-800">{tr(campaignAudience.sendBlockReason)}</p>}
+              {campaignAudience.count > 50 && <p className="mt-2 text-xs font-semibold text-amber-800">{tr("Campaigns are limited to 50 recipients per send. Narrow this group before sending.")}</p>}
+              <p className="mt-2 text-[10px] leading-4 text-slate-400">{tr("Audience matching uses historical booking dates, not verified attendance or visit frequency.")}</p>
             </div>}
           </section>
           <div className="grid gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(300px,0.8fr)]">
             <form onSubmit={saveCampaignDraft} className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-              <div><h3 className="font-bold text-slate-900">Campaign message</h3><p className="mt-1 text-xs text-slate-500">Use the writing assistant to create an editable draft, then review, save, or send it.</p></div>
+              <div><h3 className="font-bold text-slate-900">{tr("Campaign message")}</h3><p className="mt-1 text-xs text-slate-500">{tr("Use the writing assistant to create an editable draft, then review, save, or send it.")}</p></div>
               <div className="rounded-xl border border-violet-100 bg-violet-50/60 p-4">
-                <label className="block"><span className="mb-1.5 block text-xs font-semibold text-slate-700">What should this campaign say?</span><textarea rows={2} maxLength={500} value={campaignGoal} onChange={(event) => setCampaignGoal(event.target.value)} disabled={isGeneratingCampaignCopy || isSendingCampaign} placeholder="e.g. Write a friendly note inviting this audience to take time for self-care. Do not include an offer." className="w-full resize-y rounded-xl border border-slate-200 bg-white px-3.5 py-3 text-sm leading-5 outline-none focus:border-violet-500 focus:ring-4 focus:ring-violet-100 disabled:bg-slate-50" /></label>
+                <label className="block"><span className="mb-1.5 block text-xs font-semibold text-slate-700">{tr("What should this campaign say?")}</span><textarea rows={2} maxLength={500} value={campaignGoal} onChange={(event) => setCampaignGoal(event.target.value)} disabled={isGeneratingCampaignCopy || isSendingCampaign} placeholder={tr("e.g. Write a friendly note inviting this audience to take time for self-care. Do not include an offer.")} className="w-full resize-y rounded-xl border border-slate-200 bg-white px-3.5 py-3 text-sm leading-5 outline-none focus:border-violet-500 focus:ring-4 focus:ring-violet-100 disabled:bg-slate-50" /></label>
                 <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
-                  <p className="max-w-lg text-[10px] leading-4 text-slate-500">Gemini receives only your campaign goal and the aggregate audience description—not customer names, emails, or booking rows. The generated copy is not sent until you review and confirm.</p>
-                  <button type="button" onClick={generateCampaignCopy} disabled={!campaignAudience || !campaignAudience.copyAssistantReady || !campaignGoal.trim() || isGeneratingCampaignCopy || isSendingCampaign || isBuildingCampaignAudience} className="inline-flex shrink-0 items-center gap-2 rounded-xl bg-violet-800 px-4 py-2.5 text-xs font-bold text-white hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-45"><Sparkles className="h-4 w-4" />{isGeneratingCampaignCopy ? 'Generating…' : 'Generate campaign'}</button>
+                  <p className="max-w-lg text-[10px] leading-4 text-slate-500">{tr("Gemini receives only your campaign goal and the aggregate audience description—not customer names, emails, or booking rows. The generated copy is not sent until you review and confirm.")}</p>
+                  <button type="button" onClick={generateCampaignCopy} disabled={!campaignAudience || !campaignAudience.copyAssistantReady || !campaignGoal.trim() || isGeneratingCampaignCopy || isSendingCampaign || isBuildingCampaignAudience} className="inline-flex shrink-0 items-center gap-2 rounded-xl bg-violet-800 px-4 py-2.5 text-xs font-bold text-white hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-45"><Sparkles className="h-4 w-4" />{isGeneratingCampaignCopy ? tr("Generating…") : tr("Generate campaign")}</button>
                 </div>
-                {campaignAudience && !campaignAudience.copyAssistantReady && <p className="mt-2 text-xs font-semibold text-amber-800">{campaignAudience.copyAssistantBlockReason}</p>}
+                {campaignAudience && !campaignAudience.copyAssistantReady && <p className="mt-2 text-xs font-semibold text-amber-800">{tr(campaignAudience.copyAssistantBlockReason)}</p>}
               </div>
-              <label className="block"><span className="mb-1.5 block text-xs font-semibold text-slate-700">Subject line</span><input maxLength={180} required value={campaignSubject} onChange={(event) => setCampaignSubject(event.target.value)} placeholder="A little time for yourself…" className="w-full rounded-xl border border-slate-200 px-3.5 py-3 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" /></label>
-              <label className="block"><span className="mb-1.5 block text-xs font-semibold text-slate-700">Preview text</span><input maxLength={200} value={campaignPreview} onChange={(event) => setCampaignPreview(event.target.value)} placeholder="A short summary shown in the inbox" className="w-full rounded-xl border border-slate-200 px-3.5 py-3 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" /></label>
-              <label className="block"><span className="mb-1.5 block text-xs font-semibold text-slate-700">Message</span><textarea required rows={8} maxLength={5000} value={campaignMessage} onChange={(event) => setCampaignMessage(event.target.value)} placeholder="Write a helpful, considerate message for your subscribers…" className="w-full resize-y rounded-xl border border-slate-200 px-3.5 py-3 text-sm leading-6 outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" /></label>
+              <label className="block"><span className="mb-1.5 block text-xs font-semibold text-slate-700">{tr("Subject line")}</span><input maxLength={180} required value={campaignSubject} onChange={(event) => setCampaignSubject(event.target.value)} placeholder={tr("A little time for yourself…")} className="w-full rounded-xl border border-slate-200 px-3.5 py-3 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" /></label>
+              <label className="block"><span className="mb-1.5 block text-xs font-semibold text-slate-700">{tr("Preview text")}</span><input maxLength={200} value={campaignPreview} onChange={(event) => setCampaignPreview(event.target.value)} placeholder={tr("A short summary shown in the inbox")} className="w-full rounded-xl border border-slate-200 px-3.5 py-3 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" /></label>
+              <label className="block"><span className="mb-1.5 block text-xs font-semibold text-slate-700">{tr("Message")}</span><textarea required rows={8} maxLength={5000} value={campaignMessage} onChange={(event) => setCampaignMessage(event.target.value)} placeholder={tr("Write a helpful, considerate message for your subscribers…")} className="w-full resize-y rounded-xl border border-slate-200 px-3.5 py-3 text-sm leading-6 outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" /></label>
               <div className="flex flex-wrap justify-between gap-3 border-t border-slate-100 pt-4">
-                <span className="self-center text-[11px] text-slate-400">{campaignMessage.length}/5000 characters</span>
+                <span className="self-center text-[11px] text-slate-400">{campaignMessage.length}{tr("/5000 characters")}</span>
                 <div className="flex flex-wrap gap-2">
-                  <button type="submit" className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-50"><Check className="h-4 w-4" />Save draft</button>
-                  <button type="button" onClick={sendCampaign} disabled={isSendingCampaign || isBuildingCampaignAudience || !campaignAudience?.sendReady || !campaignAudience?.count || campaignAudience.count > 50 || !campaignSubject.trim() || !campaignMessage.trim()} className="inline-flex items-center gap-2 rounded-xl bg-emerald-950 px-4 py-2.5 text-xs font-bold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-45"><Mail className="h-4 w-4" />{isSendingCampaign ? 'Sending…' : `Send to ${campaignAudience?.count || 0}`}</button>
+                  <button type="submit" className="inline-flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-50"><Check className="h-4 w-4" />{tr("Save draft")}</button>
+                  <button type="button" onClick={sendCampaign} disabled={isSendingCampaign || isBuildingCampaignAudience || !campaignAudience?.sendReady || !campaignAudience?.count || campaignAudience.count > 50 || !campaignSubject.trim() || !campaignMessage.trim()} className="inline-flex items-center gap-2 rounded-xl bg-emerald-950 px-4 py-2.5 text-xs font-bold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-45"><Mail className="h-4 w-4" />{isSendingCampaign ? tr("Sending…") : tr("Send to {value0}", { value0: campaignAudience?.count || 0 })}</button>
                 </div>
               </div>
             </form>
             <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-              <div className="mb-4 flex items-center gap-2"><Eye className="h-4 w-4 text-slate-500" /><h3 className="font-bold text-slate-900">Email preview</h3></div>
+              <div className="mb-4 flex items-center gap-2"><Eye className="h-4 w-4 text-slate-500" /><h3 className="font-bold text-slate-900">{tr("Email preview")}</h3></div>
               <div className="overflow-hidden rounded-xl border border-slate-200">
-                <div className="border-b border-slate-100 bg-slate-50 px-4 py-3"><p className="text-[10px] text-slate-400">MY THAI THAI · to your subscribers</p><p className="mt-1 text-xs font-bold text-slate-800">{campaignSubject || 'Your campaign subject'}</p><p className="mt-1 truncate text-[11px] text-slate-500">{campaignPreview || 'Preview text appears here'}</p></div>
-                <div className="min-h-48 whitespace-pre-wrap px-5 py-5 text-sm leading-6 text-slate-700">{campaignMessage || 'Your message preview will appear here as you write.'}<div className="mt-8 border-t border-slate-100 pt-4 text-[10px] leading-5 text-slate-400">MY THAI THAI · Business mailing address from profile<br />You are receiving this because you opted in to promotional emails.<br /><span className="underline">Unsubscribe</span></div></div>
+                <div className="border-b border-slate-100 bg-slate-50 px-4 py-3"><p className="text-[10px] text-slate-400">{tr("MY THAI THAI · to your subscribers")}</p><p className="mt-1 text-xs font-bold text-slate-800">{campaignSubject || tr("Your campaign subject")}</p><p className="mt-1 truncate text-[11px] text-slate-500">{campaignPreview || tr("Preview text appears here")}</p></div>
+                <div className="min-h-48 whitespace-pre-wrap px-5 py-5 text-sm leading-6 text-slate-700">{campaignMessage || tr("Your message preview will appear here as you write.")}<div className="mt-8 border-t border-slate-100 pt-4 text-[10px] leading-5 text-slate-400">{tr("MY THAI THAI · Business mailing address from profile")}<br />{tr("You are receiving this because you opted in to promotional emails.")}<br /><span className="underline">{tr("Unsubscribe")}</span></div></div>
               </div>
-              <p className="mt-3 text-[11px] leading-5 text-slate-500">Campaign emails include your business mailing address and an unsubscribe link. Sending requires Gmail OAuth and a mailing address in Business profile.</p>
+              <p className="mt-3 text-[11px] leading-5 text-slate-500">{tr("Campaign emails include your business mailing address and an unsubscribe link. Sending requires Gmail OAuth and a mailing address in Business profile.")}</p>
             </section>
           </div>
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="mb-4 flex items-center justify-between"><div><h3 className="font-bold text-slate-900">Saved drafts</h3><p className="mt-1 text-xs text-slate-500">Stored only on this device</p></div><span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600">{campaignDrafts.length}</span></div>
-            {campaignDrafts.length ? <div className="space-y-2">{campaignDrafts.map((draft) => <div key={draft.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-100 p-3"><button type="button" onClick={() => { setCampaignSubject(draft.subject); setCampaignPreview(draft.preview); setCampaignMessage(draft.message); setCampaignNotice('Draft loaded for editing.'); setCampaignError(''); }} className="min-w-0 flex-1 text-left"><span className="block truncate text-sm font-semibold text-slate-800">{draft.subject}</span><span className="text-[10px] text-slate-400">Updated {new Date(draft.updatedAt).toLocaleString()}</span></button><button type="button" onClick={() => removeCampaignDraft(draft.id)} className="rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-500 hover:bg-rose-50 hover:text-rose-700">Delete</button></div>)}</div> : <p className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">No campaign drafts saved yet.</p>}
+            <div className="mb-4 flex items-center justify-between"><div><h3 className="font-bold text-slate-900">{tr("Saved drafts")}</h3><p className="mt-1 text-xs text-slate-500">{tr("Stored only on this device")}</p></div><span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600">{campaignDrafts.length}</span></div>
+            {campaignDrafts.length ? <div className="space-y-2">{campaignDrafts.map((draft) => <div key={draft.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-100 p-3"><button type="button" onClick={() => { setCampaignSubject(draft.subject); setCampaignPreview(draft.preview); setCampaignMessage(draft.message); setCampaignNotice('Draft loaded for editing.'); setCampaignError(''); }} className="min-w-0 flex-1 text-left"><span className="block truncate text-sm font-semibold text-slate-800">{draft.subject}</span><span className="text-[10px] text-slate-400">{tr("Updated")} {new Date(draft.updatedAt).toLocaleString(locale)}</span></button><button type="button" onClick={() => removeCampaignDraft(draft.id)} className="rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-500 hover:bg-rose-50 hover:text-rose-700">{tr("Delete")}</button></div>)}</div> : <p className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">{tr("No campaign drafts saved yet.")}</p>}
           </section>
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-4 flex items-center justify-between">
-              <div><h3 className="font-bold text-slate-900">Campaign history</h3><p className="mt-1 text-xs text-slate-500">Logged to BigQuery with a campaign ID for future reference/audit</p></div>
-              <button type="button" onClick={loadCampaignHistory} disabled={isLoadingCampaignHistory} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">{isLoadingCampaignHistory ? 'Refreshing…' : 'Refresh'}</button>
+              <div><h3 className="font-bold text-slate-900">{tr("Campaign history")}</h3><p className="mt-1 text-xs text-slate-500">{tr("Logged to BigQuery with a campaign ID for future reference/audit")}</p></div>
+              <button type="button" onClick={loadCampaignHistory} disabled={isLoadingCampaignHistory} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">{isLoadingCampaignHistory ? tr("Refreshing…") : tr("Refresh")}</button>
             </div>
-            {campaignHistoryError && <div role="alert" className="mb-3 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{campaignHistoryError}</div>}
+            {campaignHistoryError && <div role="alert" className="mb-3 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{tr(campaignHistoryError)}</div>}
             {campaignHistory.length ? (
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[640px] text-left text-xs">
-                  <thead><tr className="border-b border-slate-100 text-[10px] uppercase tracking-wider text-slate-400"><th className="py-2 pr-4">Sent</th><th className="py-2 pr-4">Subject</th><th className="py-2 pr-4">Audience</th><th className="py-2 pr-4 text-right">Sent / Failed</th><th className="py-2 pr-4">Campaign ID</th></tr></thead>
+                  <thead><tr className="border-b border-slate-100 text-[10px] uppercase tracking-wider text-slate-400"><th className="py-2 pr-4">{tr("Sent")}</th><th className="py-2 pr-4">{tr("Subject")}</th><th className="py-2 pr-4">{tr("Audience")}</th><th className="py-2 pr-4 text-right">{tr("Sent / Failed")}</th><th className="py-2 pr-4">{tr("Campaign ID")}</th></tr></thead>
                   <tbody>
                     {campaignHistory.map((campaign) => (
                       <tr key={campaign.campaignId} className="border-b border-slate-50 text-slate-600">
-                        <td className="py-2.5 pr-4 whitespace-nowrap">{campaign.sentAt ? new Date(campaign.sentAt).toLocaleString() : '—'}</td>
+                        <td className="py-2.5 pr-4 whitespace-nowrap">{campaign.sentAt ? new Date(campaign.sentAt).toLocaleString(locale) : '—'}</td>
                         <td className="py-2.5 pr-4 font-semibold text-slate-800">{campaign.subject || '—'}</td>
                         <td className="py-2.5 pr-4 max-w-xs truncate">{campaign.audienceDescription || '—'}</td>
-                        <td className="py-2.5 pr-4 text-right"><span className="font-semibold text-emerald-800">{campaign.sentCount}</span>{campaign.failedCount ? <span className="ml-1 font-semibold text-rose-700">/ {campaign.failedCount} failed</span> : ''}</td>
+                        <td className="py-2.5 pr-4 text-right"><span className="font-semibold text-emerald-800">{campaign.sentCount}</span>{campaign.failedCount ? <span className="ml-1 font-semibold text-rose-700">/ {campaign.failedCount} {tr("failed")}</span> : ''}</td>
                         <td className="py-2.5 pr-4 font-mono text-[10px] text-slate-400">{campaign.campaignId}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
-            ) : <p className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">{isLoadingCampaignHistory ? 'Loading campaign history…' : 'No campaigns sent yet.'}</p>}
+            ) : <p className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">{isLoadingCampaignHistory ? tr("Loading campaign history…") : tr("No campaigns sent yet.")}</p>}
           </section>
         </div>
       )}
@@ -7782,25 +7694,23 @@ function AdminPortal({
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <div className="mb-2 inline-flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.16em] text-emerald-800">
-                  <Building className="h-4 w-4" /> Owner settings
-                </div>
-                <h2 className="text-xl font-bold tracking-tight text-slate-900">Business profile</h2>
-                <p className="mt-1 text-sm text-slate-500">Manage the identity and contact details associated with your practice.</p>
+                  <Building className="h-4 w-4" />{tr("Owner settings")}</div>
+                <h2 className="text-xl font-bold tracking-tight text-slate-900">{tr("Business profile")}</h2>
+                <p className="mt-1 text-sm text-slate-500">{tr("Manage the identity and contact details associated with your practice.")}</p>
               </div>
               <span className="inline-flex w-fit items-center gap-2 rounded-full border border-emerald-200 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-800">
-                <CheckCircle2 className="h-4 w-4" /> Synced across owner devices
-              </span>
+                <CheckCircle2 className="h-4 w-4" />{tr("Synced across owner devices")}</span>
             </div>
           </div>
 
-          {businessProfileError && <div role="alert" className="mx-5 mt-5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 sm:mx-8">{businessProfileError}</div>}
-          {businessProfileMessage && <div role="status" className="mx-5 mt-5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 sm:mx-8">{businessProfileMessage}</div>}
+          {businessProfileError && <div role="alert" className="mx-5 mt-5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 sm:mx-8">{tr(businessProfileError)}</div>}
+          {businessProfileMessage && <div role="status" className="mx-5 mt-5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 sm:mx-8">{tr(businessProfileMessage)}</div>}
           {isLoadingBusinessProfile ? (
-            <div className="p-10 text-center text-sm text-slate-500">Loading business profile…</div>
+            <div className="p-10 text-center text-sm text-slate-500">{tr("Loading business profile…")}</div>
           ) : !hasLoadedBusinessProfile ? (
             <div className="p-8 text-center">
-              <p className="text-sm text-slate-600">The saved profile could not be loaded. Retry before making changes.</p>
-              <button type="button" onClick={loadBusinessProfile} className="mt-4 rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">Retry loading</button>
+              <p className="text-sm text-slate-600">{tr("The saved profile could not be loaded. Retry before making changes.")}</p>
+              <button type="button" onClick={loadBusinessProfile} className="mt-4 rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">{tr("Retry loading")}</button>
             </div>
           ) : (
             <div className="grid gap-8 p-5 sm:p-8 lg:grid-cols-[minmax(0,1.4fr)_minmax(260px,0.8fr)]">
@@ -7818,7 +7728,7 @@ function AdminPortal({
                     { key: 'photoUrl', label: 'Business photo URL', type: 'url', placeholder: 'https://example.com/business-photo.jpg' },
                   ].map((field) => (
                     <label key={field.key} className={`block ${field.key === 'businessName' || field.key === 'tagline' || field.key === 'photoUrl' ? 'sm:col-span-2' : ''}`}>
-                      <span className="mb-1.5 block text-xs font-semibold text-slate-700">{field.label}{field.required && <span className="ml-1 text-rose-600">*</span>}</span>
+                      <span className="mb-1.5 block text-xs font-semibold text-slate-700">{tr(field.label)}{field.required && <span className="ml-1 text-rose-600">*</span>}</span>
                       <input
                         type={field.type}
                         required={field.required}
@@ -7828,34 +7738,34 @@ function AdminPortal({
                           setBusinessProfile((profile) => ({ ...profile, [field.key]: event.target.value }));
                           setBusinessProfileMessage('');
                         }}
-                        placeholder={field.placeholder}
+                        placeholder={field.placeholder ? tr(field.placeholder) : undefined}
                         className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100"
                       />
-                      {field.key === 'photoUrl' && <span className="mt-1.5 block text-xs leading-5 text-slate-500">Paste a publicly accessible image URL. Leave blank to use the business initials.</span>}
+                      {field.key === 'photoUrl' && <span className="mt-1.5 block text-xs leading-5 text-slate-500">{tr("Paste a publicly accessible image URL. Leave blank to use the business initials.")}</span>}
                     </label>
                   ))}
                 </div>
                 <div className="flex flex-col-reverse gap-3 border-t border-slate-100 pt-5 sm:flex-row sm:items-center sm:justify-between">
-                  <p className="inline-flex items-start gap-1.5 text-xs leading-5 text-slate-500"><Database className="mt-0.5 h-3.5 w-3.5 shrink-0" />Profile details are stored in your connected database and available when you sign in on another device.</p>
+                  <p className="inline-flex items-start gap-1.5 text-xs leading-5 text-slate-500"><Database className="mt-0.5 h-3.5 w-3.5 shrink-0" />{tr("Profile details are stored in your connected database and available when you sign in on another device.")}</p>
                   <button type="submit" disabled={isSavingBusinessProfile || !hasLoadedBusinessProfile} className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-950 px-5 py-3 text-sm font-bold text-white shadow-md shadow-emerald-950/10 transition hover:bg-emerald-800 disabled:cursor-wait disabled:opacity-60">
                     {isSavingBusinessProfile ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-                    {isSavingBusinessProfile ? 'Saving…' : 'Save profile'}
+                    {isSavingBusinessProfile ? tr("Saving…") : tr("Save profile")}
                   </button>
                 </div>
               </form>
 
               <aside className="self-start rounded-2xl border border-slate-200 bg-slate-50 p-5">
-                <p className="text-[11px] font-bold uppercase tracking-[0.15em] text-slate-400">Profile preview</p>
+                <p className="text-[11px] font-bold uppercase tracking-[0.15em] text-slate-400">{tr("Profile preview")}</p>
                 <BusinessPhoto businessName={businessProfile.businessName || 'Your business'} photoUrl={businessProfile.photoUrl} className="mt-5 h-14 w-14 rounded-2xl object-cover text-lg shadow-md" />
-                <h3 className="mt-4 text-lg font-bold text-slate-900">{businessProfile.businessName || 'Your business name'}</h3>
+                <h3 className="mt-4 text-lg font-bold text-slate-900">{businessProfile.businessName || tr("Your business name")}</h3>
                 {businessProfile.legalName && <p className="mt-0.5 text-xs text-slate-500">{businessProfile.legalName}</p>}
-                <p className="mt-1 text-sm leading-5 text-slate-500">{businessProfile.tagline || 'Add a short introduction to your practice.'}</p>
+                <p className="mt-1 text-sm leading-5 text-slate-500">{businessProfile.tagline || tr("Add a short introduction to your practice.")}</p>
                 <div className="mt-5 space-y-3 border-t border-slate-200 pt-4 text-sm text-slate-600">
                   {businessProfile.email && <div className="flex items-start gap-2.5"><Mail className="mt-0.5 h-4 w-4 shrink-0 text-emerald-800" /><span className="break-all">{businessProfile.email}</span></div>}
                   {businessProfile.phone && <div className="flex items-start gap-2.5"><Phone className="mt-0.5 h-4 w-4 shrink-0 text-emerald-800" /><span>{businessProfile.phone}</span></div>}
                   {businessProfile.website && <div className="flex items-start gap-2.5"><Globe className="mt-0.5 h-4 w-4 shrink-0 text-emerald-800" /><span className="break-all">{businessProfile.website}</span></div>}
                   {businessProfile.address && <div className="flex items-start gap-2.5"><MapPin className="mt-0.5 h-4 w-4 shrink-0 text-emerald-800" /><span>{businessProfile.address}</span></div>}
-                  {businessProfile.taxRegistrationNumber && <div className="text-xs text-slate-500">GST/HST No. {businessProfile.taxRegistrationNumber}</div>}
+                  {businessProfile.taxRegistrationNumber && <div className="text-xs text-slate-500">{tr("GST/HST No.")} {businessProfile.taxRegistrationNumber}</div>}
                 </div>
               </aside>
             </div>
@@ -7867,40 +7777,40 @@ function AdminPortal({
         <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-5">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
-              <h2 className="text-lg font-bold text-slate-900">Therapist account approvals</h2>
-              <p className="text-xs text-slate-500 mt-1">New therapist sign-ups appear here. Approved therapists can sign in to the therapist view.</p>
+              <h2 className="text-lg font-bold text-slate-900">{tr("Therapist account approvals")}</h2>
+              <p className="text-xs text-slate-500 mt-1">{tr("New therapist sign-ups appear here. Approved therapists can sign in to the therapist view.")}</p>
             </div>
             <button onClick={loadTherapistAccounts} disabled={isLoadingTherapistAccounts} className="px-3 py-2 rounded-xl bg-emerald-800 text-white text-xs font-bold disabled:opacity-50">
-              {isLoadingTherapistAccounts ? 'Loading...' : 'Refresh'}
+              {isLoadingTherapistAccounts ? tr("Loading...") : tr("Refresh")}
             </button>
           </div>
-          {therapistAccountsError && <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-800 text-xs">{therapistAccountsError}</div>}
+          {therapistAccountsError && <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-800 text-xs">{tr(therapistAccountsError)}</div>}
           {[
             { title: 'Pending approval', accounts: pendingTherapistAccounts, empty: 'No therapist sign-ups are waiting for approval.' },
             { title: 'Approved', accounts: therapistAccounts.filter((account) => account.status === 'approved'), empty: 'No approved therapist accounts yet.' },
             { title: 'Rejected', accounts: therapistAccounts.filter((account) => account.status === 'rejected'), empty: '' },
           ].filter((group) => group.empty || group.accounts.length).map((group) => (
             <section key={group.title} className="space-y-2">
-              <h3 className="text-xs font-bold uppercase tracking-[0.14em] text-slate-500">{group.title} ({group.accounts.length})</h3>
+              <h3 className="text-xs font-bold uppercase tracking-[0.14em] text-slate-500">{tr(group.title)} ({group.accounts.length})</h3>
               {group.accounts.length === 0 ? (
-                <div className="p-6 text-center rounded-xl bg-slate-50 text-slate-500 text-sm">{isLoadingTherapistAccounts ? 'Loading...' : group.empty}</div>
+                <div className="p-6 text-center rounded-xl bg-slate-50 text-slate-500 text-sm">{isLoadingTherapistAccounts ? tr("Loading...") : tr(group.empty)}</div>
               ) : (
                 <div className="divide-y divide-slate-100 rounded-xl border border-slate-200">
                   {group.accounts.map((account) => (
                     <div key={account.id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
                       <div className="min-w-0">
                         <div className="font-bold text-sm text-slate-900">{account.name || account.username}</div>
-                        <div className="text-[11px] text-slate-500 mt-1">@{account.username} · Signed up {account.createdAt ? new Date(account.createdAt).toLocaleString() : 'date unknown'}</div>
+                        <div className="text-[11px] text-slate-500 mt-1">@{account.username} {tr("· Signed up")} {account.createdAt ? new Date(account.createdAt).toLocaleString(locale) : tr("date unknown")}</div>
                       </div>
                       <div className="flex gap-2">
                         {account.status !== 'approved' && (
-                          <button onClick={() => updateTherapistAccountStatus(account, 'approved')} disabled={updatingTherapistAccountId === account.id} className="inline-flex items-center gap-1 px-3 py-2 rounded-xl bg-emerald-700 text-white text-xs font-bold disabled:opacity-50"><Check className="w-3.5 h-3.5" /> Approve</button>
+                          <button onClick={() => updateTherapistAccountStatus(account, 'approved')} disabled={updatingTherapistAccountId === account.id} className="inline-flex items-center gap-1 px-3 py-2 rounded-xl bg-emerald-700 text-white text-xs font-bold disabled:opacity-50"><Check className="w-3.5 h-3.5" /> {tr("Approve")}</button>
                         )}
                         {account.status === 'pending' && (
-                          <button onClick={() => updateTherapistAccountStatus(account, 'rejected')} disabled={updatingTherapistAccountId === account.id} className="inline-flex items-center gap-1 px-3 py-2 rounded-xl border border-red-200 text-red-700 text-xs font-bold hover:bg-red-50 disabled:opacity-50"><X className="w-3.5 h-3.5" /> Reject</button>
+                          <button onClick={() => updateTherapistAccountStatus(account, 'rejected')} disabled={updatingTherapistAccountId === account.id} className="inline-flex items-center gap-1 px-3 py-2 rounded-xl border border-red-200 text-red-700 text-xs font-bold hover:bg-red-50 disabled:opacity-50"><X className="w-3.5 h-3.5" /> {tr("Reject")}</button>
                         )}
                         {account.status === 'approved' && (
-                          <button onClick={() => updateTherapistAccountStatus(account, 'pending')} disabled={updatingTherapistAccountId === account.id} className="inline-flex items-center gap-1 px-3 py-2 rounded-xl border border-slate-200 text-slate-700 text-xs font-bold hover:bg-slate-50 disabled:opacity-50"><Ban className="w-3.5 h-3.5" /> Revoke access</button>
+                          <button onClick={() => updateTherapistAccountStatus(account, 'pending')} disabled={updatingTherapistAccountId === account.id} className="inline-flex items-center gap-1 px-3 py-2 rounded-xl border border-slate-200 text-slate-700 text-xs font-bold hover:bg-slate-50 disabled:opacity-50"><Ban className="w-3.5 h-3.5" /> {tr("Revoke access")}</button>
                         )}
                       </div>
                     </div>
@@ -7917,30 +7827,30 @@ function AdminPortal({
         <div className="bg-white rounded-2xl p-6 border border-stone-200 shadow-sm space-y-5">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
-              <h2 className="text-lg font-bold text-stone-900">Patient History Profiles</h2>
-              <p className="text-xs text-stone-500 mt-1">Confidential health information. Access only for authorized clinic staff.</p>
+              <h2 className="text-lg font-bold text-stone-900">{tr("Patient History Profiles")}</h2>
+              <p className="text-xs text-stone-500 mt-1">{tr("Confidential health information. Access only for authorized clinic staff.")}</p>
             </div>
             <div className="flex gap-2">
               <input
                 value={patientHistorySearch}
                 onChange={(event) => setPatientHistorySearch(event.target.value)}
-                placeholder="Search patient or booking..."
+                placeholder={tr("Search patient or booking...")}
                 className="px-3 py-2 rounded-xl border border-stone-300 text-xs"
               />
               <button onClick={loadPatientHistory} disabled={isLoadingPatientHistory} className="px-3 py-2 rounded-xl bg-emerald-800 text-white text-xs font-bold disabled:opacity-50">
-                {isLoadingPatientHistory ? 'Loading...' : 'Refresh'}
+                {isLoadingPatientHistory ? tr("Loading...") : tr("Refresh")}
               </button>
             </div>
           </div>
-          {patientHistoryLoadError && <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-800 text-xs">{patientHistoryLoadError}</div>}
-          {deletePatientHistoryError && <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-800 text-xs">{deletePatientHistoryError}</div>}
+          {patientHistoryLoadError && <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-800 text-xs">{tr(patientHistoryLoadError)}</div>}
+          {deletePatientHistoryError && <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-800 text-xs">{tr(deletePatientHistoryError)}</div>}
           {!patientHistoryLoadError && patientHistory.length === 0 && !isLoadingPatientHistory && (
-            <div className="p-8 text-center rounded-xl bg-stone-50 text-stone-500 text-sm">No patient history profiles found.</div>
+            <div className="p-8 text-center rounded-xl bg-stone-50 text-stone-500 text-sm">{tr("No patient history profiles found.")}</div>
           )}
           {patientHistory.length > 0 && (
             <div className="grid grid-cols-1 lg:grid-cols-[minmax(220px,0.8fr)_minmax(0,1.6fr)] gap-5">
               <div className="space-y-2 max-h-[600px] overflow-y-auto pr-1">
-                <div className="text-xs font-bold text-stone-500">{filteredPatientHistory.length} profile(s)</div>
+                <div className="text-xs font-bold text-stone-500">{filteredPatientHistory.length} {tr("profile(s)")}</div>
                 {filteredPatientHistory.map((profile) => (
                   <button
                     key={`${profile.bookingId}-${profile.createdAt}`}
@@ -7948,7 +7858,7 @@ function AdminPortal({
                     className={`w-full text-left p-3 rounded-xl border transition ${selectedPatientHistory === profile ? 'border-emerald-600 bg-emerald-50' : 'border-stone-200 hover:border-emerald-300'}`}
                   >
                     <div className="font-bold text-sm text-stone-900">{profile.patientName}</div>
-                    <div className="text-[11px] text-stone-500 mt-1">{profile.bookingId} · {profile.createdAt ? new Date(profile.createdAt).toLocaleDateString() : 'No date'}</div>
+                    <div className="text-[11px] text-stone-500 mt-1">{profile.bookingId} · {profile.createdAt ? new Date(profile.createdAt).toLocaleDateString(locale) : tr("No date")}</div>
                     <div className="text-[11px] text-stone-600 mt-1">{profile.email || profile.phone}</div>
                   </button>
                 ))}
@@ -7958,15 +7868,15 @@ function AdminPortal({
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <h3 className="text-xl font-bold text-stone-900">{selectedPatientHistory.patientName}</h3>
-                      <p className="text-xs text-stone-500">{selectedPatientHistory.bookingId} · {selectedPatientHistory.dateOfBirth || 'DOB not provided'} · {selectedPatientHistory.gender || 'Gender not provided'}</p>
+                      <p className="text-xs text-stone-500">{selectedPatientHistory.bookingId} · {selectedPatientHistory.dateOfBirth || tr("DOB not provided")} · {selectedPatientHistory.gender || tr("Gender not provided")}</p>
                     </div>
-                    <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold"><ShieldCheck className="w-3.5 h-3.5" /> Consent: {selectedPatientHistory.consent || 'Not recorded'}</span>
+                    <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 text-xs font-bold"><ShieldCheck className="w-3.5 h-3.5" /> {tr("Consent:")} {selectedPatientHistory.consent || tr("Not recorded")}</span>
                     <button
                       onClick={() => deletePatientHistoryRecord(selectedPatientHistory)}
                       disabled={deletingPatientHistoryKey === `${selectedPatientHistory.bookingId}-${selectedPatientHistory.createdAt}`}
                       className="px-3 py-2 border border-red-300 text-red-700 rounded-xl text-xs font-bold hover:bg-red-50 disabled:opacity-50 whitespace-nowrap"
                     >
-                      {deletingPatientHistoryKey === `${selectedPatientHistory.bookingId}-${selectedPatientHistory.createdAt}` ? 'Clearing...' : 'Clear this record'}
+                      {deletingPatientHistoryKey === `${selectedPatientHistory.bookingId}-${selectedPatientHistory.createdAt}` ? tr("Clearing...") : tr("Clear this record")}
                     </button>
                   </div>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -7975,32 +7885,32 @@ function AdminPortal({
                       ['Pressure', selectedPatientHistory.pressure || 'Not set', 'bg-amber-50 text-amber-800'],
                       ['Pain areas', selectedPatientHistory.painAreas ? 'Recorded' : 'None listed', 'bg-blue-50 text-blue-800'],
                       ['Body areas', selectedPatientHistory.bodyAreas ? selectedPatientHistory.bodyAreas.split(',').length : 0, 'bg-purple-50 text-purple-800'],
-                    ].map(([label, value, style]) => <div key={label} className={`rounded-xl p-3 ${style}`}><div className="text-[10px] font-bold uppercase">{label}</div><div className="text-lg font-black mt-1">{value}</div></div>)}
+                    ].map(([label, value, style]) => <div key={label} className={`rounded-xl p-3 ${style}`}><div className="text-[10px] font-bold uppercase">{tr(label)}</div><div className="text-lg font-black mt-1">{typeof value === "string" ? tr(value) : value}</div></div>)}
                   </div>
                   {selectedConditionFlags.length > 0 && (
                     <div className="p-4 rounded-xl bg-red-50 border border-red-200">
-                      <h4 className="text-xs font-bold text-red-900 mb-2">Reported health conditions</h4>
-                      <div className="flex flex-wrap gap-2">{selectedConditionFlags.map(([key]) => <span key={key} className="px-2 py-1 rounded-lg bg-white border border-red-200 text-[11px] text-red-800">{key}</span>)}</div>
+                      <h4 className="text-xs font-bold text-red-900 mb-2">{tr("Reported health conditions")}</h4>
+                      <div className="flex flex-wrap gap-2">{selectedConditionFlags.map(([key]) => <span key={key} className="px-2 py-1 rounded-lg bg-white border border-red-200 text-[11px] text-red-800">{tr(key)}</span>)}</div>
                     </div>
                   )}
                   <BodyAreaMap value={selectedPatientHistory.bodyAreas} gender={selectedPatientHistory.gender} readOnly />
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
                     <div className="p-4 rounded-xl bg-stone-50 space-y-2">
-                      <h4 className="font-bold text-stone-800">Contact</h4>
-                      <div>{selectedPatientHistory.email || 'No email'}</div><div>{selectedPatientHistory.phone || 'No phone'}</div>
-                      <div>{[selectedPatientHistory.address, selectedPatientHistory.city, selectedPatientHistory.postalCode].filter(Boolean).join(', ') || 'No address'}</div>
+                      <h4 className="font-bold text-stone-800">{tr("Contact")}</h4>
+                      <div>{selectedPatientHistory.email || tr("No email")}</div><div>{selectedPatientHistory.phone || tr("No phone")}</div>
+                      <div>{[selectedPatientHistory.address, selectedPatientHistory.city, selectedPatientHistory.postalCode].filter(Boolean).join(', ') || tr("No address")}</div>
                     </div>
                     <div className="p-4 rounded-xl bg-stone-50 space-y-2">
-                      <h4 className="font-bold text-stone-800">Treatment notes</h4>
-                      <div><strong>Body areas:</strong> {selectedPatientHistory.bodyAreas || 'None listed'}</div>
-                      <div><strong>Pain/discomfort:</strong> {selectedPatientHistory.painAreas || 'None listed'}</div>
-                      <div><strong>Additional details:</strong> {selectedPatientHistory.details || 'None listed'}</div>
+                      <h4 className="font-bold text-stone-800">{tr("Treatment notes")}</h4>
+                      <div><strong>{tr("Body areas:")}</strong> {selectedPatientHistory.bodyAreas ? selectedPatientHistory.bodyAreas.split(",").map((area) => tr(area.trim())).join(", ") : tr("None listed")}</div>
+                      <div><strong>{tr("Pain/discomfort:")}</strong> {selectedPatientHistory.painAreas || tr("None listed")}</div>
+                      <div><strong>{tr("Additional details:")}</strong> {selectedPatientHistory.details || tr("None listed")}</div>
                     </div>
                   </div>
                   <details className="border border-stone-200 rounded-xl p-4">
-                    <summary className="cursor-pointer text-xs font-bold text-stone-700">View full medical questionnaire</summary>
+                    <summary className="cursor-pointer text-xs font-bold text-stone-700">{tr("View full medical questionnaire")}</summary>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-3 text-xs">
-                      {Object.entries(selectedPatientHistory.conditions).map(([key, value]) => <div key={key} className="flex justify-between border-b border-stone-100 py-1"><span>{key}</span><strong>{value || 'Not answered'}</strong></div>)}
+                      {Object.entries(selectedPatientHistory.conditions).map(([key, value]) => <div key={key} className="flex justify-between border-b border-stone-100 py-1"><span>{tr(key)}</span><strong>{tr(value || "Not answered")}</strong></div>)}
                     </div>
                   </details>
                 </div>
@@ -8014,28 +7924,28 @@ function AdminPortal({
         <div className="space-y-5">
           <div className="flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:flex-row sm:items-end sm:justify-between">
             <div>
-              <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-emerald-800">Business intelligence</p>
-              <h2 className="mt-1 text-xl font-bold text-slate-950">Sales & reports</h2>
-              <p className="mt-1 text-sm text-slate-500">Track sales, collections, and appointment trends.</p>
+              <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-emerald-800">{tr("Business intelligence")}</p>
+              <h2 className="mt-1 text-xl font-bold text-slate-950">{tr("Sales & reports")}</h2>
+              <p className="mt-1 text-sm text-slate-500">{tr("Track sales, collections, and appointment trends.")}</p>
             </div>
             <div className="flex flex-wrap items-end gap-3">
-              <label className="text-[11px] font-semibold text-slate-500">From<input type="date" value={reportStartDate} max={reportEndDate} onChange={(event) => setReportStartDate(event.target.value)} className="mt-1 block rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-800" /></label>
-              <label className="text-[11px] font-semibold text-slate-500">To<input type="date" value={reportEndDate} min={reportStartDate} onChange={(event) => setReportEndDate(event.target.value)} className="mt-1 block rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-800" /></label>
-              <button onClick={loadBookingsFromBackend} disabled={isLoadingBookings} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">{isLoadingBookings ? 'Refreshing…' : 'Refresh data'}</button>
+              <label className="text-[11px] font-semibold text-slate-500">{tr("From")}<input type="date" value={reportStartDate} max={reportEndDate} onChange={(event) => setReportStartDate(event.target.value)} className="mt-1 block rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-800" /></label>
+              <label className="text-[11px] font-semibold text-slate-500">{tr("To")}<input type="date" value={reportEndDate} min={reportStartDate} onChange={(event) => setReportEndDate(event.target.value)} className="mt-1 block rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-800" /></label>
+              <button onClick={loadBookingsFromBackend} disabled={isLoadingBookings} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">{isLoadingBookings ? tr("Refreshing…") : tr("Refresh data")}</button>
             </div>
           </div>
-          {bookingLoadError && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{bookingLoadError}</div>}
+          {bookingLoadError && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{tr(bookingLoadError)}</div>}
           <div className="flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:flex-row sm:items-end sm:justify-between">
             <div>
-              <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-emerald-800">Daily reports</p>
-              <h3 className="mt-1 text-base font-bold text-slate-950">Therapist hours &amp; branch audit</h3>
-              <p className="mt-1 text-xs text-slate-500">Download a PDF of therapist hours served, or a per-branch audit of therapist working hours, for a single day.</p>
+              <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-emerald-800">{tr("Daily reports")}</p>
+              <h3 className="mt-1 text-base font-bold text-slate-950">{tr("Therapist hours & branch audit")}</h3>
+              <p className="mt-1 text-xs text-slate-500">{tr("Download a PDF of therapist hours served, or a per-branch audit of therapist working hours, for a single day.")}</p>
             </div>
             <div className="flex flex-wrap items-end gap-3">
-              <label className="text-[11px] font-semibold text-slate-500">Report date<input type="date" value={dailyReportDate} onChange={(event) => setDailyReportDate(event.target.value)} className="mt-1 block rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-800" /></label>
-              <label className="text-[11px] font-semibold text-slate-500">Branch<select value={dailyReportBranchId} onChange={(event) => setDailyReportBranchId(event.target.value)} className="mt-1 block rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-800"><option value="all">All branches</option>{branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}</select></label>
-              <button type="button" onClick={downloadTherapistHoursPdf} className="inline-flex items-center gap-2 rounded-lg bg-emerald-950 px-3.5 py-2.5 text-xs font-bold text-white hover:bg-emerald-800"><Download className="h-3.5 w-3.5" />Therapist hours (PDF)</button>
-              <button type="button" onClick={downloadBranchAuditPdf} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3.5 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-50"><Download className="h-3.5 w-3.5" />Branch audit (PDF)</button>
+              <label className="text-[11px] font-semibold text-slate-500">{tr("Report date")}<input type="date" value={dailyReportDate} onChange={(event) => setDailyReportDate(event.target.value)} className="mt-1 block rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-800" /></label>
+              <label className="text-[11px] font-semibold text-slate-500">{tr("Branch")}<select value={dailyReportBranchId} onChange={(event) => setDailyReportBranchId(event.target.value)} className="mt-1 block rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-800"><option value="all">{tr("All branches")}</option>{branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}</select></label>
+              <button type="button" onClick={downloadTherapistHoursPdf} className="inline-flex items-center gap-2 rounded-lg bg-emerald-950 px-3.5 py-2.5 text-xs font-bold text-white hover:bg-emerald-800"><Download className="h-3.5 w-3.5" />{tr("Therapist hours (PDF)")}</button>
+              <button type="button" onClick={downloadBranchAuditPdf} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3.5 py-2.5 text-xs font-bold text-slate-700 hover:bg-slate-50"><Download className="h-3.5 w-3.5" />{tr("Branch audit (PDF)")}</button>
             </div>
           </div>
           {(() => {
@@ -8051,7 +7961,7 @@ function AdminPortal({
               const day = new Date(`${reportEndDate}T12:00:00`);
               day.setDate(day.getDate() - (6 - index));
               const key = day.toISOString().slice(0, 10);
-              return { key, label: day.toLocaleDateString('en-CA', { month: 'short', day: 'numeric' }), value: rows.filter((booking) => booking.date === key).reduce((sum, booking) => sum + (Number(booking.paidAmount) || 0), 0) };
+              return { key, label: day.toLocaleDateString(locale, { month: 'short', day: 'numeric' }), value: rows.filter((booking) => booking.date === key).reduce((sum, booking) => sum + (Number(booking.paidAmount) || 0), 0) };
             });
             const maxTrend = Math.max(1, ...trend.map((item) => item.value));
             const serviceTotals = Object.values(rows.reduce((totals, booking) => {
@@ -8070,26 +7980,26 @@ function AdminPortal({
             return (
               <>
                 <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                  {stats.map(([label, value, style, Icon]) => <div key={label} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="flex items-center justify-between text-xs font-semibold text-slate-500">{label}<span className={`rounded-xl p-2 ${style}`}><Icon className="h-4 w-4" /></span></div><div className="mt-3 text-2xl font-bold tracking-tight text-slate-950">{label === 'Appointments' ? value : `$${Number(value).toFixed(2)}`}</div><p className="mt-1 text-[11px] text-slate-400">Selected reporting period</p></div>)}
+                  {stats.map(([label, value, style, Icon]) => <div key={label} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"><div className="flex items-center justify-between text-xs font-semibold text-slate-500">{tr(label)}<span className={`rounded-xl p-2 ${style}`}><Icon className="h-4 w-4" /></span></div><div className="mt-3 text-2xl font-bold tracking-tight text-slate-950">{label === 'Appointments' ? value : tr("${value0}", { value0: Number(value).toFixed(2) })}</div><p className="mt-1 text-[11px] text-slate-400">{tr("Selected reporting period")}</p></div>)}
                 </div>
                 <div className="grid gap-5 xl:grid-cols-[minmax(0,1.4fr)_minmax(300px,0.8fr)]">
                   <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                    <div className="flex items-start justify-between"><div><h3 className="font-bold text-slate-900">Payments collected</h3><p className="mt-1 text-xs text-slate-500">Daily totals · last 7 days in this period</p></div><span className="text-xs font-bold text-emerald-800">${collected.toFixed(2)}</span></div>
+                    <div className="flex items-start justify-between"><div><h3 className="font-bold text-slate-900">{tr("Payments collected")}</h3><p className="mt-1 text-xs text-slate-500">{tr("Daily totals · last 7 days in this period")}</p></div><span className="text-xs font-bold text-emerald-800">${collected.toFixed(2)}</span></div>
                     <div className="mt-7 flex h-48 items-end gap-3 border-b border-slate-100 px-1">
-                      {trend.map((item) => <div key={item.key} className="flex h-full flex-1 flex-col items-center justify-end gap-2"><div className="flex w-full flex-1 items-end"><div title={`$${item.value.toFixed(2)}`} className="w-full rounded-t-md bg-gradient-to-t from-emerald-800 to-emerald-500 transition hover:from-emerald-700" style={{ height: `${Math.max(item.value ? 8 : 2, (item.value / maxTrend) * 100)}%` }} /></div><span className="pb-2 text-[10px] text-slate-400">{item.label}</span></div>)}
+                      {trend.map((item) => <div key={item.key} className="flex h-full flex-1 flex-col items-center justify-end gap-2"><div className="flex w-full flex-1 items-end"><div title={`$${item.value.toFixed(2)}`} className="w-full rounded-t-md bg-gradient-to-t from-emerald-800 to-emerald-500 transition hover:from-emerald-700" style={{ height: `${Math.max(item.value ? 8 : 2, (item.value / maxTrend) * 100)}%` }} /></div><span className="pb-2 text-[10px] text-slate-400">{tr(item.label)}</span></div>)}
                     </div>
-                    <p className="mt-4 text-xs text-slate-500">Estimated HST collected: <strong className="text-slate-800">${taxCollected.toFixed(2)}</strong></p>
+                    <p className="mt-4 text-xs text-slate-500">{tr("Estimated HST collected:")} <strong className="text-slate-800">${taxCollected.toFixed(2)}</strong></p>
                   </section>
                   <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                    <h3 className="font-bold text-slate-900">Top services</h3><p className="mt-1 text-xs text-slate-500">By gross sales in selected period</p>
+                    <h3 className="font-bold text-slate-900">{tr("Top services")}</h3><p className="mt-1 text-xs text-slate-500">{tr("By gross sales in selected period")}</p>
                     <div className="mt-5 space-y-4">
-                      {serviceTotals.length ? serviceTotals.map((service) => <div key={service.name}><div className="mb-1.5 flex justify-between gap-3 text-xs"><span className="truncate font-semibold text-slate-700">{service.name}</span><span className="shrink-0 font-bold text-slate-900">${service.revenue.toFixed(2)}</span></div><div className="h-1.5 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-emerald-700" style={{ width: `${Math.max(5, (service.revenue / Math.max(1, serviceTotals[0].revenue)) * 100)}%` }} /></div><p className="mt-1 text-[10px] text-slate-400">{service.count} appointment{service.count === 1 ? '' : 's'}</p></div>) : <p className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">No sales recorded for this date range.</p>}
+                      {serviceTotals.length ? serviceTotals.map((service) => <div key={service.name}><div className="mb-1.5 flex justify-between gap-3 text-xs"><span className="truncate font-semibold text-slate-700">{tr(service.name)}</span><span className="shrink-0 font-bold text-slate-900">${service.revenue.toFixed(2)}</span></div><div className="h-1.5 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-emerald-700" style={{ width: `${Math.max(5, (service.revenue / Math.max(1, serviceTotals[0].revenue)) * 100)}%` }} /></div><p className="mt-1 text-[10px] text-slate-400">{service.count} {tr("appointment")}{service.count === 1 ? '' : tr("s")}</p></div>) : <p className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">{tr("No sales recorded for this date range.")}</p>}
                     </div>
                   </section>
                 </div>
                 <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                  <div className="mb-4 flex items-center justify-between"><div><h3 className="font-bold text-slate-900">Recent sales</h3><p className="mt-1 text-xs text-slate-500">Appointment totals and payments received</p></div><span className="rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold text-slate-600">{rows.length} records</span></div>
-                  <div className="overflow-x-auto"><table className="w-full min-w-[700px] text-left text-xs"><thead><tr className="border-b border-slate-100 text-[10px] uppercase tracking-wider text-slate-400"><th className="py-3 pr-4">Date / receipt</th><th className="py-3 pr-4">Patient</th><th className="py-3 pr-4">Service</th><th className="py-3 pr-4">Location</th><th className="py-3 pr-4 text-right">Paid</th><th className="py-3 text-right">Total</th></tr></thead><tbody>{rows.slice().sort((a, b) => `${b.date} ${b.time}`.localeCompare(`${a.date} ${a.time}`)).slice(0, 12).map((booking) => <tr key={booking.id} className="border-b border-slate-50 text-slate-600"><td className="py-3 pr-4"><span className="font-semibold text-slate-800">{booking.date}</span><span className="block font-mono text-[10px] text-slate-400">{booking.id}</span></td><td className="py-3 pr-4">{booking.customerName}</td><td className="py-3 pr-4">{booking.serviceName}</td><td className="py-3 pr-4">{booking.branchName}</td><td className="py-3 pr-4 text-right font-semibold">${(Number(booking.paidAmount) || 0).toFixed(2)}</td><td className="py-3 text-right font-bold text-slate-900">${(Number(booking.total) || 0).toFixed(2)}</td></tr>)}</tbody></table>{rows.length === 0 && <p className="py-8 text-center text-sm text-slate-500">No bookings in this reporting period.</p>}</div>
+                  <div className="mb-4 flex items-center justify-between"><div><h3 className="font-bold text-slate-900">{tr("Recent sales")}</h3><p className="mt-1 text-xs text-slate-500">{tr("Appointment totals and payments received")}</p></div><span className="rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold text-slate-600">{rows.length} {tr("records")}</span></div>
+                  <div className="overflow-x-auto"><table className="w-full min-w-[700px] text-left text-xs"><thead><tr className="border-b border-slate-100 text-[10px] uppercase tracking-wider text-slate-400"><th className="py-3 pr-4">{tr("Date / receipt")}</th><th className="py-3 pr-4">{tr("Patient")}</th><th className="py-3 pr-4">{tr("Service")}</th><th className="py-3 pr-4">{tr("Location")}</th><th className="py-3 pr-4 text-right">{tr("Paid")}</th><th className="py-3 text-right">{tr("Total")}</th></tr></thead><tbody>{rows.slice().sort((a, b) => `${b.date} ${b.time}`.localeCompare(`${a.date} ${a.time}`)).slice(0, 12).map((booking) => <tr key={booking.id} className="border-b border-slate-50 text-slate-600"><td className="py-3 pr-4"><span className="font-semibold text-slate-800">{booking.date}</span><span className="block font-mono text-[10px] text-slate-400">{booking.id}</span></td><td className="py-3 pr-4">{booking.customerName}</td><td className="py-3 pr-4">{tr(booking.serviceName)}</td><td className="py-3 pr-4">{booking.branchName}</td><td className="py-3 pr-4 text-right font-semibold">${(Number(booking.paidAmount) || 0).toFixed(2)}</td><td className="py-3 text-right font-bold text-slate-900">${(Number(booking.total) || 0).toFixed(2)}</td></tr>)}</tbody></table>{rows.length === 0 && <p className="py-8 text-center text-sm text-slate-500">{tr("No bookings in this reporting period.")}</p>}</div>
                 </section>
               </>
             );
@@ -8101,12 +8011,12 @@ function AdminPortal({
         <div className="fixed inset-0 z-[70] flex items-center justify-center overflow-y-auto bg-slate-950/55 p-4 backdrop-blur-sm" onClick={(event) => { if (event.target === event.currentTarget) setSelectedCalendarEvent(null); }}>
           <section role="dialog" aria-modal="true" aria-labelledby="appointment-receipt-title" className="my-auto w-full max-w-xl overflow-hidden rounded-2xl bg-white shadow-2xl">
             <div className="flex items-start justify-between gap-4 bg-gradient-to-r from-slate-950 to-emerald-900 px-5 py-5 text-white sm:px-6">
-              <div><p className="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-200">Appointment details</p><h2 id="appointment-receipt-title" className="mt-1 text-lg font-bold">{issuedReceipt?.booking?.customerName || selectedCalendarEvent.booking?.customerName || selectedCalendarEvent.summary}</h2><p className="mt-1 text-xs text-emerald-100/80">{selectedCalendarEvent.booking?.id || 'Calendar event'} · {selectedCalendarEvent.timeRange || selectedCalendarEvent.localTime}</p></div>
-              <button type="button" aria-label="Close appointment details" onClick={() => setSelectedCalendarEvent(null)} className="rounded-lg p-1.5 text-white/80 hover:bg-white/10 hover:text-white"><X className="h-5 w-5" /></button>
+              <div><p className="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-200">{tr("Appointment details")}</p><h2 id="appointment-receipt-title" className="mt-1 text-lg font-bold">{issuedReceipt?.booking?.customerName || selectedCalendarEvent.booking?.customerName || selectedCalendarEvent.summary}</h2><p className="mt-1 text-xs text-emerald-100/80">{selectedCalendarEvent.booking?.id || tr("Calendar event")} · {formatTime(selectedCalendarEvent.timeRange || selectedCalendarEvent.localTime)}</p></div>
+              <button type="button" aria-label={tr("Close appointment details")} onClick={() => setSelectedCalendarEvent(null)} className="rounded-lg p-1.5 text-white/80 hover:bg-white/10 hover:text-white"><X className="h-5 w-5" /></button>
             </div>
             <div className="space-y-5 p-5 sm:p-6">
-              {receiptError && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-sm text-rose-800">{receiptError}</div>}
-              {receiptNotice && <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm text-emerald-900">{receiptNotice}</div>}
+              {receiptError && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-sm text-rose-800">{tr(receiptError)}</div>}
+              {receiptNotice && <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm text-emerald-900">{tr(receiptNotice)}</div>}
               {(() => {
                 const booking = issuedReceipt?.booking || selectedCalendarEvent.booking;
                 const paidInFull = booking && (Number(booking.total) > 0 || Boolean(booking.receiptNumber)) && Number(booking.paidAmount) + 0.005 >= Number(booking.total);
@@ -8114,8 +8024,7 @@ function AdminPortal({
                 return booking ? (
                   <>
                     {booking.autoLinked && (
-                      <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-950">
-                        This appointment was booked directly on the calendar and was automatically linked to a new booking record. {needsDetails ? 'Add the missing details below to enable receipt issuing.' : ''}
+                      <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-950">{tr("This appointment was booked directly on the calendar and was automatically linked to a new booking record.")}{needsDetails ? tr("Add the missing details below to enable receipt issuing.") : ''}
                       </div>
                     )}
                     <div className="grid gap-3 sm:grid-cols-2">
@@ -8128,7 +8037,7 @@ function AdminPortal({
                         ['Service date', booking.date],
                         ['Appointment time', selectedCalendarEvent.timeRange || selectedCalendarEvent.localTime],
                         ['Payment method', booking.paymentOption || 'Not recorded'],
-                      ].map(([label, value]) => <div key={label} className="rounded-xl border border-slate-100 bg-slate-50 px-3.5 py-3"><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{label}</p><p className="mt-1 break-words text-sm font-semibold text-slate-800">{value || 'Not recorded'}</p></div>)}
+                      ].map(([label, value]) => <div key={label} className="rounded-xl border border-slate-100 bg-slate-50 px-3.5 py-3"><p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{tr(label)}</p><p className="mt-1 break-words text-sm font-semibold text-slate-800">{label === "Appointment time" ? formatTime(value || "") : ["Service", "Payment method", "Email", "Phone"].includes(label) ? tr(value || "Not recorded") : value || tr("Not recorded")}</p></div>)}
                     </div>
                     {(() => {
                       const currentTherapist = booking.therapistName || selectedCalendarEvent.therapistName || '';
@@ -8141,19 +8050,19 @@ function AdminPortal({
                         <div className="rounded-xl border border-slate-200 px-3.5 py-3">
                           <div className="flex flex-wrap items-center justify-between gap-2">
                             <div>
-                              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Therapist</p>
-                              <p className="mt-1 inline-flex items-center gap-1.5 break-words text-sm font-semibold text-slate-800"><UserRound className="h-3.5 w-3.5 shrink-0 text-slate-400" />{currentTherapist || 'Unassigned'}</p>
+                              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{tr("Therapist")}</p>
+                              <p className="mt-1 inline-flex items-center gap-1.5 break-words text-sm font-semibold text-slate-800"><UserRound className="h-3.5 w-3.5 shrink-0 text-slate-400" />{currentTherapist || tr("Unassigned")}</p>
                             </div>
                             {!isCancelled && !issuedReceipt && (
                               <div className="flex flex-wrap items-center gap-2">
                                 <select
                                   value={therapistReassignTo}
                                   onChange={(event) => setTherapistReassignTo(event.target.value)}
-                                  aria-label="Reassign this appointment to another therapist"
+                                  aria-label={tr("Reassign this appointment to another therapist")}
                                   className="rounded-lg border border-slate-300 px-2.5 py-2 text-xs text-slate-800"
                                 >
-                                  <option value="">Change therapist…</option>
-                                  {currentTherapist !== 'Any Available' && <option value="Any Available">Any Available</option>}
+                                  <option value="">{tr("Change therapist…")}</option>
+                                  {currentTherapist !== 'Any Available' && <option value="Any Available">{tr("Any Available")}</option>}
                                   {options.map((name) => <option key={name} value={name}>{name}</option>)}
                                 </select>
                                 <button
@@ -8163,46 +8072,41 @@ function AdminPortal({
                                   className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-900 px-3 py-2 text-xs font-bold text-white transition hover:bg-emerald-800 disabled:opacity-50"
                                 >
                                   {isReassigningTherapist ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
-                                  {isReassigningTherapist ? 'Saving…' : 'Assign'}
+                                  {isReassigningTherapist ? tr("Saving…") : tr("Assign")}
                                 </button>
                               </div>
                             )}
                           </div>
                           {!isCancelled && !issuedReceipt && (
-                            <p className="mt-2 text-[11px] leading-4 text-slate-500">Only therapists who are free at this date and time can be assigned. The calendar event is updated to match.</p>
+                            <p className="mt-2 text-[11px] leading-4 text-slate-500">{tr("Only therapists who are free at this date and time can be assigned. The calendar event is updated to match.")}</p>
                           )}
                         </div>
                       );
                     })()}
                     <div className="rounded-xl border border-slate-200 px-4 py-3">
-                      <div className="flex justify-between text-sm text-slate-500"><span>Amount paid</span><span>${Number(booking.paidAmount || 0).toFixed(2)}</span></div>
-                      <div className="mt-2 flex justify-between text-sm font-bold text-slate-900"><span>Appointment total</span><span>${Number(booking.total || 0).toFixed(2)}</span></div>
+                      <div className="flex justify-between text-sm text-slate-500"><span>{tr("Amount paid")}</span><span>${Number(booking.paidAmount || 0).toFixed(2)}</span></div>
+                      <div className="mt-2 flex justify-between text-sm font-bold text-slate-900"><span>{tr("Appointment total")}</span><span>${Number(booking.total || 0).toFixed(2)}</span></div>
                     </div>
                     {!issuedReceipt && needsDetails && linkEventForm && (
                       <form onSubmit={completeBookingDetails} className="space-y-3 rounded-xl border border-slate-200 p-4">
                         <div className="grid gap-3 sm:grid-cols-2">
-                          <label className="text-xs font-semibold text-slate-600">Patient email
-                            <input required type="email" value={linkEventForm.email} onChange={(event) => setLinkEventForm((current) => ({ ...current, email: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                          <label className="text-xs font-semibold text-slate-600">{tr("Patient email")}<input required type="email" value={linkEventForm.email} onChange={(event) => setLinkEventForm((current) => ({ ...current, email: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
                           </label>
-                          <label className="text-xs font-semibold text-slate-600">Phone
-                            <input value={linkEventForm.phone} onChange={(event) => setLinkEventForm((current) => ({ ...current, phone: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                          <label className="text-xs font-semibold text-slate-600">{tr("Phone")}<input value={linkEventForm.phone} onChange={(event) => setLinkEventForm((current) => ({ ...current, phone: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
                           </label>
-                          <label className="text-xs font-semibold text-slate-600">Payment method
-                            <select value={linkEventForm.paymentOption} onChange={(event) => setLinkEventForm((current) => ({ ...current, paymentOption: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
-                              <option>Cash</option>
-                              <option>Card</option>
-                              <option>E-transfer</option>
-                              <option>Other</option>
+                          <label className="text-xs font-semibold text-slate-600">{tr("Payment method")}<select value={linkEventForm.paymentOption} onChange={(event) => setLinkEventForm((current) => ({ ...current, paymentOption: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+                              <option>{tr("Cash")}</option>
+                              <option>{tr("Card")}</option>
+                              <option>{tr("E-transfer")}</option>
+                              <option>{tr("Other")}</option>
                             </select>
                           </label>
-                          <label className="text-xs font-semibold text-slate-600">Appointment total ($)
-                            <input required type="number" min="0" step="0.01" value={linkEventForm.total} onChange={(event) => setLinkEventForm((current) => ({ ...current, total: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                          <label className="text-xs font-semibold text-slate-600">{tr("Appointment total ($)")}<input required type="number" min="0" step="0.01" value={linkEventForm.total} onChange={(event) => setLinkEventForm((current) => ({ ...current, total: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
                           </label>
-                          <label className="text-xs font-semibold text-slate-600">Amount paid ($)
-                            <input type="number" min="0" step="0.01" value={linkEventForm.paidAmount} onChange={(event) => setLinkEventForm((current) => ({ ...current, paidAmount: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+                          <label className="text-xs font-semibold text-slate-600">{tr("Amount paid ($)")}<input type="number" min="0" step="0.01" value={linkEventForm.paidAmount} onChange={(event) => setLinkEventForm((current) => ({ ...current, paidAmount: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
                           </label>
                         </div>
-                        <button type="submit" disabled={isLinkingEvent} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-950 px-4 py-2.5 text-xs font-bold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50">{isLinkingEvent ? 'Saving…' : 'Save details'}</button>
+                        <button type="submit" disabled={isLinkingEvent} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-950 px-4 py-2.5 text-xs font-bold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50">{isLinkingEvent ? tr("Saving…") : tr("Save details")}</button>
                       </form>
                     )}
                     {!issuedReceipt && !needsDetails && booking.id && Number(booking.total) > 0 && (
@@ -8215,43 +8119,41 @@ function AdminPortal({
                           className="mt-0.5 h-4 w-4 rounded border-slate-300 text-emerald-800 focus:ring-emerald-700 disabled:opacity-70"
                         />
                         <span>
-                          <span className="block text-sm font-semibold text-slate-900">{paidInFull ? 'Paid already' : 'Paid already — mark as fully paid'}</span>
-                          <span className="mt-0.5 block text-xs leading-5 text-slate-500">{isMarkingPaid ? 'Recording payment…' : paidInFull ? 'Full payment is recorded for this booking.' : `Check this if payment has been received. It records $${Number(booking.total).toFixed(2)} as paid and enables receipt issuing.`}</span>
+                          <span className="block text-sm font-semibold text-slate-900">{paidInFull ? tr("Paid already") : tr("Paid already — mark as fully paid")}</span>
+                          <span className="mt-0.5 block text-xs leading-5 text-slate-500">{isMarkingPaid ? tr("Recording payment…") : paidInFull ? tr("Full payment is recorded for this booking.") : tr("Check this if payment has been received. It records ${value0} as paid and enables receipt issuing.", { value0: Number(booking.total).toFixed(2) })}</span>
                         </span>
                       </label>
                     )}
                     {issuedReceipt && (
                       <div className="rounded-xl border border-emerald-200 bg-emerald-50/60 p-4">
-                        <div className="flex items-center justify-between"><div><p className="text-[10px] font-bold uppercase tracking-wider text-emerald-800">Receipt issued</p><p className="mt-1 font-mono text-sm font-bold text-slate-900">{issuedReceipt.receipt.number}</p></div><CheckCircle2 className="h-5 w-5 text-emerald-700" /></div>
-                        {issuedReceipt.receipt.membershipDiscountAmount > 0 && <div className="mt-3 flex justify-between border-t border-emerald-100 pt-3 text-sm"><span className="text-slate-600">{issuedReceipt.receipt.membershipDiscountLabel} ({issuedReceipt.receipt.membershipDiscountPercent}%)</span><span>-${issuedReceipt.receipt.membershipDiscountAmount.toFixed(2)}</span></div>}
-                        {issuedReceipt.receipt.loyaltyDiscount > 0 && <div className="mt-3 flex justify-between border-t border-emerald-100 pt-3 text-sm"><span className="text-slate-600">Loyalty discount · {issuedReceipt.receipt.pointsRedeemed.toLocaleString()} points</span><span>-${issuedReceipt.receipt.loyaltyDiscount.toFixed(2)}</span></div>}
-                        {issuedReceipt.receipt.manualDiscount > 0 && <div className="mt-3 flex justify-between border-t border-emerald-100 pt-3 text-sm"><span className="text-slate-600">Manual discount</span><span>-${issuedReceipt.receipt.manualDiscount.toFixed(2)}</span></div>}
-                        <div className="mt-3 flex justify-between border-t border-emerald-100 pt-3 text-sm"><span className="text-slate-600">{issuedReceipt.receipt.taxLabel}</span><span>${issuedReceipt.receipt.tax.toFixed(2)}</span></div>
-                        <div className="mt-2 flex justify-between text-sm font-bold"><span>Total paid</span><span>${issuedReceipt.receipt.total.toFixed(2)}</span></div>
-                        {issuedReceipt.receipt.reconciliation && <p role="status" className="mt-3 text-xs text-emerald-900">Reconciliation confirmed. Booking total and paid amount synced to the database: ${issuedReceipt.receipt.total.toFixed(2)}.</p>}
-                        {issuedReceipt.receipt.overpaymentAmount > 0 && <p role="status" className="mt-3 rounded-lg bg-amber-50 p-3 text-xs text-amber-900">Recorded payment: ${issuedReceipt.receipt.recordedPaidAmount.toFixed(2)}. Excess recorded payment: ${issuedReceipt.receipt.overpaymentAmount.toFixed(2)}. Reconcile manually; no automatic refund has been issued.</p>}
-                        {issuedReceipt.receipt.packageUsage && <p className="mt-3 rounded-lg bg-emerald-100 p-3 text-xs text-emerald-950">{issuedReceipt.receipt.packageUsage.description} Allocated prepaid value: ${issuedReceipt.receipt.packageUsage.allocatedTotal.toFixed(2)}. New payment: $0.00.</p>}
-                        <p className="mt-3 text-xs text-emerald-900">Loyalty balance: {issuedReceipt.receipt.pointsBalance.toLocaleString()} points.</p>
-                        <p className="mt-3 text-xs text-emerald-900">Receipt email sent to {issuedReceipt.booking.email}.</p>
+                        <div className="flex items-center justify-between"><div><p className="text-[10px] font-bold uppercase tracking-wider text-emerald-800">{tr("Receipt issued")}</p><p className="mt-1 font-mono text-sm font-bold text-slate-900">{issuedReceipt.receipt.number}</p></div><CheckCircle2 className="h-5 w-5 text-emerald-700" /></div>
+                        {issuedReceipt.receipt.membershipDiscountAmount > 0 && <div className="mt-3 flex justify-between border-t border-emerald-100 pt-3 text-sm"><span className="text-slate-600">{tr(issuedReceipt.receipt.membershipDiscountLabel)} ({issuedReceipt.receipt.membershipDiscountPercent}%)</span><span>-${issuedReceipt.receipt.membershipDiscountAmount.toFixed(2)}</span></div>}
+                        {issuedReceipt.receipt.loyaltyDiscount > 0 && <div className="mt-3 flex justify-between border-t border-emerald-100 pt-3 text-sm"><span className="text-slate-600">{tr("Loyalty discount ·")} {issuedReceipt.receipt.pointsRedeemed.toLocaleString(locale)} {tr("points")}</span><span>-${issuedReceipt.receipt.loyaltyDiscount.toFixed(2)}</span></div>}
+                        {issuedReceipt.receipt.manualDiscount > 0 && <div className="mt-3 flex justify-between border-t border-emerald-100 pt-3 text-sm"><span className="text-slate-600">{tr("Manual discount")}</span><span>-${issuedReceipt.receipt.manualDiscount.toFixed(2)}</span></div>}
+                        <div className="mt-3 flex justify-between border-t border-emerald-100 pt-3 text-sm"><span className="text-slate-600">{tr(issuedReceipt.receipt.taxLabel)}</span><span>${issuedReceipt.receipt.tax.toFixed(2)}</span></div>
+                        <div className="mt-2 flex justify-between text-sm font-bold"><span>{tr("Total paid")}</span><span>${issuedReceipt.receipt.total.toFixed(2)}</span></div>
+                        {issuedReceipt.receipt.reconciliation && <p role="status" className="mt-3 text-xs text-emerald-900">{tr("Reconciliation confirmed. Booking total and paid amount synced to the database: $")}{issuedReceipt.receipt.total.toFixed(2)}.</p>}
+                        {issuedReceipt.receipt.overpaymentAmount > 0 && <p role="status" className="mt-3 rounded-lg bg-amber-50 p-3 text-xs text-amber-900">{tr("Recorded payment: $")}{issuedReceipt.receipt.recordedPaidAmount.toFixed(2)}{tr(". Excess recorded payment: $")}{issuedReceipt.receipt.overpaymentAmount.toFixed(2)}{tr(". Reconcile manually; no automatic refund has been issued.")}</p>}
+                        {issuedReceipt.receipt.packageUsage && <p className="mt-3 rounded-lg bg-emerald-100 p-3 text-xs text-emerald-950">{issuedReceipt.receipt.packageUsage.description} {tr("Allocated prepaid value: $")}{issuedReceipt.receipt.packageUsage.allocatedTotal.toFixed(2)}{tr(". New payment: $0.00.")}</p>}
+                        <p className="mt-3 text-xs text-emerald-900">{tr("Loyalty balance:")} {issuedReceipt.receipt.pointsBalance.toLocaleString(locale)} {tr("points.")}</p>
+                        <p className="mt-3 text-xs text-emerald-900">{tr("Receipt email sent to")} {issuedReceipt.booking.email}.</p>
                       </div>
                     )}
                     {!issuedReceipt && !needsDetails && (
-                      <label className="block rounded-xl border border-slate-200 p-4 text-xs font-semibold text-slate-600">
-                        Manual discount ($) — optional
-                        <input type="number" min="0" step="0.01" placeholder="0.00" value={booking.receiptNumber ? booking.receiptManualDiscount || 0 : manualReceiptDiscount} disabled={isIssuingReceipt || Boolean(booking.receiptNumber) || /prepaid package redemption/i.test(booking.paymentOption || '')} onChange={(event) => { setManualReceiptDiscount(event.target.value); setConfirmReceiptReconciliation(false); }} className="mt-2 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-50" />
-                        <span className="mt-2 block font-normal leading-5">{booking.receiptNumber ? 'An issued receipt keeps its original discount.' : /prepaid package redemption/i.test(booking.paymentOption || '') ? 'Verified prepaid package allocations cannot be discounted.' : 'Deducted before HST, after membership and loyalty discounts. Leave blank for no discount. Confirm reconciliation below to update the booking total and paid amount when issuing the receipt.'}</span>
+                      <label className="block rounded-xl border border-slate-200 p-4 text-xs font-semibold text-slate-600">{tr("Manual discount ($) — optional")}<input type="number" min="0" step="0.01" placeholder="0.00" value={booking.receiptNumber ? booking.receiptManualDiscount || 0 : manualReceiptDiscount} disabled={isIssuingReceipt || Boolean(booking.receiptNumber) || /prepaid package redemption/i.test(booking.paymentOption || '')} onChange={(event) => { setManualReceiptDiscount(event.target.value); setConfirmReceiptReconciliation(false); }} className="mt-2 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-50" />
+                        <span className="mt-2 block font-normal leading-5">{booking.receiptNumber ? tr("An issued receipt keeps its original discount.") : /prepaid package redemption/i.test(booking.paymentOption || '') ? tr("Verified prepaid package allocations cannot be discounted.") : tr("Deducted before HST, after membership and loyalty discounts. Leave blank for no discount. Confirm reconciliation below to update the booking total and paid amount when issuing the receipt.")}</span>
                       </label>
                     )}
                     {!issuedReceipt && !needsDetails && !booking.receiptNumber && Number(manualReceiptDiscount) > 0 && (
                       <label className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4">
                         <input type="checkbox" checked={confirmReceiptReconciliation} disabled={isIssuingReceipt} onChange={(event) => setConfirmReceiptReconciliation(event.target.checked)} className="mt-0.5 h-4 w-4" />
-                        <span className="text-xs text-amber-950"><strong className="block">Confirm reconciliation</strong><span className="mt-1 block leading-5">I confirm any payment adjustment or refund has been handled. Issuing the receipt will save the discounted total and paid amount to the database and refresh the bookings list. No Square refund is sent automatically.</span></span>
+                        <span className="text-xs text-amber-950"><strong className="block">{tr("Confirm reconciliation")}</strong><span className="mt-1 block leading-5">{tr("I confirm any payment adjustment or refund has been handled. Issuing the receipt will save the discounted total and paid amount to the database and refresh the bookings list. No Square refund is sent automatically.")}</span></span>
                       </label>
                     )}
                     {!issuedReceipt && !needsDetails && (
                       <div className="flex flex-col-reverse gap-3 border-t border-slate-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
-                        <p className="text-xs leading-5 text-slate-500">{!paidInFull ? 'Receipts are available only after full payment is recorded.' : !booking.email ? 'Add a valid patient email to the booking before issuing a receipt.' : !booking.id ? 'This appointment is not linked to a booking record.' : 'A receipt will be emailed to the patient and recorded with this booking.'}</p>
-                        <button type="button" disabled={isIssuingReceipt || !paidInFull || !booking.email || !booking.id || (!booking.receiptNumber && Number(manualReceiptDiscount) > 0 && !confirmReceiptReconciliation)} onClick={() => issueReceipt(booking.id)} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-emerald-950 px-4 py-2.5 text-xs font-bold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"><ReceiptText className="h-4 w-4" />{isIssuingReceipt ? 'Issuing…' : 'Issue & email receipt'}</button>
+                        <p className="text-xs leading-5 text-slate-500">{!paidInFull ? tr("Receipts are available only after full payment is recorded.") : !booking.email ? tr("Add a valid patient email to the booking before issuing a receipt.") : !booking.id ? tr("This appointment is not linked to a booking record.") : tr("A receipt will be emailed to the patient and recorded with this booking.")}</p>
+                        <button type="button" disabled={isIssuingReceipt || !paidInFull || !booking.email || !booking.id || (!booking.receiptNumber && Number(manualReceiptDiscount) > 0 && !confirmReceiptReconciliation)} onClick={() => issueReceipt(booking.id)} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-emerald-950 px-4 py-2.5 text-xs font-bold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"><ReceiptText className="h-4 w-4" />{isIssuingReceipt ? tr("Issuing…") : tr("Issue & email receipt")}</button>
                       </div>
                     )}
                     {booking.id && (
@@ -8264,13 +8166,13 @@ function AdminPortal({
                     )}
                     {booking.id && (
                       <div className="space-y-3 border-t border-slate-100 pt-4">
-                        <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500">Notes</h4>
-                        {appointmentNotesError && <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">{appointmentNotesError}</div>}
+                        <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500">{tr("Notes")}</h4>
+                        {appointmentNotesError && <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800">{tr(appointmentNotesError)}</div>}
                         <div className="flex items-start gap-2">
                           <textarea
                             value={newAppointmentNote}
                             onChange={(event) => setNewAppointmentNote(event.target.value)}
-                            placeholder="Log a quick note about this appointment..."
+                            placeholder={tr("Log a quick note about this appointment...")}
                             rows={2}
                             maxLength={2000}
                             className="flex-1 rounded-xl border border-slate-300 px-3 py-2 text-sm resize-none"
@@ -8281,19 +8183,19 @@ function AdminPortal({
                             onClick={addAppointmentNote}
                             className="shrink-0 rounded-xl bg-emerald-950 px-3.5 py-2.5 text-xs font-bold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"
                           >
-                            {isSavingAppointmentNote ? 'Saving…' : 'Add note'}
+                            {isSavingAppointmentNote ? tr("Saving…") : tr("Add note")}
                           </button>
                         </div>
                         {isLoadingAppointmentNotes ? (
-                          <p className="text-xs text-slate-400">Loading notes…</p>
+                          <p className="text-xs text-slate-400">{tr("Loading notes…")}</p>
                         ) : appointmentNotes.length === 0 ? (
-                          <p className="text-xs text-slate-400">No notes logged for this appointment yet.</p>
+                          <p className="text-xs text-slate-400">{tr("No notes logged for this appointment yet.")}</p>
                         ) : (
                           <ul className="max-h-48 space-y-2 overflow-y-auto pr-1">
                             {appointmentNotes.map((item) => (
                               <li key={item.noteId} className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-xs">
                                 <p className="whitespace-pre-wrap text-slate-800">{item.note}</p>
-                                <p className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">{item.createdBy} · {item.createdAt ? new Date(item.createdAt).toLocaleString() : ''}</p>
+                                <p className="mt-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400">{item.createdBy} · {item.createdAt ? new Date(item.createdAt).toLocaleString(locale) : ''}</p>
                               </li>
                             ))}
                           </ul>
@@ -8302,13 +8204,11 @@ function AdminPortal({
                     )}
                   </>
                 ) : (
-                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-950">
-                    This calendar event could not be automatically linked to a booking record. Reload the calendar to try again.
-                  </div>
+                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-950">{tr("This calendar event could not be automatically linked to a booking record. Reload the calendar to try again.")}</div>
                 );
               })()}
             </div>
-            {issuedReceipt && <div className="flex justify-end border-t border-slate-100 bg-slate-50 px-5 py-4"><button type="button" onClick={() => printIssuedReceipt(issuedReceipt)} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-xs font-bold text-slate-700 hover:bg-slate-100"><Download className="h-4 w-4" />Print / save PDF</button></div>}
+            {issuedReceipt && <div className="flex justify-end border-t border-slate-100 bg-slate-50 px-5 py-4"><button type="button" onClick={() => printIssuedReceipt(issuedReceipt)} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-xs font-bold text-slate-700 hover:bg-slate-100"><Download className="h-4 w-4" />{tr("Print / save PDF")}</button></div>}
           </section>
         </div>
       )}
