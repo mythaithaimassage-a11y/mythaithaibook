@@ -97,6 +97,7 @@ const quickProps = {
 const screens = [
   ['QuickBooking', quickProps, 'Quick appointment', 'เพิ่มนัดหมายด่วน'],
   ['BusinessHours', { onChange() {} }, 'Weekly business hours', 'เวลาทำการประจำสัปดาห์'],
+  ['TherapistNameMerge', { therapists: [], async onMerged() {} }, 'Merge historical therapist name', 'รวมชื่อผู้ให้บริการย้อนหลัง'],
   ['BookingNote', { bookingId: 'B1', initialNote: 'Keep this English note', async onSaved() {} }, 'Shared internal booking note', 'บันทึกภายในเกี่ยวกับการจองสำหรับทีม'],
   ['AppointmentCheckIn', { bookingId: 'B1', checkedInAt: '', checkedInBy: '', receiptIssued: false, cancelled: false, async onChanged() {} }, 'Check in client', 'เช็กอินลูกค้า'],
   ['WixCalendarSync', { async onSynced() {} }, 'Sync Wix bookings', 'ซิงค์การจอง Wix'],
@@ -174,6 +175,67 @@ test('business-hours editor shows seven independent daily settings and preserves
   assert.equal(hours.mon.open, '08:00');
   props.hours = hours;
   assert.match(html(ui.render(props)), /type="time"[^>]*disabled=""[^>]*value="08:00"/);
+});
+
+test('therapist merge requires preview confirmation, runs continuation batches and reports completion', async () => {
+  const requests = [];
+  let refreshed = false;
+  const preview = { sourceName: 'Old Tanya', targetName: 'Tanya', bookings: 6, linkedEvents: 4, issuedReceipts: 2 };
+  let batch = 0;
+  const ui = harness('TherapistNameMerge', 'en-CA', { 1: 'Old Tanya', 2: '1' }, async (_url, options) => {
+    const body = JSON.parse(options.body);
+    requests.push(body);
+    return { ok: true, async json() {
+      if (body.preview) return preview;
+      batch++;
+      return batch === 1 ? { updated: 5, remaining: 1, done: false }
+        : batch === 2 ? { updated: 1, remaining: 0, done: false }
+        : batch === 3 ? { updated: 0, remaining: 0, calendarUpdated: 1, calendarCursor: { index: 0, pageToken: 'next' }, done: false }
+        : { updated: 0, remaining: 0, calendarUpdated: 0, staffRecords: 1, done: true };
+    } };
+  });
+  const props = { therapists: [{ id: 1, name: 'Tanya', active: true }], async onMerged() { refreshed = true; } };
+  await find(ui.render(props), (node) => node.type === 'button' && node.props.children === 'Preview name merge').props.onClick();
+  // Button handlers launch their async operations without returning the promise.
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(html(ui.render(props)), /6 booking assignments and 4 linked Calendar events/);
+  assert.equal(find(ui.render(props), (node) => node.type === 'button' && node.props.children === 'Merge and sync therapist name').props.disabled, true);
+  find(ui.render(props), (node) => node.type === 'input' && node.props.type === 'checkbox').props.onChange({ target: { checked: true } });
+  find(ui.render(props), (node) => node.type === 'button' && node.props.children === 'Merge and sync therapist name').props.onClick();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(batch, 4);
+  assert.equal(refreshed, true);
+  assert.equal(requests[0].preview, true);
+  assert.equal(requests[1].confirm, true);
+  assert.deepEqual(requests.at(-1).calendarCursor, { index: 0, pageToken: 'next' });
+  assert.match(html(ui.render(props)), /Therapist name merge completed/);
+});
+
+test('therapist merge reports partial failures and rejects malformed success without announcing completion', async () => {
+  for (const response of ['failure', 'malformed']) {
+    let requests = 0;
+    let refreshed = false;
+    const ui = harness('TherapistNameMerge', 'en-CA', {
+      1: 'Old Tanya', 2: '1',
+      3: { sourceName: 'Old Tanya', targetName: 'Tanya', bookings: 6, linkedEvents: 0, issuedReceipts: 0 },
+      4: true,
+    }, async () => {
+      requests++;
+      if (requests === 1) return { ok: true, async json() { return { updated: 5, remaining: 1, done: false }; } };
+      if (response === 'failure') throw new Error('Calendar denied');
+      return { ok: true, async json() { return { updated: '1', remaining: 0, done: true }; } };
+    });
+    const props = { therapists: [{ id: 1, name: 'Tanya', active: true }], async onMerged() { refreshed = true; } };
+    find(ui.render(props), (node) => node.type === 'button' && node.props.children === 'Merge and sync therapist name').props.onClick();
+    await new Promise((resolve) => setImmediate(resolve));
+    const output = html(ui.render(props));
+    assert.equal(refreshed, false);
+    assert.equal(requests, 2);
+    assert.match(output, /Some records may already be updated/);
+    assert.doesNotMatch(output, /Therapist name merge completed/);
+    assert.match(output, /5 bookings updated/);
+    assert.equal(find(ui.render(props), (node) => node.type === 'button' && node.props.children === 'Preview name merge').props.disabled, false);
+  }
 });
 
 test('Thai quick-booking confirmation translates messages without changing request data', async () => {

@@ -39,11 +39,18 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
     [4, 'Inactive Therapist', '', 5, 'TRUE', 'TRUE', '1', '{}', 'FALSE'],
   ];
   const headers = [];
+  let aliasRows = [];
+  let legacyAccount = false;
   t.mock.method(google, 'sheets', () => ({
     spreadsheets: {
-      get: async () => ({ data: { sheets: ['Branches', 'Unavailability', 'Services', 'Therapists', 'BusinessProfile'].map((title) => ({ properties: { title } })) } }),
+      get: async () => ({ data: { sheets: ['Branches', 'Unavailability', 'Services', 'Therapists', 'BusinessProfile', ...(aliasRows.length ? ['TherapistAliases'] : []), ...(legacyAccount ? ['TherapistAccounts'] : [])].map((title) => ({ properties: { title } })) } }),
+      batchUpdate: async ({ requestBody }) => {
+        assert.equal(requestBody.requests[0].addSheet.properties.title, 'TherapistAliases');
+      },
       values: {
         get: async ({ range }) => {
+          if (range === 'TherapistAliases!A:E') return { data: { values: aliasRows } };
+          if (range === 'TherapistAccounts!A:F') return { data: { values: [['ID', 'Email', 'Name'], ['legacy-id', 'legacy@example.com', 'Legacy Staff']] } };
           if (range === 'Branches!A2:L') return { data: { values: branchRows } };
           if (range === 'Unavailability!A1:J1') return { data: { values: [['Block ID']] } };
           if (range === 'Unavailability!A:J') return { data: { values: blockRows } };
@@ -53,21 +60,40 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
           throw new Error(`Unexpected sheets read: ${range}`);
         },
         update: async ({ range, requestBody }) => {
-          if (range === 'Branches!A1:L1') headers.push(requestBody.values[0]);
+          if (range === 'TherapistAliases!A1:E1') aliasRows = requestBody.values;
+          else if (range === 'Branches!A1:L1') headers.push(requestBody.values[0]);
           else if (range.startsWith('Branches!A2:L')) branchRows = requestBody.values;
           else throw new Error(`Unexpected sheets update: ${range}`);
         },
         clear: async ({ range }) => { assert.equal(range, 'Branches!A2:L'); },
+        append: async ({ range, requestBody }) => {
+          assert.equal(range, 'TherapistAliases!A:E');
+          aliasRows.push(...requestBody.values);
+        },
+        batchUpdate: async ({ requestBody }) => {
+          for (const update of requestBody.data) {
+            if (update.range.startsWith('Unavailability!D')) blockRows[Number(update.range.match(/\d+/)[0]) - 1][3] = update.values[0][0];
+            else if (update.range.startsWith('Therapists!I')) therapistRows[Number(update.range.match(/\d+/)[0]) - 2][8] = update.values[0][0];
+            else throw new Error(`Unexpected merge update: ${update.range}`);
+          }
+        },
       },
     },
   }));
   const events = [];
   const patches = [];
+  let calendarMergePages = [];
   let failCalendarPatch = false, failRecovery = false, failBookingWrite = false, raceBookingWrite = false;
   const originalEvent = { summary: 'Original appointment', description: 'Customer: Old name\nTherapist: Test Therapist\nPrivate integration metadata',
     start: { dateTime: '2026-11-01T10:00:00-05:00' }, end: { dateTime: '2026-11-01T11:00:00-05:00' }, etag: '"original"' };
   t.mock.method(google, 'calendar', () => ({ events: {
-    list: async () => ({ data: { items: busyEvents } }),
+    list: async (options) => {
+      if (options.maxResults === 20) {
+        const index = Number(options.pageToken || 0);
+        return { data: { items: calendarMergePages[index] || [], nextPageToken: index + 1 < calendarMergePages.length ? String(index + 1) : undefined } };
+      }
+      return { data: { items: busyEvents } };
+    },
     insert: async (options) => { events.push(options); return { data: { id: `event-${events.length}` } }; },
     get: async () => ({ data: originalEvent }),
     patch: async (options, transport) => {
@@ -736,4 +762,74 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   assert.equal((await request('edit-booking', { ...editBody(), bookingNote: 'Retained existing appointment after hours change' })).code, 200,
     'Changing branch hours does not prevent non-scheduling edits to existing appointments');
   assert.equal((await request('manual-booking', manual)).code, 400, 'Closed days reject new appointments');
+
+  const mergeBody = { sourceName: 'Legacy Staff', targetId: 1, targetName: 'Test Therapist' };
+  cookie = '';
+  assert.equal((await request('therapist-name-merge', null, { method: 'GET' })).code, 401);
+  cookie = receptionistCookie;
+  assert.equal((await request('therapist-name-merge', mergeBody)).code, 403);
+  cookie = ownerCookie;
+  assert.equal((await request('therapist-name-merge', mergeBody, { origin: 'https://untrusted.example' })).code, 403);
+  const historical = { ...editable, booking_id: 'WIX-legacy-rename', therapist_name: 'Legacy Staff', intake_notes: '{"sourceFields":{"Staff name":"Legacy Staff"}}', receipt_number: 'HISTORICAL-RECEIPT', status_notes: 'Original history' };
+  records.push(historical);
+  therapistRows.push([8, 'Legacy Staff', '', 5, 'TRUE', 'FALSE', '1', '{}', 'TRUE']);
+  blockRows.push(['legacy-block', 'therapist', '', 'Legacy Staff', '2099-01-01', '10:00', '11:00', 'Leave']);
+  const beforeMerge = { ...historical };
+  const mergeNames = await request('therapist-name-merge', null, { method: 'GET' });
+  assert.ok(mergeNames.data.names.includes('Legacy Staff'));
+  legacyAccount = true;
+  assert.equal((await request('therapist-name-merge', { ...mergeBody, preview: true })).code, 409,
+    'Separate login and treatment-note ownership requires manual review');
+  legacyAccount = false;
+  const mergePreview = await request('therapist-name-merge', { ...mergeBody, preview: true });
+  assert.equal(mergePreview.code, 200, JSON.stringify(mergePreview.data));
+  assert.equal(mergePreview.data.bookings, 1);
+  assert.equal(mergePreview.data.issuedReceipts, 1);
+  assert.equal(aliasRows.length, 0, 'Preview writes nothing');
+  assert.equal((await request('therapist-name-merge', mergeBody)).code, 400);
+  assert.equal((await request('therapist-name-merge', { ...mergeBody, targetName: 'Stale', confirm: true })).code, 409);
+  originalEvent.description = 'Therapist: Legacy Staff\nHistorical details';
+  const batch = await request('therapist-name-merge', { ...mergeBody, confirm: true });
+  assert.equal(batch.code, 200, JSON.stringify(batch.data));
+  assert.equal(batch.data.updated, 1);
+  assert.equal(batch.data.done, false);
+  assert.equal(historical.therapist_name, 'Test Therapist');
+  assert.equal(historical.intake_notes, beforeMerge.intake_notes);
+  assert.equal(historical.receipt_number, beforeMerge.receipt_number);
+  assert.equal(historical.paid_amount, beforeMerge.paid_amount);
+  assert.match(historical.status_notes, /^Original history\nTherapist name merged/);
+  assert.equal(patches.at(-1).sendUpdates, 'none');
+  assert.equal(patches.at(-1).transport.headers['If-Match'], '"original"');
+  assert.equal(aliasRows.length, 2);
+  calendarMergePages = [[{ id: 'standalone-old-event', etag: '"standalone"', description: 'Therapist: Legacy Staff\nHistorical details', status: 'confirmed' }], []];
+  const finished = await request('therapist-name-merge', { ...mergeBody, confirm: true });
+  assert.equal(finished.code, 200, JSON.stringify(finished.data));
+  assert.equal(finished.data.done, false);
+  assert.equal(finished.data.calendarUpdated, 1);
+  assert.equal(patches.at(-1).requestBody.description, 'Therapist: Test Therapist\nHistorical details');
+  assert.equal(patches.at(-1).transport.headers['If-Match'], '"standalone"');
+  assert.equal(finished.data.updated, 0);
+  const finalPage = await request('therapist-name-merge', { ...mergeBody, confirm: true, calendarCursor: finished.data.calendarCursor });
+  assert.equal(finalPage.code, 200, JSON.stringify(finalPage.data));
+  assert.equal(finalPage.data.done, true);
+  assert.equal(blockRows.at(-1)[3], 'Test Therapist');
+  assert.equal(therapistRows.at(-1)[8], 'FALSE');
+  assert.equal(aliasRows.length, 2, 'Retries do not duplicate the saved alias');
+  const roster = (await request('therapists', null, { method: 'GET' })).data.therapists;
+  assert.equal((await request('therapists', {
+    therapists: roster.map((therapist) => therapist.id === 1 ? { ...therapist, name: 'Changed target' } : therapist),
+  })).code, 400, 'Aliases prevent removing or renaming the destination identity');
+  assert.equal((await request('therapists', {
+    therapists: roster.map((therapist) => therapist.id === 8 ? { ...therapist, active: true } : therapist),
+  })).code, 400, 'Merged roster identities cannot be reactivated');
+  const csv = 'Session date,Start time,Registration date,Booking contact name,Booking contact email,Booking contact phone,Client address,Spots filled,Duration,Service name,Service type,Staff name,Booking status,Attendance status,Payment status\n2099-01-01,10:00,2026-10-01,Client,client@example.com,,,1,60m,Massage,Appointment,Legacy Staff,Confirmed,Not specified,Paid';
+  const aliasPreview = await request('wix-bookings-import', { csv, preview: true });
+  assert.equal(aliasPreview.code, 200, JSON.stringify(aliasPreview.data));
+  assert.equal(aliasPreview.data.sample[0].therapist_name, 'Test Therapist');
+  const override = await request('wix-bookings-import', {
+    csv, preview: true,
+    therapistMappings: [{ sourceName: 'Test Therapist', therapistId: 2, therapistName: 'Second Therapist' }],
+  });
+  assert.equal(override.code, 409, JSON.stringify(override.data));
+  assert.match(override.data.message, /conflicts with a saved/);
 });

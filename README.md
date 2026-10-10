@@ -125,6 +125,39 @@ times in the configured calendar time zone, for example **11:00 AM - 12:00 PM**.
 The range uses the actual Google Calendar event times, including appointments
 that finish after midnight.
 
+### Historical therapist name merge
+
+Owners can use **Manage > Staff > Merge historical therapist name** to map
+an old label to an existing active therapist. Preview the affected bookings,
+confirm the two names identify the same person, then keep the page open while
+the tool updates bookings in five-record batches and scans every configured
+booking calendar in pages. Exact therapist labels are replaced, including one
+partner in a couple assignment; substring names are not replaced. Assignments
+already containing the destination therapist require manual review.
+
+The mapping is retained in `TherapistAliases` in the application spreadsheet
+with the owner and timestamp, and applied to subsequent Wix imports **after**
+stable IDs are calculated. Existing payments, issued receipts, original Wix
+source notes, treatment notes and login/profile IDs are not rewritten. Matching
+therapist availability blocks are renamed; old roster entries are deactivated
+without deleting their history. A historical name belonging to a separate
+therapist login (including environment-configured accounts) blocks the merge
+for manual account/note-ownership review.
+
+Wix import mappings cannot override a saved merge. Destination therapist names
+and IDs cannot be renamed/deleted through the roster editor while aliases refer
+to them, and merged historical roster entries cannot be reactivated.
+
+Calendar updates use no invitation notifications and preserve all unrelated
+event data. Booking writes check the complete original row for concurrent
+changes. Cross-service writes are not one atomic transaction: failures are
+reported explicitly; preview and retry the **same mapping** to resume. Existing
+updated rows/events are skipped, and pending Calendar/sheet work is retried.
+Deleted Calendar events are not recreated; the booking audit records that they
+were already deleted. Do not run different name merges concurrently.
+This is an identity-label correction, not an appointment reschedule; changing
+the assigned person requires normal availability checks instead.
+
 ### Receipt email branding
 
 Receipt emails display the configured **Business photo URL** as a 64px business

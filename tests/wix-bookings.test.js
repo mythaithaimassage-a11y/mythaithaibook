@@ -339,6 +339,9 @@ test('booking import API enforces owner/origin, previews without backend writes 
   });
   const dashboardChallenges = createDashboardChallengeStore();
   const emails = [];
+  t.mock.method(google, 'sheets', () => ({
+    spreadsheets: { get: async () => ({ data: { sheets: [] } }) },
+  }));
   t.mock.method(BigQuery.prototype, 'dataset', () => ({
     exists: async () => [true], table: () => ({ exists: async () => [true] }),
   }));

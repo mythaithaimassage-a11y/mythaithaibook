@@ -23,6 +23,7 @@ import AppointmentCheckIn, { formatCheckInTime } from './AppointmentCheckIn';
 import { LanguageProvider, createTranslator, message, useTranslation } from './localization';
 import { AVAILABLE_TIMES, BOOKING_DEPOSIT_AMOUNT, branchPaymentOptions, bookingCategories, branchAppointmentTimes, businessHoursForDate, appointmentTimeMinutes } from '../lib/booking-options.js';
 import BusinessHours from './BusinessHours';
+import TherapistNameMerge from './TherapistNameMerge';
 import { emptyPatientHistory } from '../lib/patient-history.js';
 import { anatomicalBodyParts } from '../lib/body-map.js';
 import { portalEntry } from '../lib/portal-entry.js';
@@ -6842,6 +6843,14 @@ function AdminPortal({
           {therapistSaveMessage && (
             <p role="status" className="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">{tr(therapistSaveMessage)}</p>
           )}
+          {dashboardUser.role === 'owner' && <TherapistNameMerge therapists={therapists} onMerged={async () => {
+            const response = await fetch('/api/booking?view=therapists');
+            const data = await response.json();
+            if (!response.ok) throw new Error(data.message || 'Unable to refresh therapists after merging.');
+            onTherapistsChange(data.therapists);
+            const refreshed = await Promise.all([loadBookingsFromBackend(), loadCalendar()]);
+            if (refreshed.some((success) => !success)) throw new Error('The merge was saved, but refreshed bookings or Calendar could not be loaded. Refresh before making further changes.');
+          }} />}
 
           <div className="space-y-4">
             {therapistForm.map((th) => (

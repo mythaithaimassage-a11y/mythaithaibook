@@ -11,6 +11,7 @@ import { createPackageStore, historicalPackageVisit, readPackageUsage, packageRe
 import { createBookingHistoryStore } from '../lib/booking-history.js';
 import { syncWixCalendarBatch } from '../lib/wix-calendar.js';
 import { searchBookingCustomers } from '../lib/customer-search.js';
+import { applySavedTherapistAliases, planTherapistRename, readTherapistAliases, renameTherapistBookingBatch, renameTherapistLabel, saveTherapistAlias } from '../lib/therapist-rename.js';
 import { sendGmailMessage } from '../lib/gmail.js';
 import { BOOKING_DEPOSIT_AMOUNT, validateBranchPaymentOptions, validateAppointmentTime, validateBusinessHours, appointmentTimeMinutes } from '../lib/booking-options.js';
 import { validatePatientHistory, patientHistoryValues } from '../lib/patient-history.js';
@@ -2259,6 +2260,16 @@ async function getTherapists(sheets) {
 
 async function saveTherapists(sheets, therapists) {
   const validated = validateTherapists(therapists);
+  const aliases = await readTherapistAliases(sheets, process.env.GOOGLE_SPREADSHEET_ID);
+  for (const alias of aliases) {
+    const destination = validated.find((therapist) => String(therapist.id) === String(alias.targetId));
+    if (!destination || destination.name !== alias.targetName) {
+      throw new Error('A therapist with saved historical name merges cannot be renamed or removed. Review the saved aliases before changing its identity.');
+    }
+    if (validated.some((therapist) => therapist.active && therapist.name.trim().toLowerCase() === alias.sourceName.trim().toLowerCase())) {
+      throw new Error('A merged historical therapist name cannot be reactivated. Use the existing destination therapist.');
+    }
+  }
   await ensureTherapistsSheet(sheets);
   const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
   const rows = validated.map((therapist) => [
@@ -4444,11 +4455,11 @@ export default async function handler(req, res) {
     const historyViews = ['booking-history-preview', 'clear-booking-history'];
     const wixCalendarViews = ['wix-calendar-sync'];
     const validGetViews = ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'business-name', 'square-config', 'google-reviews', 'branches', 'services', 'therapists', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal', 'company-join', 'find-booking', 'availability', 'unavailability', 'campaign-log', 'campaign-audience-options', 'review-request-audience', 'therapist-accounts', 'wix-contacts', 'dashboard-users'];
-    if (req.method === 'GET' && !validGetViews.includes(view) && !['customer-search', 'wix-contacts-import', 'wix-bookings-import', ...packageViews, ...historyViews, ...wixCalendarViews].includes(view)) {
+    if (req.method === 'GET' && !validGetViews.includes(view) && !['therapist-name-merge', 'customer-search', 'wix-contacts-import', 'wix-bookings-import', ...packageViews, ...historyViews, ...wixCalendarViews].includes(view)) {
       return res.status(404).json({ message: 'Unknown booking view' });
     }
     const ownerOnlyRequest =
-      ['wix-contacts', 'wix-contacts-import', 'wix-bookings-import', ...packageViews, ...historyViews, ...wixCalendarViews].includes(view) ||
+      ['therapist-name-merge', 'wix-contacts', 'wix-contacts-import', 'wix-bookings-import', ...packageViews, ...historyViews, ...wixCalendarViews].includes(view) ||
       (req.method === 'GET' && ['patient-history', 'appointment-notes', 'business-profile', 'google-ads-report', 'loyalty-dashboard', 'google-reviews', 'unavailability', 'campaign-log', 'campaign-audience-options', 'review-request-audience', 'therapist-accounts', 'dashboard-users'].includes(view)) ||
       ['business-profile', 'dashboard-user', 'dashboard-user-status', 'therapist-account-status', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-clear-ledger', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-link', 'unavailability-delete', 'review-request-send', 'reassign-therapist'].includes(view) ||
       (req.method === 'POST' && ['branches', 'services', 'therapists', 'unavailability'].includes(view));
@@ -4567,6 +4578,15 @@ export default async function handler(req, res) {
     if (view === 'wix-bookings-import') {
       if (req.method !== 'POST') return res.status(405).json({ message: 'Method Not Allowed' });
       let prepared = prepareWixBookings(req.body?.csv, { timeZone: CALENDAR_TIME_ZONE });
+      const originalTherapistNames = prepared.bookings.map((booking) => booking.therapist_name);
+      const aliasAuth = new google.auth.GoogleAuth({
+        credentials: { client_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL, private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n') },
+        scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+      });
+      const aliasSheets = google.sheets({ version: 'v4', auth: aliasAuth });
+      const savedAliases = await readTherapistAliases(aliasSheets, process.env.GOOGLE_SPREADSHEET_ID);
+      if (savedAliases.length) prepared = applySavedTherapistAliases(prepared, savedAliases, await getTherapists(aliasSheets));
+      const savedTherapistNames = prepared.bookings.map((booking) => booking.therapist_name);
       if (req.body?.preview !== true && req.body?.confirmPaid !== true) {
         return res.status(400).json({ message: 'Confirm historical payment and review current catalogue prices before importing.' });
       }
@@ -4589,6 +4609,10 @@ export default async function handler(req, res) {
         prepared = applyWixTherapistMappings(prepared, therapists, req.body.therapistMappings);
       } else {
         prepared = applyWixTherapistMappings(prepared, []);
+      }
+      if (prepared.bookings.some((booking, index) => savedTherapistNames[index] !== originalTherapistNames[index] &&
+          booking.therapist_name !== savedTherapistNames[index])) {
+        return res.status(409).json({ message: 'A Wix therapist mapping conflicts with a saved historical name merge. Keep the saved destination therapist.' });
       }
       if (req.body?.preview === true) {
         return res.status(200).json({ ...prepared.summary, sample: prepared.bookings.slice(0, 5) });
@@ -4656,6 +4680,93 @@ export default async function handler(req, res) {
 
     const sheets = google.sheets({ version: 'v4', auth });
     const calendarApi = google.calendar({ version: 'v3', auth });
+    if (view === 'therapist-name-merge') {
+      if (!['GET', 'POST'].includes(req.method)) return res.status(405).json({ message: 'Method Not Allowed' });
+      if (req.method === 'POST' && !isSameOriginRequest(req)) return res.status(403).json({ message: 'Request origin is not allowed' });
+      const bigquery = getBigQueryClient();
+      const [bookingResult, therapists, mappings] = await Promise.all([
+        bqFetchBookingRows(bigquery), getTherapists(sheets),
+        readTherapistAliases(sheets, process.env.GOOGLE_SPREADSHEET_ID),
+      ]);
+      const rows = (bookingResult.data.values || []).filter((row) => row[0] && row[0] !== 'Booking ID');
+      if (req.method === 'GET') {
+        return res.status(200).json({
+          names: [...new Set([...rows.map((row) => row[6]).filter(Boolean), ...therapists.map((therapist) => therapist.name), ...mappings.map((mapping) => mapping.sourceName)])].sort(),
+          mappings,
+        });
+      }
+      const accountMetadata = await sheets.spreadsheets.get({ spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID, fields: 'sheets.properties' });
+      const accountRows = (accountMetadata.data.sheets || []).some((item) => item.properties?.title === 'TherapistAccounts')
+        ? (await sheets.spreadsheets.values.get({ spreadsheetId: PATIENT_HISTORY_SPREADSHEET_ID, range: 'TherapistAccounts!A:F' })).data.values || []
+        : [];
+      const accounts = [...getTherapistAccounts(), ...accountRows.slice(1).map((row) => ({ name: row[2] || '' }))];
+      const plan = planTherapistRename(rows, therapists, accounts, mappings, req.body?.sourceName, req.body?.targetId);
+      if (req.body?.targetName !== plan.target.name) return res.status(409).json({ message: 'The destination therapist changed. Reload Staff before merging.' });
+      if (req.body?.preview === true) {
+        return res.status(200).json({
+          sourceName: plan.sourceName, targetName: plan.target.name, bookings: plan.bookings.length,
+          linkedEvents: plan.bookings.filter(({ row }) => row[16]).length,
+          issuedReceipts: plan.bookings.filter(({ row }) => row[18]).length,
+        });
+      }
+      if (req.body?.confirm !== true) return res.status(400).json({ message: 'Preview and confirm the historical therapist merge before applying it.' });
+      await saveTherapistAlias(sheets, process.env.GOOGLE_SPREADSHEET_ID, plan, dashboardSession.email);
+      const result = await renameTherapistBookingBatch(plan, {
+        calendar: calendarApi, primaryCalendarId: PRIMARY_CALENDAR_ID,
+        updateBooking: (row, fields) => bqUpdateBookingFields(bigquery, row[0], fields, null, row),
+      });
+      if (result.updated || result.remaining) return res.status(200).json({ ...result, done: false });
+      const calendarIds = [...new Set([PRIMARY_CALENDAR_ID, ...rows.map((row) => row[15]).filter(Boolean)])].sort();
+      const index = req.body?.calendarCursor?.index ?? 0;
+      const pageToken = req.body?.calendarCursor?.pageToken;
+      if (!Number.isSafeInteger(index) || index < 0 || index >= calendarIds.length ||
+          (pageToken !== undefined && (typeof pageToken !== 'string' || pageToken.length > 2000))) {
+        return res.status(400).json({ message: 'Invalid Calendar merge cursor. Preview and retry the merge.' });
+      }
+      const page = await calendarApi.events.list({
+        calendarId: calendarIds[index], maxResults: 20, pageToken, showDeleted: false,
+      }, { timeout: 10000, retry: false });
+      let calendarUpdated = 0;
+      for (const event of page.data.items || []) {
+        if (event.status === 'cancelled') continue;
+        const description = String(event.description || '');
+        const currentName = getTherapistFromDescription(description);
+        const nextName = renameTherapistLabel(currentName, plan.sourceName, plan.target.name);
+        if (nextName === currentName) continue;
+        if (currentName !== plan.sourceName && renameTherapistLabel(currentName, plan.target.name, '') !== currentName) {
+          return res.status(409).json({ message: `Calendar event ${event.id} already includes the destination therapist. Review its couple assignment manually.` });
+        }
+        await calendarApi.events.patch({
+          calendarId: calendarIds[index], eventId: event.id, sendUpdates: 'none',
+          requestBody: { description: description.replace(/^Therapist:\s*.*$/m, `Therapist: ${nextName}`) },
+        }, { timeout: 10000, retry: false, headers: { 'If-Match': event.etag } });
+        calendarUpdated += 1;
+      }
+      const nextCursor = page.data.nextPageToken ? { index, pageToken: page.data.nextPageToken }
+        : index + 1 < calendarIds.length ? { index: index + 1 } : null;
+      if (nextCursor) return res.status(200).json({ ...result, calendarUpdated, calendarCursor: nextCursor, done: false });
+      const metadata = await sheets.spreadsheets.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, fields: 'sheets.properties' });
+      const titles = new Set((metadata.data.sheets || []).map((item) => item.properties?.title));
+      const updates = [];
+      if (titles.has('Unavailability')) {
+        const blocks = (await sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'Unavailability!A:J' })).data.values || [];
+        blocks.forEach((row, rowIndex) => {
+          if (rowIndex && row[1] === 'therapist' && String(row[3]).trim().toLowerCase() === plan.sourceName.toLowerCase()) {
+            updates.push({ range: `Unavailability!D${rowIndex + 1}`, values: [[plan.target.name]] });
+          }
+        });
+      }
+      const roster = (await sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'Therapists!A2:J' })).data.values || [];
+      roster.forEach((row, rowIndex) => {
+        if (String(row[1]).trim().toLowerCase() === plan.sourceName.toLowerCase() && String(row[0]) !== String(plan.target.id)) {
+          updates.push({ range: `Therapists!I${rowIndex + 2}`, values: [['FALSE']] });
+        }
+      });
+      if (updates.length) await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, requestBody: { valueInputOption: 'RAW', data: updates },
+      });
+      return res.status(200).json({ ...result, calendarUpdated, staffRecords: updates.length, done: true });
+    }
     if (view === 'customer-search') {
       if (req.method !== 'GET') return res.status(405).json({ message: 'Method Not Allowed' });
       const bigquery = getBigQueryClient();
