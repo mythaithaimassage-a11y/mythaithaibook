@@ -3,7 +3,7 @@ import test from 'node:test';
 import { Readable } from 'node:stream';
 import { google } from 'googleapis';
 import { BigQuery } from '@google-cloud/bigquery';
-import { BOOKING_TABLE_FIELDS } from '../lib/booking-schema.js';
+import { BOOKING_TABLE_FIELDS, LATER_BOOKING_COLUMNS } from '../lib/booking-schema.js';
 import { validatePackageRegistration } from '../lib/packages.js';
 import { createDashboardChallengeStore, handleDashboardChallengeQuery, readDashboardOtp } from './helpers/dashboard-auth.js';
 
@@ -67,7 +67,7 @@ test('reviewed Wix import produces paid records and actual receipt endpoint issu
     ['initial_remaining', 'INT64'], ['remaining_sessions', 'INT64'], ['subtotal', 'FLOAT64'],
     ['tax_rate', 'FLOAT64'], ['usages_json', 'STRING'], ['revision', 'INT64'], ['created_at', 'STRING'],
   ].map(([name, type]) => ({ name, type }));
-  let bookingSchema = BOOKING_TABLE_FIELDS.filter((field) => !['receipt_manual_discount', 'receipt_reconciliation', 'booking_note'].includes(field.name));
+  let bookingSchema = BOOKING_TABLE_FIELDS.filter((field) => !LATER_BOOKING_COLUMNS.includes(field.name));
   const schemaUpdates = [];
   t.mock.method(BigQuery.prototype, 'dataset', () => ({
     exists: async () => [true],
@@ -76,11 +76,13 @@ test('reviewed Wix import produces paid records and actual receipt endpoint issu
       getMetadata: async () => [{ schema: { fields: tableId === 'bookings' ? bookingSchema : tableId === 'session_packages' ? packageSchema : loyaltyColumns.map((name) => ({ name, type: 'STRING' })) } }],
       setMetadata: async ({ schema }) => {
         assert.equal(tableId, 'bookings');
-        assert.deepEqual(schema.fields.slice(0, -3), bookingSchema);
-        assert.deepEqual(schema.fields.slice(-3), [
+        assert.deepEqual(schema.fields.slice(0, -5), bookingSchema);
+        assert.deepEqual(schema.fields.slice(-5), [
           { name: 'receipt_manual_discount', type: 'FLOAT64', mode: 'NULLABLE' },
           { name: 'receipt_reconciliation', type: 'STRING', mode: 'NULLABLE' },
           { name: 'booking_note', type: 'STRING', mode: 'NULLABLE' },
+          { name: 'checked_in_at', type: 'STRING', mode: 'NULLABLE' },
+          { name: 'checked_in_by', type: 'STRING', mode: 'NULLABLE' },
         ]);
         bookingSchema = schema.fields;
         schemaUpdates.push(schema);
@@ -122,6 +124,12 @@ test('reviewed Wix import produces paid records and actual receipt endpoint issu
     if (query.startsWith('SELECT * FROM `test-project.booking_system.session_packages`')) return [[packages.get(params.id)].filter(Boolean)];
     if (query.startsWith('SELECT transaction_id')) return [[]];
     if (query.startsWith('BEGIN TRANSACTION')) {
+      if (query.includes('checked_in_at = @checkedInAt')) {
+        const record = records.get(params.bookingId);
+        assert.equal(String(record.checked_in_at || ''), params.expectedCheckIn);
+        Object.assign(record, { checked_in_at: params.checkedInAt, checked_in_by: params.checkedInBy, status_notes: params.statusNotes });
+        return [[]];
+      }
       if (params.links) {
         for (const link of params.links) {
           Object.assign(records.get(link.bookingId), { calendar_id: params.calendarId, calendar_event_id: link.eventId });
@@ -218,6 +226,17 @@ test('reviewed Wix import produces paid records and actual receipt endpoint issu
     assert.equal(record.therapist_name, 'Mapped Therapist');
     assert.equal(JSON.parse(record.intake_notes).sourceFields['Staff name'], 'Test Staff');
     assert.equal(record.paid_amount, record.total);
+    const blocked = await request('issue-receipt', { bookingId: record.booking_id });
+    assert.equal(blocked.code, 409);
+    assert.match(blocked.data.message, /Check the client in/);
+    const checkIn = await request('check-in', { bookingId: record.booking_id, checkedIn: true });
+    assert.equal(checkIn.code, 200, JSON.stringify(checkIn.data));
+    assert.ok(checkIn.data.checkedInAt && checkIn.data.checkedInBy);
+    assert.equal(record.checked_in_at, checkIn.data.checkedInAt);
+    assert.match(record.status_notes, /Checked in by /);
+    const repeat = await request('check-in', { bookingId: record.booking_id, checkedIn: true });
+    assert.equal(repeat.data.alreadyCheckedIn, true);
+    assert.equal(repeat.data.checkedInAt, checkIn.data.checkedInAt);
     const receiptResponse = await request('issue-receipt', { bookingId: record.booking_id });
     assert.equal(receiptResponse.code, 200, JSON.stringify(receiptResponse.data));
     const receipt = receiptResponse.data.receipt;
@@ -228,6 +247,9 @@ test('reviewed Wix import produces paid records and actual receipt endpoint issu
     assert.match(receipt.number, /^MTT-\d{4}-\d{6}$/);
     assert.equal(receiptResponse.data.emailed, true);
     assert.equal(record.receipt_email_status, 'sent');
+    assert.equal(receipt.checkedInAt, checkIn.data.checkedInAt);
+    assert.equal(receipt.checkedInBy, checkIn.data.checkedInBy);
+    assert.equal((await request('check-in', { bookingId: record.booking_id, checkedIn: false })).code, 409, 'Check-in is locked after receipt');
     const retry = await request('issue-receipt', { bookingId: record.booking_id });
     assert.equal(retry.code, 200);
     assert.equal(retry.data.alreadyIssued, true);
@@ -250,6 +272,7 @@ test('reviewed Wix import produces paid records and actual receipt endpoint issu
     ...[...records.values()].find((record) => record.service_name === services[0].name),
     booking_id: 'WIX-package-visit', service_name: 'Package: 90 min x 4 Sessions',
     receipt_number: '', receipt_issued_at: '', receipt_email_status: '',
+    checked_in_at: '2026-01-01T15:00:00.000Z', checked_in_by: 'Front Desk',
   };
   records.set(packageBooking.booking_id, packageBooking);
   const unlinked = await request('issue-receipt', { bookingId: packageBooking.booking_id });
@@ -283,7 +306,7 @@ test('reviewed Wix import produces paid records and actual receipt endpoint issu
   assert.equal(schemaUpdates.length, 1, 'Existing booking schema gains only the discount column');
   const regular = [...records.values()].find((record) => record.service_name === services[0].name);
   const newRecord = (id, changes = {}) => {
-    const record = { ...regular, booking_id: id, receipt_number: '', receipt_issued_at: '', receipt_email_status: '', receipt_manual_discount: 0, booking_note: 'Internal private receipt reference', ...changes };
+    const record = { ...regular, booking_id: id, receipt_number: '', receipt_issued_at: '', receipt_email_status: '', receipt_manual_discount: 0, booking_note: 'Internal private receipt reference', checked_in_at: '2026-01-01T15:00:00.000Z', checked_in_by: 'Front Desk', ...changes };
     records.set(id, record);
     return record;
   };
@@ -381,6 +404,29 @@ test('reviewed Wix import produces paid records and actual receipt endpoint issu
   const exemptReceipt = await request('issue-receipt', { bookingId: exempt.booking_id });
   assert.equal(exemptReceipt.data.receipt.total, 120);
   assert.equal(exemptReceipt.data.receipt.tax, 0);
+  const cash = newRecord('MTT-cash-receipt', { payment_option: 'Cash', total: 100, paid_amount: 100 });
+  const cashReceipt = await request('issue-receipt', { bookingId: cash.booking_id });
+  assert.equal(cashReceipt.code, 200, JSON.stringify(cashReceipt.data));
+  assert.equal(cashReceipt.data.receipt.subtotal, 100);
+  assert.equal(cashReceipt.data.receipt.tax, 0);
+  assert.equal(cashReceipt.data.receipt.taxLabel, 'No HST (cash payment)');
+  assert.equal(cashReceipt.data.receipt.total, 100);
+  assert.match(receiptHtml(), /No HST \(cash payment\)/);
+  assert.match(receiptHtml(), /Checked in[\s\S]*Front Desk/);
+  const card = newRecord('MTT-card-receipt', { payment_option: 'Card' });
+  const cardReceipt = await request('issue-receipt', { bookingId: card.booking_id });
+  assert.deepEqual([cardReceipt.data.receipt.subtotal, cardReceipt.data.receipt.tax, cardReceipt.data.receipt.taxLabel], [100, 13, 'HST (13%)']);
+  const unchecked = newRecord('MTT-unchecked-receipt', { checked_in_at: '', checked_in_by: '' });
+  assert.equal((await request('issue-receipt', { bookingId: unchecked.booking_id })).code, 409);
+  const cancelledVisit = newRecord('MTT-cancelled-check-in', { checked_in_at: '', checked_in_by: '', status: 'Cancelled' });
+  assert.equal((await request('check-in', { bookingId: cancelledVisit.booking_id, checkedIn: true })).code, 409);
+  assert.equal((await request('check-in', { bookingId: unchecked.booking_id, checkedIn: 'yes' })).code, 400);
+  assert.equal((await request('check-in', { bookingId: 'missing-booking', checkedIn: true })).code, 404);
+  const undo = await request('check-in', { bookingId: unchecked.booking_id, checkedIn: true });
+  assert.equal(undo.code, 200);
+  const undone = await request('check-in', { bookingId: unchecked.booking_id, checkedIn: false });
+  assert.deepEqual([undone.code, undone.data.checkedInAt, unchecked.checked_in_at], [200, '', '']);
+  assert.match(unchecked.status_notes, /Check-in from .* undone by /);
   const zero = newRecord('MTT-zero-discount');
   assert.equal((await request('issue-receipt', { bookingId: zero.booking_id, manualDiscount: '' })).data.receipt.total, 113);
   assert.equal(zero.receipt_manual_discount, 0);

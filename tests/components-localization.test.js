@@ -96,6 +96,7 @@ const quickProps = {
 const screens = [
   ['QuickBooking', quickProps, 'Quick appointment', 'เพิ่มนัดหมายด่วน'],
   ['BookingNote', { bookingId: 'B1', initialNote: 'Keep this English note', async onSaved() {} }, 'Shared internal booking note', 'บันทึกภายในเกี่ยวกับการจองสำหรับทีม'],
+  ['AppointmentCheckIn', { bookingId: 'B1', checkedInAt: '', checkedInBy: '', receiptIssued: false, cancelled: false, async onChanged() {} }, 'Check in client', 'เช็กอินลูกค้า'],
   ['WixCalendarSync', { async onSynced() {} }, 'Sync Wix bookings', 'ซิงค์การจอง Wix'],
   ['WixBookings', { onViewBookings() {} }, 'Import historical Wix bookings', 'นำเข้าประวัติการจองจาก Wix'],
   ['WixContacts', {}, 'Historical Wix contacts', 'รายชื่อติดต่อเดิมจาก Wix'],

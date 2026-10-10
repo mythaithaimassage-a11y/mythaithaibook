@@ -19,11 +19,13 @@ import WixCalendarSync from './WixCalendarSync';
 import QuickBooking from './QuickBooking';
 import EditBooking from './EditBooking';
 import BookingNote from './BookingNote';
+import AppointmentCheckIn, { formatCheckInTime } from './AppointmentCheckIn';
 import { LanguageProvider, createTranslator, message, useTranslation } from './localization';
 import { AVAILABLE_TIMES, BOOKING_DEPOSIT_AMOUNT, branchPaymentOptions, bookingCategories } from '../lib/booking-options.js';
 import { emptyPatientHistory } from '../lib/patient-history.js';
 import { anatomicalBodyParts } from '../lib/body-map.js';
 import { portalEntry } from '../lib/portal-entry.js';
+import { bookingTaxTreatment } from '../lib/booking-tax.js';
 
 const MOCK_BRANCHES = [
   { id: 1, name: "Mississauga Central", address: "4310 Sherwoodtowne Blvd", city: "Mississauga, ON", phone: "+1 437 898 7424" },
@@ -5643,7 +5645,7 @@ function AdminPortal({
     const label = (value) => safe(tr(value));
     const { receipt, booking: originalBooking, businessProfile: profile } = data;
     const booking = { ...originalBooking, paymentOption: `${tr(originalBooking.paymentOption)}${receipt.packageUsage ? ` — ${tr(receipt.packageUsage.description)} ${tr('Allocated session value ${value}; new payment $0.00.', { value: receipt.packageUsage.allocatedTotal.toFixed(2) })}` : ''}` };
-    popup.document.write(`<!doctype html><html lang="${lang}"><head><title>${label('Receipt')} ${safe(receipt.number)}</title><meta charset="utf-8"><style>body{font:15px Arial,sans-serif;color:#17231e;max-width:760px;margin:48px auto;padding:32px}header{display:flex;justify-content:space-between;border-bottom:3px solid #087765;padding-bottom:20px}h1{font-size:28px;margin:0}small,.muted{color:#65716b}.row{display:flex;justify-content:space-between;padding:12px 0;border-bottom:1px solid #e5ebe7}.total{font-size:20px;font-weight:bold;border-top:2px solid #087765;margin-top:18px;padding-top:18px}.balance{margin-top:20px;padding:12px;background:#eff6f3;border-radius:8px}button{margin:24px 0;padding:10px 18px;background:#073d32;color:white;border:0;border-radius:8px}@media print{button{display:none}body{margin:0 auto}}</style></head><body><header><div><h1>${safe(profile.businessName)}</h1><p class="muted">${safe(profile.legalName)}</p><p class="muted">${safe(profile.address)}</p><p class="muted">${safe(profile.phone)} · ${safe(profile.email)}</p>${profile.taxRegistrationNumber ? `<p class="muted">${label('GST/HST No.')}: ${safe(profile.taxRegistrationNumber)}</p>` : ''}</div><h1>${label('RECEIPT')}</h1></header><p><strong>${label('Receipt No.')}</strong> ${safe(receipt.number)}<br><strong>${label('Issued')}</strong> ${safe(receipt.issuedAt.slice(0, 10))}</p><p><strong>${label('Client')}</strong> ${safe(booking.customerName)}<br>${safe(booking.email)}<br>${safe(booking.phone)}</p><p><strong>${label('Service date')}</strong> ${safe(booking.date)}<br><strong>${label('Payment method')}</strong> ${safe(booking.paymentOption)}</p><div class="row"><strong>${label(booking.serviceName)}</strong><span>$${receipt.subtotal.toFixed(2)}</span></div>${receipt.membershipDiscountAmount > 0 ? `<div class="row"><span>${label(receipt.membershipDiscountLabel)} (${receipt.membershipDiscountPercent}%)</span><span>-$${receipt.membershipDiscountAmount.toFixed(2)}</span></div>` : ''}${receipt.loyaltyDiscount > 0 ? `<div class="row"><span>${label('Loyalty discount ·')} ${receipt.pointsRedeemed.toLocaleString(locale)} ${label('points')}</span><span>-$${receipt.loyaltyDiscount.toFixed(2)}</span></div>` : ''}<div class="row"><span>${label(receipt.taxLabel)}</span><span>$${receipt.tax.toFixed(2)}</span></div><div class="row total"><span>${label('Total paid')}</span><span>$${receipt.total.toFixed(2)}</span></div>${receipt.loyaltyMember ? `<p class="balance"><strong>${label('Loyalty points balance:')}</strong> ${receipt.pointsBalance.toLocaleString(locale)}</p>` : ''}<p class="muted" style="text-align:center;margin-top:64px">${safe(tr('Thank you for choosing {business}.', { business: profile.businessName }))}</p><button onclick="window.print()">${label('Print receipt')}</button></body></html>`);
+    popup.document.write(`<!doctype html><html lang="${lang}"><head><title>${label('Receipt')} ${safe(receipt.number)}</title><meta charset="utf-8"><style>body{font:15px Arial,sans-serif;color:#17231e;max-width:760px;margin:48px auto;padding:32px}header{display:flex;justify-content:space-between;border-bottom:3px solid #087765;padding-bottom:20px}h1{font-size:28px;margin:0}small,.muted{color:#65716b}.row{display:flex;justify-content:space-between;padding:12px 0;border-bottom:1px solid #e5ebe7}.total{font-size:20px;font-weight:bold;border-top:2px solid #087765;margin-top:18px;padding-top:18px}.balance{margin-top:20px;padding:12px;background:#eff6f3;border-radius:8px}button{margin:24px 0;padding:10px 18px;background:#073d32;color:white;border:0;border-radius:8px}@media print{button{display:none}body{margin:0 auto}}</style></head><body><header><div><h1>${safe(profile.businessName)}</h1><p class="muted">${safe(profile.legalName)}</p><p class="muted">${safe(profile.address)}</p><p class="muted">${safe(profile.phone)} · ${safe(profile.email)}</p>${profile.taxRegistrationNumber ? `<p class="muted">${label('GST/HST No.')}: ${safe(profile.taxRegistrationNumber)}</p>` : ''}</div><h1>${label('RECEIPT')}</h1></header><p><strong>${label('Receipt No.')}</strong> ${safe(receipt.number)}<br><strong>${label('Issued')}</strong> ${safe(receipt.issuedAt.slice(0, 10))}</p><p><strong>${label('Client')}</strong> ${safe(booking.customerName)}<br>${safe(booking.email)}<br>${safe(booking.phone)}</p><p><strong>${label('Service date')}</strong> ${safe(booking.date)}<br><strong>${label('Payment method')}</strong> ${safe(booking.paymentOption)}${receipt.checkedInAt ? `<br><strong>${label('Checked in')}</strong> ${safe(formatCheckInTime(receipt.checkedInAt, locale))}${receipt.checkedInBy ? ` · ${safe(receipt.checkedInBy)}` : ''}` : ''}</p><div class="row"><strong>${label(booking.serviceName)}</strong><span>$${receipt.subtotal.toFixed(2)}</span></div>${receipt.membershipDiscountAmount > 0 ? `<div class="row"><span>${label(receipt.membershipDiscountLabel)} (${receipt.membershipDiscountPercent}%)</span><span>-$${receipt.membershipDiscountAmount.toFixed(2)}</span></div>` : ''}${receipt.loyaltyDiscount > 0 ? `<div class="row"><span>${label('Loyalty discount ·')} ${receipt.pointsRedeemed.toLocaleString(locale)} ${label('points')}</span><span>-$${receipt.loyaltyDiscount.toFixed(2)}</span></div>` : ''}<div class="row"><span>${label(receipt.taxLabel)}</span><span>$${receipt.tax.toFixed(2)}</span></div><div class="row total"><span>${label('Total paid')}</span><span>$${receipt.total.toFixed(2)}</span></div>${receipt.loyaltyMember ? `<p class="balance"><strong>${label('Loyalty points balance:')}</strong> ${receipt.pointsBalance.toLocaleString(locale)}</p>` : ''}<p class="muted" style="text-align:center;margin-top:64px">${safe(tr('Thank you for choosing {business}.', { business: profile.businessName }))}</p><button onclick="window.print()">${label('Print receipt')}</button></body></html>`);
     if (receipt.manualDiscount > 0) {
       popup.document.querySelector('.total')?.insertAdjacentHTML('beforebegin', `<div class="row"><span>${label('Manual discount')}</span><span>-$${receipt.manualDiscount.toFixed(2)}</span></div>`);
     }
@@ -6186,6 +6188,7 @@ function AdminPortal({
                   <th className="p-3">{tr("Therapist")}</th>
                   <th className="p-3">{tr("Time")}</th>
                   <th className="p-3"><span className="inline-flex items-center gap-1.5"><Database className="w-3.5 h-3.5" /> {tr("Database")}</span></th>
+                  <th className="p-3">{tr("Check-in")}</th>
                   <th className="p-3">{tr("Total")}</th>
                   <th className="p-3">{tr("Actions")}</th>
                 </tr>
@@ -6208,6 +6211,14 @@ function AdminPortal({
                           <Check className="w-3 h-3 mr-1" />{tr("Synced")}</span>
                       ) : (
                         <span className="bg-stone-100 text-stone-600 font-bold px-2 py-1 rounded-md text-[10px]">{tr("Local Only")}</span>
+                      )}
+                    </td>
+                    <td className="p-3">
+                      {b.checkedInAt ? (
+                        <span title={b.checkedInBy || ''} className="bg-emerald-100 text-emerald-800 font-bold px-2 py-1 rounded-md text-[10px] inline-flex items-center">
+                          <Check className="w-3 h-3 mr-1" />{tr("Checked in")}</span>
+                      ) : (
+                        <span className="bg-amber-50 text-amber-800 font-bold px-2 py-1 rounded-md text-[10px]">{tr("Not checked in")}</span>
                       )}
                     </td>
                     <td className="p-3 font-bold text-stone-900">${b.total.toFixed(2)}</td>
@@ -8128,7 +8139,24 @@ function AdminPortal({
                     <div className="rounded-xl border border-slate-200 px-4 py-3">
                       <div className="flex justify-between text-sm text-slate-500"><span>{tr("Amount paid")}</span><span>${Number(booking.paidAmount || 0).toFixed(2)}</span></div>
                       <div className="mt-2 flex justify-between text-sm font-bold text-slate-900"><span>{tr("Appointment total")}</span><span>${Number(booking.total || 0).toFixed(2)}</span></div>
+                      <p className="mt-2 text-xs text-slate-500">{tr("Tax:")} {tr(bookingTaxTreatment(booking.serviceName, booking.paymentOption).label)}</p>
                     </div>
+                    {booking.id && (
+                      <AppointmentCheckIn
+                        key={`${booking.id}-${booking.checkedInAt || ''}`}
+                        bookingId={booking.id}
+                        checkedInAt={booking.checkedInAt || ''}
+                        checkedInBy={booking.checkedInBy || ''}
+                        receiptIssued={Boolean(booking.receiptNumber || issuedReceipt)}
+                        cancelled={['Cancelled', 'No Show'].includes(String(booking.status || ''))}
+                        onChanged={async (checkIn) => {
+                          setSelectedCalendarEvent((current) => current ? { ...current, booking: { ...current.booking, ...checkIn } } : current);
+                          setIssuedReceipt((current) => current ? { ...current, booking: { ...current.booking, ...checkIn } } : current);
+                          setBookings((current) => current.map((item) => item.id === booking.id ? { ...item, ...checkIn } : item));
+                          await Promise.all([loadCalendar(), loadBookingsFromBackend()]);
+                        }}
+                      />
+                    )}
                     {dashboardUser.role === 'owner' && !issuedReceipt && needsDetails && linkEventForm && (
                       <form onSubmit={completeBookingDetails} className="space-y-3 rounded-xl border border-slate-200 p-4">
                         <div className="grid gap-3 sm:grid-cols-2">
@@ -8137,10 +8165,10 @@ function AdminPortal({
                           <label className="text-xs font-semibold text-slate-600">{tr("Phone")}<input value={linkEventForm.phone} onChange={(event) => setLinkEventForm((current) => ({ ...current, phone: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
                           </label>
                           <label className="text-xs font-semibold text-slate-600">{tr("Payment method")}<select value={linkEventForm.paymentOption} onChange={(event) => setLinkEventForm((current) => ({ ...current, paymentOption: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
-                              <option>{tr("Cash")}</option>
-                              <option>{tr("Card")}</option>
-                              <option>{tr("E-transfer")}</option>
-                              <option>{tr("Other")}</option>
+                              <option value="Cash">{tr("Cash")}</option>
+                              <option value="Card">{tr("Card")}</option>
+                              <option value="E-transfer">{tr("E-transfer")}</option>
+                              <option value="Other">{tr("Other")}</option>
                             </select>
                           </label>
                           <label className="text-xs font-semibold text-slate-600">{tr("Appointment total ($)")}<input required type="number" min="0" step="0.01" value={linkEventForm.total} onChange={(event) => setLinkEventForm((current) => ({ ...current, total: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
@@ -8183,8 +8211,8 @@ function AdminPortal({
                     )}
                     {!issuedReceipt && !needsDetails && (
                       <div className="flex flex-col-reverse gap-3 border-t border-slate-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
-                        <p className="text-xs leading-5 text-slate-500">{!paidInFull ? tr("Receipts are available only after full payment is recorded.") : !booking.email ? tr("Add a valid patient email to the booking before issuing a receipt.") : !booking.id ? tr("This appointment is not linked to a booking record.") : tr("A receipt will be emailed to the patient and recorded with this booking.")}</p>
-                        <button type="button" disabled={isIssuingReceipt || !paidInFull || !booking.email || !booking.id} onClick={() => issueReceipt(booking.id)} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-emerald-950 px-4 py-2.5 text-xs font-bold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"><ReceiptText className="h-4 w-4" />{isIssuingReceipt ? tr("Issuing…") : tr("Issue & email receipt")}</button>
+                        <p className="text-xs leading-5 text-slate-500">{!booking.checkedInAt && !booking.receiptNumber ? tr("Check the client in for this appointment before issuing a receipt.") : !paidInFull ? tr("Receipts are available only after full payment is recorded.") : !booking.email ? tr("Add a valid patient email to the booking before issuing a receipt.") : !booking.id ? tr("This appointment is not linked to a booking record.") : tr("A receipt will be emailed to the patient and recorded with this booking.")}</p>
+                        <button type="button" disabled={isIssuingReceipt || !paidInFull || !booking.email || !booking.id || (!booking.checkedInAt && !booking.receiptNumber)} onClick={() => issueReceipt(booking.id)} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-emerald-950 px-4 py-2.5 text-xs font-bold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"><ReceiptText className="h-4 w-4" />{isIssuingReceipt ? tr("Issuing…") : tr("Issue & email receipt")}</button>
                       </div>
                     )}
                     {booking.id && (

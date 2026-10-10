@@ -3,7 +3,8 @@ import { BigQuery } from '@google-cloud/bigquery';
 import crypto from 'node:crypto';
 import { createWixContactStore, prepareWixContacts } from '../lib/wix-contacts.js';
 import { applyWixCataloguePrices, applyWixTherapistMappings, importWixBookings, prepareWixBookings } from '../lib/wix-bookings.js';
-import { BOOKING_TABLE_FIELDS } from '../lib/booking-schema.js';
+import { BOOKING_TABLE_FIELDS, LATER_BOOKING_COLUMNS } from '../lib/booking-schema.js';
+import { bookingTaxTreatment, preTaxSubtotal, taxOn } from '../lib/booking-tax.js';
 import { validateBookingNote } from '../lib/booking-note.js';
 import { applyBookingDiscount, bookingDiscount, bookingEditVersion, normalizeBookingTime, staffBooking, validateBookingEdit, zonedBookingInstant } from '../lib/booking-edit.js';
 import { createPackageStore, historicalPackageVisit, readPackageUsage, packageReceiptDetails } from '../lib/packages.js';
@@ -242,11 +243,9 @@ async function ensureBookingsTable(bigquery) {
       } else {
         const [metadata] = await table.getMetadata();
         const fields = metadata.schema?.fields || [];
-        const receiptFields = [
-          { name: 'receipt_manual_discount', type: 'FLOAT64', mode: 'NULLABLE' },
-          { name: 'receipt_reconciliation', type: 'STRING', mode: 'NULLABLE' },
-          { name: 'booking_note', type: 'STRING', mode: 'NULLABLE' },
-        ];
+        const receiptFields = BOOKING_TABLE_FIELDS
+          .filter((field) => LATER_BOOKING_COLUMNS.includes(field.name))
+          .map(({ name, type }) => ({ name, type, mode: 'NULLABLE' }));
         for (const field of receiptFields) {
           const existing = fields.find((candidate) => candidate.name === field.name);
           if (existing && ((existing.type === 'FLOAT' ? 'FLOAT64' : existing.type) !== field.type || ['REPEATED', 'REQUIRED'].includes(existing.mode))) {
@@ -3772,6 +3771,15 @@ async function sendCompanyUsageNotificationEmail(gmail, { contactEmail, organiza
   });
 }
 
+function formatReceiptCheckIn(receipt) {
+  if (!receipt.checkedInAt) return '';
+  const time = new Date(receipt.checkedInAt);
+  const when = Number.isNaN(time.getTime()) ? receipt.checkedInAt : new Intl.DateTimeFormat('en-CA', {
+    timeZone: CALENDAR_TIME_ZONE, dateStyle: 'medium', timeStyle: 'short',
+  }).format(time);
+  return receipt.checkedInBy ? `${when} by ${receipt.checkedInBy}` : when;
+}
+
 async function sendReceiptEmail(gmail, booking, receipt, businessProfile) {
   const recipient = String(booking.email || '').trim();
   if (!/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(recipient)) {
@@ -3786,6 +3794,7 @@ async function sendReceiptEmail(gmail, booking, receipt, businessProfile) {
     `Service: ${booking.serviceName}`,
     `Service date: ${booking.date}`,
     `Payment method: ${booking.paymentOption}`,
+    ...(receipt.checkedInAt ? [`Checked in: ${formatReceiptCheckIn(receipt)}`] : []),
     `Subtotal: $${receipt.subtotal.toFixed(2)}`,
     ...(receipt.membershipDiscountAmount > 0
       ? [`${receipt.membershipDiscountLabel} (${receipt.membershipDiscountPercent}%): -$${receipt.membershipDiscountAmount.toFixed(2)}`]
@@ -3824,7 +3833,7 @@ async function sendReceiptEmail(gmail, booking, receipt, businessProfile) {
     ? `<img src="${escapeHtml(businessProfile.photoUrl)}" alt="${escapeHtml(businessProfile.businessName)} logo" width="64" height="64" style="display:block;width:64px;height:64px;object-fit:contain;border:0;border-radius:12px;background:#fff">`
     : `<table role="presentation" width="64" height="64" cellspacing="0" cellpadding="0" style="width:64px;height:64px;background:#fff;border-radius:12px"><tr><td align="center" valign="middle" style="color:#073d32;font-size:22px;font-weight:bold">${escapeHtml(initials)}</td></tr></table>`;
   const receiptHeader = `<table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td width="80" valign="middle" style="width:80px;padding-right:16px">${businessIcon}</td><td valign="middle"><p style="margin:0 0 8px;font-size:12px;letter-spacing:2px">${escapeHtml(businessProfile.businessName).toUpperCase()}</p><h1 style="margin:0;font-size:25px">Payment receipt</h1></td></tr></table>`;
-  const html = `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Receipt ${escapeHtml(receipt.number)}</title></head><body style="margin:0;background:#f3f5f4;padding:28px 12px;font-family:Arial,Helvetica,sans-serif;color:#18251f"><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td align="center"><table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width:600px;width:100%;background:#fff;border:1px solid #e2e9e5;border-radius:14px;overflow:hidden"><tr><td style="padding:28px 32px;background:#073d32;color:#fff">${receiptHeader}</td></tr><tr><td style="padding:26px 32px"><p style="margin:0 0 6px;font-weight:bold">${escapeHtml(businessProfile.legalName || businessProfile.businessName)}</p><p style="margin:0 0 4px;color:#66736d">${escapeHtml(businessProfile.address)}</p><p style="margin:0 0 4px;color:#66736d">${escapeHtml(businessProfile.phone)} · ${escapeHtml(businessProfile.email)}</p>${businessProfile.taxRegistrationNumber ? `<p style="margin:0 0 20px;color:#66736d">GST/HST No.: ${escapeHtml(businessProfile.taxRegistrationNumber)}</p>` : '<div style="height:20px"></div>'}<p style="margin:0 0 6px"><strong>Receipt No.</strong> ${escapeHtml(receipt.number)}</p><p style="margin:0 0 22px;color:#66736d">Issued ${escapeHtml(receipt.issuedAt.slice(0, 10))}</p><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse"><tr><td style="padding:10px 0;border-bottom:1px solid #e6ebe8;color:#64716b">Client</td><td align="right" style="padding:10px 0;border-bottom:1px solid #e6ebe8;font-weight:bold">${escapeHtml(booking.customerName)}</td></tr><tr><td style="padding:10px 0;border-bottom:1px solid #e6ebe8;color:#64716b">Email</td><td align="right" style="padding:10px 0;border-bottom:1px solid #e6ebe8">${escapeHtml(booking.email)}</td></tr><tr><td style="padding:10px 0;border-bottom:1px solid #e6ebe8;color:#64716b">Service</td><td align="right" style="padding:10px 0;border-bottom:1px solid #e6ebe8">${escapeHtml(booking.serviceName)}</td></tr><tr><td style="padding:10px 0;border-bottom:1px solid #e6ebe8;color:#64716b">Service date</td><td align="right" style="padding:10px 0;border-bottom:1px solid #e6ebe8">${escapeHtml(booking.date)}</td></tr><tr><td style="padding:10px 0;color:#64716b">Payment method</td><td align="right" style="padding:10px 0">${escapeHtml(booking.paymentOption)}</td></tr></table><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-top:24px;border-top:2px solid #087765"><tr><td style="padding:10px 0;color:#64716b">Subtotal</td><td align="right" style="padding:10px 0">$${receipt.subtotal.toFixed(2)}</td></tr>${membershipDiscountRow}${loyaltyRows}<tr><td style="padding:8px 0;color:#64716b">${escapeHtml(receipt.taxLabel)}</td><td align="right" style="padding:8px 0">$${receipt.tax.toFixed(2)}</td></tr><tr><td style="padding:14px 0;border-top:1px solid #d8e2dc;font-size:18px;font-weight:bold">Total paid</td><td align="right" style="padding:14px 0;border-top:1px solid #d8e2dc;font-size:18px;font-weight:bold">$${receipt.total.toFixed(2)}</td></tr></table>${loyaltyBalance}<p style="margin:24px 0 0;text-align:center;color:#64716b">Thank you for choosing ${escapeHtml(businessProfile.businessName)}.</p></td></tr></table></td></tr></table></body></html>`;
+  const html = `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>Receipt ${escapeHtml(receipt.number)}</title></head><body style="margin:0;background:#f3f5f4;padding:28px 12px;font-family:Arial,Helvetica,sans-serif;color:#18251f"><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td align="center"><table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width:600px;width:100%;background:#fff;border:1px solid #e2e9e5;border-radius:14px;overflow:hidden"><tr><td style="padding:28px 32px;background:#073d32;color:#fff">${receiptHeader}</td></tr><tr><td style="padding:26px 32px"><p style="margin:0 0 6px;font-weight:bold">${escapeHtml(businessProfile.legalName || businessProfile.businessName)}</p><p style="margin:0 0 4px;color:#66736d">${escapeHtml(businessProfile.address)}</p><p style="margin:0 0 4px;color:#66736d">${escapeHtml(businessProfile.phone)} · ${escapeHtml(businessProfile.email)}</p>${businessProfile.taxRegistrationNumber ? `<p style="margin:0 0 20px;color:#66736d">GST/HST No.: ${escapeHtml(businessProfile.taxRegistrationNumber)}</p>` : '<div style="height:20px"></div>'}<p style="margin:0 0 6px"><strong>Receipt No.</strong> ${escapeHtml(receipt.number)}</p><p style="margin:0 0 22px;color:#66736d">Issued ${escapeHtml(receipt.issuedAt.slice(0, 10))}</p><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse"><tr><td style="padding:10px 0;border-bottom:1px solid #e6ebe8;color:#64716b">Client</td><td align="right" style="padding:10px 0;border-bottom:1px solid #e6ebe8;font-weight:bold">${escapeHtml(booking.customerName)}</td></tr><tr><td style="padding:10px 0;border-bottom:1px solid #e6ebe8;color:#64716b">Email</td><td align="right" style="padding:10px 0;border-bottom:1px solid #e6ebe8">${escapeHtml(booking.email)}</td></tr><tr><td style="padding:10px 0;border-bottom:1px solid #e6ebe8;color:#64716b">Service</td><td align="right" style="padding:10px 0;border-bottom:1px solid #e6ebe8">${escapeHtml(booking.serviceName)}</td></tr><tr><td style="padding:10px 0;border-bottom:1px solid #e6ebe8;color:#64716b">Service date</td><td align="right" style="padding:10px 0;border-bottom:1px solid #e6ebe8">${escapeHtml(booking.date)}</td></tr><tr><td style="padding:10px 0;color:#64716b">Payment method</td><td align="right" style="padding:10px 0">${escapeHtml(booking.paymentOption)}</td></tr>${receipt.checkedInAt ? `<tr><td style="padding:10px 0;border-top:1px solid #e6ebe8;color:#64716b">Checked in</td><td align="right" style="padding:10px 0;border-top:1px solid #e6ebe8">${escapeHtml(formatReceiptCheckIn(receipt))}</td></tr>` : ''}</table><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-top:24px;border-top:2px solid #087765"><tr><td style="padding:10px 0;color:#64716b">Subtotal</td><td align="right" style="padding:10px 0">$${receipt.subtotal.toFixed(2)}</td></tr>${membershipDiscountRow}${loyaltyRows}<tr><td style="padding:8px 0;color:#64716b">${escapeHtml(receipt.taxLabel)}</td><td align="right" style="padding:8px 0">$${receipt.tax.toFixed(2)}</td></tr><tr><td style="padding:14px 0;border-top:1px solid #d8e2dc;font-size:18px;font-weight:bold">Total paid</td><td align="right" style="padding:14px 0;border-top:1px solid #d8e2dc;font-size:18px;font-weight:bold">$${receipt.total.toFixed(2)}</td></tr></table>${loyaltyBalance}<p style="margin:24px 0 0;text-align:center;color:#64716b">Thank you for choosing ${escapeHtml(businessProfile.businessName)}.</p></td></tr></table></td></tr></table></body></html>`;
   const boundary = `receipt_${crypto.randomBytes(12).toString('hex')}`;
   const encode = (value) => Buffer.from(value).toString('base64').match(/.{1,76}/g).join('\r\n');
   const message = [
@@ -4441,7 +4450,7 @@ export default async function handler(req, res) {
       (req.method === 'POST' && ['branches', 'services', 'therapists', 'unavailability'].includes(view));
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
     const dashboardSession = await getOwnerSession(req);
-    if (['manual-booking', 'edit-booking', 'issue-receipt', 'mark-paid'].includes(view)) {
+    if (['manual-booking', 'edit-booking', 'issue-receipt', 'mark-paid', 'check-in'].includes(view)) {
       res.setHeader('Cache-Control', 'no-store');
       if (!dashboardSession) return res.status(401).json({ message: 'Dashboard sign-in required' });
       if (!isSameOriginRequest(req)) return res.status(403).json({ message: 'Request origin is not allowed' });
@@ -4578,7 +4587,7 @@ export default async function handler(req, res) {
       }
       const counts = await importWixBookings(getBigQueryClient(), prepared.bookings, {
         projectId: BIGQUERY_PROJECT_ID, datasetId: BIGQUERY_DATASET_ID,
-        tableId: BIGQUERY_BOOKINGS_TABLE, fields: BOOKING_TABLE_FIELDS.filter((field) => !['receipt_manual_discount', 'receipt_reconciliation', 'booking_note'].includes(field.name)), reviewedPaid: true,
+        tableId: BIGQUERY_BOOKINGS_TABLE, fields: BOOKING_TABLE_FIELDS.filter((field) => !LATER_BOOKING_COLUMNS.includes(field.name)), reviewedPaid: true,
       });
       let calendarSync;
       try {
@@ -4664,6 +4673,52 @@ export default async function handler(req, res) {
         params: { bookingId, expectedNote, note },
       });
       return res.status(200).json({ bookingId, bookingNote: note });
+    }
+
+    if (view === 'check-in') {
+      if (req.method !== 'POST') return res.status(405).json({ message: 'Method Not Allowed' });
+      const bookingId = String(req.body?.bookingId || '').trim();
+      if (!bookingId || bookingId.length > 100) return res.status(400).json({ message: 'A valid booking ID is required.' });
+      if (typeof req.body?.checkedIn !== 'boolean') return res.status(400).json({ message: 'Choose whether to check the client in or undo the check-in.' });
+      const bigquery = getBigQueryClient();
+      const result = await bqFetchBookingRows(bigquery);
+      const row = result.data.values.find((candidate) => candidate[0] === bookingId && candidate[0] !== 'Booking ID');
+      if (!row) return res.status(404).json({ message: 'Booking was not found.' });
+      const allowedBranches = await getDashboardBranchNames(sheets, dashboardSession);
+      if (allowedBranches && !allowedBranches.has(String(row[4] || '').trim().toLowerCase())) {
+        return res.status(403).json({ message: 'This booking is outside your assigned branch access.' });
+      }
+      const currentCheckIn = String(row[29] || '');
+      if (req.body.checkedIn && currentCheckIn) {
+        return res.status(200).json({ bookingId, checkedInAt: currentCheckIn, checkedInBy: row[30] || '', alreadyCheckedIn: true });
+      }
+      if (!req.body.checkedIn && !currentCheckIn) {
+        return res.status(200).json({ bookingId, checkedInAt: '', checkedInBy: '', alreadyCheckedIn: false });
+      }
+      if (req.body.checkedIn && ['Cancelled', 'No Show'].includes(String(row[24] || ''))) {
+        return res.status(409).json({ message: 'Cancelled or no-show appointments cannot be checked in.' });
+      }
+      if (!req.body.checkedIn && row[18]) {
+        return res.status(409).json({ message: 'A receipt has been issued for this appointment, so its check-in cannot be undone.' });
+      }
+      const now = new Date().toISOString();
+      const staffName = dashboardSession.name || dashboardSession.email;
+      const checkedInAt = req.body.checkedIn ? now : '';
+      const checkedInBy = req.body.checkedIn ? staffName : '';
+      const auditNote = req.body.checkedIn
+        ? `Checked in by ${dashboardSession.email} at ${now}.`
+        : `Check-in from ${currentCheckIn} undone by ${dashboardSession.email} at ${now}.`;
+      await bigquery.query({
+        query: `BEGIN TRANSACTION;
+          ASSERT (SELECT COUNT(*) FROM ${bookingsTableRef()} WHERE booking_id = @bookingId AND COALESCE(checked_in_at, '') = @expectedCheckIn) = 1 AS 'Check-in changed; refresh and retry';
+          UPDATE ${bookingsTableRef()} SET checked_in_at = @checkedInAt, checked_in_by = @checkedInBy, status_notes = @statusNotes WHERE booking_id = @bookingId;
+          COMMIT TRANSACTION;`,
+        params: {
+          bookingId, expectedCheckIn: currentCheckIn, checkedInAt, checkedInBy,
+          statusNotes: `${row[25] || ''}${row[25] ? '\n' : ''}${auditNote}`,
+        },
+      });
+      return res.status(200).json({ bookingId, checkedInAt, checkedInBy, alreadyCheckedIn: false });
     }
 
     if (req.method === 'POST' && view === 'dashboard-user') {
@@ -5845,8 +5900,7 @@ export default async function handler(req, res) {
       const balance = memberTransactions.reduce((sum, row) => sum + (Number(row[4]) || 0), 0);
       if (points > balance) return res.status(409).json({ message: `Insufficient points. Available balance: ${balance}.` });
       const rewardValue = (points / settings.redemptionPoints) * settings.redemptionValue;
-      const isTaxExempt = /registered massage therapy|\brmt\b|acupuncture/i.test(String(booking[5] || ''));
-      const preDiscountSubtotal = isTaxExempt ? bookingTotal : bookingTotal / 1.13;
+      const preDiscountSubtotal = preTaxSubtotal(bookingTotal, booking[5], booking[9]);
       if (rewardValue > preDiscountSubtotal + 0.005) {
         return res.status(409).json({ message: 'The selected points redemption is greater than the eligible pre-tax purchase amount.' });
       }
@@ -6997,6 +7051,8 @@ export default async function handler(req, res) {
                   receiptEmailStatus: bookingRow[20] || '',
                   receiptManualDiscount: Number(bookingRow[26]) || 0,
                   bookingNote: bookingRow[28] || '',
+                  checkedInAt: bookingRow[29] || '',
+                  checkedInBy: bookingRow[30] || '',
                   status: bookingRow[24] || '',
                   statusNotes: bookingRow[25] || '',
                   paymentLocked: staffBooking(bookingRow).paymentLocked,
@@ -7054,6 +7110,8 @@ export default async function handler(req, res) {
                     durationMinutes: autoDurationMinutes,
                     receiptNumber: '',
                     receiptEmailStatus: '',
+                    checkedInAt: '',
+                    checkedInBy: '',
                     status: '',
                     statusNotes: '',
                     autoLinked: true,
@@ -7157,6 +7215,8 @@ export default async function handler(req, res) {
           isCouple: /couple/i.test(row[5] || ''),
           syncedToSheets: true,
           bookingNote: row[28] || '',
+          checkedInAt: row[29] || '',
+          checkedInBy: row[30] || '',
         })),
       });
     }
@@ -7682,7 +7742,12 @@ export default async function handler(req, res) {
         paymentOption: row[9] || '',
         paidAmount: Number(row[10]) || 0,
         total: Number(row[11]) || 0,
+        checkedInAt: row[29] || '',
+        checkedInBy: row[30] || '',
       };
+      if (!row[18] && !booking.checkedInAt) {
+        return res.status(409).json({ message: 'Check the client in for this appointment before issuing a receipt.' });
+      }
       const packageUsage = packageReceiptDetails(row[14]);
       if (packageUsage && manualDiscount > 0) return res.status(409).json({ message: 'Manual discounts cannot change a verified prepaid package allocation.' });
       if (historicalPackageVisit(row[0], row[5], row[14]) && !packageUsage) {
@@ -7728,9 +7793,9 @@ export default async function handler(req, res) {
         .filter((loyaltyRow) => normalizeLoyaltyEmail(loyaltyRow[1]) === normalizeLoyaltyEmail(booking.email))
         .reduce((sum, loyaltyRow) => sum + (Number(loyaltyRow[4]) || 0), 0);
       const businessProfile = await getBusinessProfile(sheets);
-      const isTaxExempt = /registered massage therapy|\brmt\b|acupuncture/i.test(booking.serviceName);
+      const taxTreatment = bookingTaxTreatment(booking.serviceName, packageUsage ? '' : booking.paymentOption);
       const calculationTotal = savedReconciliation ? savedReconciliation.originalTotal : booking.total;
-      const discountedSubtotal = packageUsage ? packageUsage.allocatedSubtotal : Math.round((isTaxExempt ? calculationTotal : calculationTotal / 1.13) * 100) / 100;
+      const discountedSubtotal = packageUsage ? packageUsage.allocatedSubtotal : preTaxSubtotal(calculationTotal, booking.serviceName, booking.paymentOption);
       if (loyaltyDiscount > discountedSubtotal + 0.005) {
         return res.status(409).json({ message: 'The loyalty redemption exceeds this receipt subtotal. Adjust the redemption before issuing this receipt.' });
       }
@@ -7739,13 +7804,13 @@ export default async function handler(req, res) {
         return res.status(400).json({ message: 'The manual discount cannot exceed the subtotal remaining after membership and loyalty discounts.' });
       }
       const receiptSubtotal = Math.round((discountedSubtotal - loyaltyDiscount - manualDiscount) * 100) / 100;
-      const tax = packageUsage ? packageUsage.allocatedTax : editedDiscount && !redemption ? editedDiscount.tax : isTaxExempt ? 0 : Math.round(receiptSubtotal * 0.13 * 100) / 100;
+      const tax = packageUsage ? packageUsage.allocatedTax : editedDiscount && !redemption ? editedDiscount.tax : taxOn(receiptSubtotal, booking.serviceName, booking.paymentOption);
       let receipt = {
         number: row[18] || `MTT-${new Date().getFullYear()}-${String(Math.floor(100000 + Math.random() * 900000))}`,
         issuedAt: row[19] || new Date().toISOString(),
         subtotal,
         tax,
-        taxLabel: isTaxExempt ? 'HST exempt' : 'HST (13%)',
+        taxLabel: taxTreatment.taxable || tax > 0 ? 'HST (13%)' : taxTreatment.label,
         total: Math.round((receiptSubtotal + tax) * 100) / 100,
         membershipDiscountAmount,
         membershipDiscountPercent,
@@ -7772,6 +7837,8 @@ export default async function handler(req, res) {
           return res.status(409).json({ message: 'The saved booking discount does not match the payment record. Reconcile the booking before editing or issuing a receipt.' });
         }
       }
+      receipt.checkedInAt = booking.checkedInAt;
+      receipt.checkedInBy = booking.checkedInBy;
       await bqUpdateBookingFields(bigquery, bookingId, {
         receiptNumber: receipt.number,
         receiptIssuedAt: receipt.issuedAt,

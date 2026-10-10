@@ -69,8 +69,12 @@ test('locked bookings permit note corrections without rewriting or revalidating 
 test('booking discounts reconcile before tax, persist original amounts and do not compound on repeat saves', () => {
   const row = BOOKING_TABLE_FIELDS.map((field) => field.type === 'STRING' ? '' : 0);
   Object.assign(row, { 0: 'MTT-DISCOUNT', 5: 'Massage', 10: 113, 11: 113 });
-  const edited = { ...validateBookingEdit({ ...valid, paidAmount: '113' }), serviceName: 'Massage' };
+  const edited = { ...validateBookingEdit({ ...valid, paidAmount: '113', paymentOption: 'Card' }), serviceName: 'Massage' };
   const body = { manualDiscount: '10', confirmReconciliation: true };
+  const cashRow = [...row]; cashRow[9] = 'Cash'; cashRow[10] = 100; cashRow[11] = 100;
+  const cash = applyBookingDiscount(cashRow, { ...edited, paymentOption: 'Cash', total: 100, paidAmount: 100 }, body, 'staff@example.com');
+  assert.equal(cash.total, 90, 'Cash discounts apply to the untaxed amount');
+  assert.equal(cash.paidAmount, 90);
   assert.throws(() => applyBookingDiscount(row, edited, { manualDiscount: 10 }, 'staff@example.com'),
     (error) => error.statusCode === 400);
   for (const manualDiscount of [-1, null, {}, 'abc', '10.001', '1e2', 100.01]) {

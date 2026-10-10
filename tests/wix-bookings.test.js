@@ -4,7 +4,7 @@ import { Readable } from 'node:stream';
 import { BigQuery } from '@google-cloud/bigquery';
 import { google } from 'googleapis';
 import { applyWixCataloguePrices, applyWixTherapistMappings, prepareWixBookings, importWixBookings } from '../lib/wix-bookings.js';
-import { BOOKING_TABLE_FIELDS } from '../lib/booking-schema.js';
+import { BOOKING_TABLE_FIELDS, LATER_BOOKING_COLUMNS } from '../lib/booking-schema.js';
 import { MAX_WIX_QUERY_BYTES } from '../lib/wix-import.js';
 import { createDashboardChallengeStore, handleDashboardChallengeQuery, readDashboardOtp } from './helpers/dashboard-auth.js';
 
@@ -98,7 +98,7 @@ test('maps exactly the existing booking schema and preserves exported details wi
   const { bookings, summary } = prepare([{}]);
   assert.equal(summary.validBookings, 1);
   const booking = bookings[0];
-  assert.deepEqual(Object.keys(booking).sort(), BOOKING_TABLE_FIELDS.filter(({ name }) => !['receipt_manual_discount', 'receipt_reconciliation', 'booking_note'].includes(name)).map(({ name }) => name).sort());
+  assert.deepEqual(Object.keys(booking).sort(), BOOKING_TABLE_FIELDS.filter(({ name }) => !LATER_BOOKING_COLUMNS.includes(name)).map(({ name }) => name).sort());
   assert.equal(booking.branch_name, 'Mississauga Central');
   assert.equal(booking.branch_address, '');
   assert.equal(booking.email, 'client@example.com');

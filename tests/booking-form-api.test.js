@@ -466,7 +466,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
     bookingId: editable.booking_id, expectedVersion: version(), customerName: 'Updated client',
     email: 'updated@example.com', phone: '+1 437 555 0101', bookingNote: 'Internal edit note',
     date: editable.date, time: editable.time, serviceId: '1', therapistNames: ['Test Therapist'],
-    paymentOption: 'Cash', total: '113.00', paidAmount: '113.00',
+    paymentOption: 'Card', total: '113.00', paidAmount: '113.00',
   });
   const legacyTimeBooking = { ...editable, booking_id: 'MTT-legacy-24-hour-time', time: '16:30', calendar_event_id: '' };
   records.push(legacyTimeBooking);
@@ -554,7 +554,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   assert.equal((await request('edit-booking', editBody())).code, 200);
   for (const staffCookie of [managerCookie, receptionistCookie]) {
     cookie = staffCookie;
-    const discountRecord = { ...editable, booking_id: `discount-${staffCookie === managerCookie ? 'manager' : 'receptionist'}`, receipt_number: '', receipt_email_status: '' };
+    const discountRecord = { ...editable, booking_id: `discount-${staffCookie === managerCookie ? 'manager' : 'receptionist'}`, receipt_number: '', receipt_email_status: '', checked_in_at: '2026-01-01T15:00:00.000Z', checked_in_by: 'Front Desk' };
     records.push(discountRecord);
     assert.equal((await request('issue-receipt', { bookingId: discountRecord.booking_id, manualDiscount: '10' })).code, 400);
     assert.equal((await request('issue-receipt', { bookingId: discountRecord.booking_id, manualDiscount: '10', confirmReconciliation: true })).code, 400);
@@ -601,7 +601,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
     assert.equal(listedDiscount.total, 101.7);
     assert.equal(listedDiscount.manualBookingDiscount, 10);
   }
-  const partialRecord = { ...editable, booking_id: 'discount-partial', paid_amount: 50, receipt_number: '', receipt_reconciliation: '' };
+  const partialRecord = { ...editable, booking_id: 'discount-partial', paid_amount: 50, receipt_number: '', receipt_reconciliation: '', checked_in_at: '2026-01-01T15:00:00.000Z', checked_in_by: 'Front Desk' };
   records.push(partialRecord);
   const partialEdit = () => ({
     ...editBody(), bookingId: partialRecord.booking_id,
@@ -621,7 +621,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   assert.equal((await request('edit-booking', { ...partialEdit(), manualDiscount: '' })).code, 200);
   assert.equal(partialRecord.total, 113);
   assert.equal(partialRecord.paid_amount, 113);
-  const fullyDiscounted = { ...editable, booking_id: 'discount-free', receipt_number: '', receipt_reconciliation: '' };
+  const fullyDiscounted = { ...editable, booking_id: 'discount-free', receipt_number: '', receipt_reconciliation: '', checked_in_at: '2026-01-01T15:00:00.000Z', checked_in_by: 'Front Desk' };
   records.push(fullyDiscounted);
   const freeEdit = { ...editBody(), bookingId: fullyDiscounted.booking_id, expectedVersion: bookingEditVersion(BOOKING_TABLE_FIELDS.map((field) => fullyDiscounted[field.name])),
     manualDiscount: '100', confirmReconciliation: true };
@@ -631,7 +631,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   assert.equal(freeReceipt.code, 200, JSON.stringify(freeReceipt.data));
   assert.equal(freeReceipt.data.receipt.total, 0);
   assert.equal((await request('issue-receipt', { bookingId: fullyDiscounted.booking_id })).data.receipt.total, 0);
-  const retryRecord = { ...editable, booking_id: 'discount-email-failure', receipt_number: '', receipt_reconciliation: '' };
+  const retryRecord = { ...editable, booking_id: 'discount-email-failure', receipt_number: '', receipt_reconciliation: '', checked_in_at: '2026-01-01T15:00:00.000Z', checked_in_by: 'Front Desk' };
   records.push(retryRecord);
   const retryEdit = { ...editBody(), bookingId: retryRecord.booking_id,
     expectedVersion: bookingEditVersion(BOOKING_TABLE_FIELDS.map((field) => retryRecord[field.name])),

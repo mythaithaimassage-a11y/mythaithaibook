@@ -10,7 +10,7 @@ const EditBooking = load(editorPath).default;
 const { LanguageProvider } = load(new URL('../src/localization.tsx', import.meta.url).pathname);
 const booking = { id: 'MTT-EDIT', customerName: 'Customer name', email: 'client@example.com', phone: '4375550101',
   branchName: 'Central', serviceName: 'Massage', therapistName: 'Tanya', date: '2026-12-01', time: '10:00 AM',
-  paymentOption: 'Cash', total: 113, paidAmount: 0, bookingNote: 'Internal reference', editVersion: 'version-1' };
+  paymentOption: 'Card', total: 113, paidAmount: 0, bookingNote: 'Internal reference', editVersion: 'version-1' };
 const props = { booking, services: [{ id: 1, name: 'Massage', duration: 60, price: 100, taxRate: .13 }],
   therapists: [{ id: 1, name: 'Tanya', active: true }], times: ['10:00 AM', '11:00 AM'],
   isScheduled: () => true, onClose() {}, async onSaved() {} };
@@ -103,4 +103,11 @@ test('editor submits changes with a version, prevents duplicate saves and report
   await nodes(discounted).find((node) => node.type === 'form').props.onSubmit({ preventDefault() {} });
   nodes(shallow()).find((node) => node.type === 'input' && node.props.max === 100).props.onChange({ target: { value: '5' } });
   assert.equal(nodes(shallow()).find((node) => node.type === 'input' && node.props.type === 'checkbox').props.checked, false);
+  const paymentSelect = () => nodes(shallow()).find((node) => node.type === 'select' && node.props.value !== undefined && ['Card', 'Cash'].includes(node.props.value));
+  const totalInput = () => nodes(shallow()).find((node) => node.type === 'input' && node.props.step && /^\d+\.\d{2}$|^113$/.test(String(node.props.value)) && node.props.max === undefined);
+  paymentSelect().props.onChange({ target: { value: 'Cash' } });
+  assert.equal(totalInput().props.value, '100.00', 'Switching to cash removes HST from the total');
+  assert.match(JSON.stringify(nodes(shallow()).find((node) => node.props?.role === 'status').props.children), /No HST \(cash payment\)/);
+  paymentSelect().props.onChange({ target: { value: 'Card' } });
+  assert.equal(totalInput().props.value, '113.00', 'Switching back to card adds HST');
 });

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import { useTranslation } from './localization';
+import { bookingTaxTreatment, HST_RATE, isCashPayment, preTaxSubtotal, taxOn } from '../lib/booking-tax.js';
 
 export type EditableBooking = {
   id: string; customerName: string; email: string; phone: string; bookingNote?: string;
@@ -25,7 +26,7 @@ export default function EditBooking({ booking, services, therapists, times, isSc
     total: String(booking.receiptNumber || booking.paymentLocked ? booking.total : booking.originalBookingTotal ?? booking.total),
     paidAmount: String(booking.paidAmount),
     manualDiscount: String(booking.manualBookingDiscount || 0),
-    paymentOption: booking.paymentOption || (booking.receiptNumber || booking.paymentLocked ? '' : 'Cash'),
+    paymentOption: booking.paymentOption || '',
     serviceId: String(services.find((service) => service.name === booking.serviceName)?.id || '__existing__'),
   }));
   const exactTherapist = therapists.find((therapist) => booking.therapistName === therapist.name);
@@ -43,15 +44,30 @@ export default function EditBooking({ booking, services, therapists, times, isSc
   const couple = /couple/i.test(service?.name || booking.serviceName) && (assigned.length > 0 || form.serviceId !== '__existing__');
   const eligible = therapists.filter((item) => item.active !== false && isScheduled(item, form.date) && (!service?.isRmt || item.rmtCertified));
   const choices = therapists.filter((item) => eligible.includes(item) || assigned.includes(item));
+  const serviceName = service?.name || booking.serviceName;
   const discountChanged = !locked && (Number(form.manualDiscount) !== (booking.manualBookingDiscount || 0) ||
-    Boolean(booking.manualBookingDiscount && (Number(form.total) !== booking.originalBookingTotal || (service?.name || booking.serviceName) !== booking.serviceName)));
-  const exempt = /registered massage therapy|\brmt\b|acupuncture/i.test(service?.name || booking.serviceName);
-  const subtotal = Math.round((exempt ? Number(form.total) : Number(form.total) / 1.13) * 100) / 100;
+    Boolean(booking.manualBookingDiscount && (Number(form.total) !== booking.originalBookingTotal || serviceName !== booking.serviceName ||
+      isCashPayment(form.paymentOption) !== isCashPayment(booking.paymentOption))));
+  const taxTreatment = bookingTaxTreatment(serviceName, form.paymentOption);
+  const subtotal = preTaxSubtotal(Number(form.total), serviceName, form.paymentOption);
   const remaining = Math.round((subtotal - Number(form.manualDiscount || 0)) * 100) / 100;
-  const discountedTotal = Number(form.manualDiscount) > 0 ? Math.round((remaining + (exempt ? 0 : Math.round(remaining * .13 * 100) / 100)) * 100) / 100 : Number(form.total);
+  const discountedTotal = Number(form.manualDiscount) > 0 ? Math.round((remaining + taxOn(remaining, serviceName, form.paymentOption)) * 100) / 100 : Number(form.total);
+  const round = (value: number) => Math.round(value * 100) / 100;
   const update = (key: keyof typeof form, value: string) => {
-    setForm((current) => ({ ...current, [key]: value }));
-    if (['manualDiscount', 'total', 'serviceId'].includes(key)) setConfirmed(false);
+    setForm((current) => {
+      const next = { ...current, [key]: value };
+      // Cash is charged without HST, so switching to or from cash re-prices a taxable appointment.
+      const name = services.find((item) => String(item.id) === next.serviceId)?.name || booking.serviceName;
+      if (key === 'paymentOption' && isCashPayment(value) !== isCashPayment(current.paymentOption) &&
+          bookingTaxTreatment(name, 'Card').taxable && Number.isFinite(Number(current.total))) {
+        const oldTotal = Number(current.total), paid = Number(current.paidAmount) || 0;
+        const newTotal = round(isCashPayment(value) ? oldTotal / (1 + HST_RATE) : oldTotal * (1 + HST_RATE));
+        next.total = newTotal.toFixed(2);
+        next.paidAmount = (oldTotal > 0 && paid + 0.005 >= oldTotal ? newTotal : Math.min(paid, newTotal)).toFixed(2);
+      }
+      return next;
+    });
+    if (['manualDiscount', 'total', 'serviceId', 'paymentOption'].includes(key)) setConfirmed(false);
   };
   useEffect(() => {
     dialog.current?.showModal();
@@ -99,7 +115,8 @@ export default function EditBooking({ booking, services, therapists, times, isSc
           <label className="text-xs font-semibold">{tr('Manual discount ($) — optional')}<input type="number" min="0" max={subtotal} step="0.01" disabled={locked} value={form.manualDiscount} onChange={(event) => update('manualDiscount', event.target.value)} className={inputClass} /></label>
           <label className="text-xs font-semibold sm:col-span-2">{tr('Shared internal booking note')}<textarea rows={3} maxLength={2000} value={form.bookingNote} onChange={(event) => update('bookingNote', event.target.value)} className={inputClass} /></label>
         </fieldset>
-        {!locked && <p role="status" className="text-xs text-slate-600">{tr('Total after discount: $')}{Number.isFinite(discountedTotal) ? discountedTotal.toFixed(2) : '—'}</p>}
+        {!locked && <p role="status" className="text-xs text-slate-600">{tr('Total after discount: $')}{Number.isFinite(discountedTotal) ? discountedTotal.toFixed(2) : '—'} · {tr(taxTreatment.label)}</p>}
+        <p className="text-xs text-slate-500">{tr('Cash payments are not charged HST; card and other payments include 13% HST. Changing to or from cash recalculates the appointment total.')}</p>
         <p className="text-xs text-slate-500">{tr('Discounts are deducted before HST. Saved totals sync to bookings, calendar and receipts. No payment or refund is sent automatically.')}</p>
         {discountChanged && <label className="flex items-start gap-3 rounded-lg bg-amber-50 p-3 text-xs text-amber-950"><input type="checkbox" checked={confirmed} disabled={saving} onChange={(event) => setConfirmed(event.target.checked)} /><span><strong className="block">{tr('Confirm reconciliation')}</strong>{tr('I confirm any external payment adjustment or refund has been handled. Save the discounted total and reconciled payment record.')}</span></label>}
         {error && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-800">{tr(error)}</p>}
