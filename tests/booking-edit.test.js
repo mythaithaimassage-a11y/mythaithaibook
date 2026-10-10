@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { bookingEditVersion, staffBooking, validateBookingEdit, zonedBookingInstant } from '../lib/booking-edit.js';
+import { applyBookingDiscount, bookingDiscount, bookingEditVersion, staffBooking, validateBookingEdit, zonedBookingInstant } from '../lib/booking-edit.js';
 import { BOOKING_TABLE_FIELDS } from '../lib/booking-schema.js';
 
 const valid = { customerName: ' Client ', email: 'CLIENT@EXAMPLE.COM', phone: '+1 (437) 555-0101',
@@ -53,4 +53,55 @@ test('locked bookings permit note corrections without rewriting or revalidating 
   assert.equal(edited.email, 'CLIENT@EXAMPLE.COM');
   assert.equal(edited.bookingNote, 'New reference');
   assert.throws(() => validateBookingEdit({ ...body, total: '100' }, row), (error) => error.statusCode === 409);
+});
+
+test('booking discounts reconcile before tax, persist original amounts and do not compound on repeat saves', () => {
+  const row = BOOKING_TABLE_FIELDS.map((field) => field.type === 'STRING' ? '' : 0);
+  Object.assign(row, { 0: 'MTT-DISCOUNT', 5: 'Massage', 10: 113, 11: 113 });
+  const edited = { ...validateBookingEdit({ ...valid, paidAmount: '113' }), serviceName: 'Massage' };
+  const body = { manualDiscount: '10', confirmReconciliation: true };
+  assert.throws(() => applyBookingDiscount(row, edited, { manualDiscount: 10 }, 'staff@example.com'),
+    (error) => error.statusCode === 400);
+  for (const manualDiscount of [-1, null, {}, 'abc', '10.001', '1e2', 100.01]) {
+    assert.throws(() => applyBookingDiscount(row, edited, { ...body, manualDiscount }, 'staff@example.com'));
+  }
+  const applied = applyBookingDiscount(row, edited, body, 'staff@example.com');
+  assert.equal(applied.total, 101.7);
+  assert.equal(applied.paidAmount, 101.7);
+  assert.equal(applied.receiptManualDiscount, 10);
+  const persisted = [...row];
+  for (const [prop, value] of Object.entries(applied)) {
+    const index = BOOKING_TABLE_FIELDS.findIndex((field) => field.prop === prop);
+    if (index >= 0) persisted[index] = value;
+  }
+  assert.equal(bookingDiscount(persisted).confirmedBy, 'staff@example.com');
+  assert.equal(staffBooking(persisted).originalBookingTotal, 113);
+  assert.equal(staffBooking(persisted).manualBookingDiscount, 10);
+  const repeat = applyBookingDiscount(persisted, { ...edited, paidAmount: 101.7 }, { manualDiscount: 10 }, 'another@example.com');
+  assert.equal(repeat.total, 101.7);
+  assert.equal(repeat.paidAmount, 101.7);
+  assert.equal(JSON.parse(repeat.receiptReconciliation).confirmedBy, 'staff@example.com');
+  assert.throws(() => applyBookingDiscount(persisted, { ...edited, paidAmount: 101.7 }, { manualDiscount: 0 }, 'staff@example.com'));
+  const removed = applyBookingDiscount(persisted, { ...edited, paidAmount: 101.7 }, { manualDiscount: 0, confirmReconciliation: true }, 'staff@example.com');
+  assert.equal(removed.total, 113);
+  assert.equal(removed.paidAmount, 113);
+  assert.equal(JSON.parse(removed.receiptReconciliation).history.length, 1);
+  const partial = applyBookingDiscount({ ...row, 10: 50 }, { ...edited, paidAmount: 50 }, body, 'staff@example.com');
+  assert.equal(partial.paidAmount, 50);
+  assert.equal(partial.total, 101.7);
+  const fullDiscount = applyBookingDiscount(row, edited, { ...body, manualDiscount: 100 }, 'staff@example.com');
+  assert.equal(fullDiscount.total, 0);
+  assert.equal(fullDiscount.paidAmount, 0);
+  const exempt = applyBookingDiscount({ ...row, 5: 'RMT', 10: 120, 11: 120 }, { ...edited, total: 120, paidAmount: 120, serviceName: 'RMT' }, body, 'staff@example.com');
+  assert.equal(exempt.total, 110);
+  assert.equal(exempt.paidAmount, 110);
+  const pennyRow = [...row]; pennyRow[10] = .04; pennyRow[11] = .04;
+  const pennyEdit = { ...edited, total: .04, paidAmount: .04 };
+  const pennyDiscount = applyBookingDiscount(pennyRow, pennyEdit, { ...body, manualDiscount: '0.01' }, 'staff@example.com');
+  pennyRow[10] = pennyDiscount.paidAmount; pennyRow[11] = pennyDiscount.total; pennyRow[27] = pennyDiscount.receiptReconciliation;
+  const pennyReset = applyBookingDiscount(pennyRow, { ...pennyEdit, paidAmount: pennyRow[10] }, { ...body, manualDiscount: 0 }, 'staff@example.com');
+  assert.equal(pennyReset.total, .04);
+  assert.equal(JSON.parse(pennyReset.receiptReconciliation).tax, 0);
+  persisted[10] = 1;
+  assert.throws(() => bookingDiscount(persisted), (error) => error.statusCode === 409);
 });

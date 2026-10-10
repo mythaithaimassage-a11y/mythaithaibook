@@ -103,31 +103,32 @@ times in the configured calendar time zone, for example **11:00 AM - 12:00 PM**.
 The range uses the actual Google Calendar event times, including appointments
 that finish after midnight.
 
-### Optional receipt discount
+### Manual discount in Edit booking
 
-Owners, branch managers, and receptionists can enter **Manual discount ($) —
-optional** before issuing a receipt for bookings within their authorized branches.
-Leave it blank for no discount. The dollar amount is subtracted after membership
-and loyalty discounts and before HST; tax-exempt services remain exempt.
-Discounts must be non-negative, have at most two decimal places, and not exceed
-the remaining subtotal. Verified prepaid package allocations cannot be discounted.
+**Edit booking** has **Manual discount ($) — optional** instead of an editable
+Amount paid field. Owners, managers and receptionists can apply a discount for
+their authorized branches before a receipt is issued. The appointment total is
+the tax-inclusive amount before the manual discount; the discount is deducted
+before HST (tax-exempt services remain exempt), with a preview of the final total.
 
-The discount appears in the on-screen receipt, emailed receipt, and printout.
-It is saved in the nullable `receipt_manual_discount` BigQuery booking column,
-which is added automatically to an existing bookings table. Existing column
-indices and Wix import fields are preserved. Once a receipt is created, its
-discount is locked and reused on email retries. Booking totals and recorded
-payments are updated to the discounted receipt total after staff checks
-**Confirm reconciliation** and issues the receipt. Staff must first handle any
-payment adjustment/refund; no automatic Square refund is issued. Without that
-confirmation a new discounted receipt cannot be issued.
+Changing or removing a discount requires **Confirm reconciliation**. Staff must
+first handle any external payment adjustment/refund. Fully paid bookings remain
+fully paid at the new total; partial/unpaid bookings retain their original payment,
+capped at the new total. No Square charge/refund is sent. Saving atomically records
+the discounted total, payment, discount and confirming staff audit data, and updates
+the linked Calendar amounts. The schedule, reports and appointment views read the
+updated database record. Subsequent receipt issuance uses the saved discount once,
+including email/print display and retry protection. Issue receipt has no discount
+input and rejects attempts to apply a new discount directly.
 
-The database saves the adjusted booking total and paid amount together with the
-receipt before sending email. The calendar appointment and bookings list refresh
-on success or email failure. The nullable `receipt_reconciliation` STRING column
-stores the original amounts, confirming staff email/time, adjustment amount, and
-receipt snapshot so retries cannot deduct the discount twice. Previously issued
-receipts remain unchanged.
+Issued receipts, prepaid packages and membership-linked financial records remain
+locked. Resolve linked loyalty redemptions before applying a manual booking
+discount. Other membership and loyalty discount workflows remain unchanged.
+
+Previously issued discounted receipts retain their saved amounts and can still
+be displayed, printed or resent. The nullable `receipt_manual_discount` and
+`receipt_reconciliation` columns store booking adjustments and historical receipts;
+existing column indices, reconciliation audit records and Wix imports are preserved.
 
 ### Shared internal booking note
 
@@ -149,8 +150,8 @@ booking lookup responses, or receipts. Keep medical information in patient notes
 ### Dashboard language
 
 The **EN / ไทย** switch applies to the complete staff dashboard interface,
-including navigation, calendar controls, appointment details, receipt discounts
-and reconciliation, shared notes, imports/sync, packages, loyalty, marketing,
+including navigation, calendar controls, appointment details, receipts,
+shared notes, imports/sync, packages, loyalty, marketing,
 reports, settings, and sign-in/out. Shared components use the same language
 provider instead of their own English-only labels. Thai date labels use the Thai
 locale and appointment clock labels use 24-hour time; submitted date/time values,
@@ -717,7 +718,7 @@ passwords should be shared through a separate secure channel.
 - **Branch manager:** appointments and sales reporting for assigned branches;
   no patient medical-history or business-administration access.
 - **Branch receptionist:** assigned-branch appointments, booking creation/editing,
-  payment details, and receipt discounts with confirmed reconciliation;
+  payment details, and receipt issuance;
   no sales reports, patient medical records, or settings.
 
 Branch restrictions and protected actions are enforced by the API as well as
@@ -726,8 +727,8 @@ a dashboard session.
 
 **Schedule & Bookings** and calendar appointment details include **Edit booking**
 for all three dashboard roles. Staff can change client/contact details, shared
-notes, service, therapist(s), date/time and recorded payment details without
-changing the branch. Review the total and amount paid when changing a service;
+notes, service, therapist(s), date/time, total and manual discount without
+changing the branch. Review the total and discount when changing a service;
 this records externally handled payments and does not charge or refund Square.
 Issued receipts, prepaid packages and membership-linked records protect customer,
 service, schedule and payment details; shared notes and eligible therapist

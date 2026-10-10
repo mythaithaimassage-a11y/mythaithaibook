@@ -107,27 +107,22 @@ test('daily calendar, agenda and appointment details display the shared start-en
   assert.match(app, /const hourEvents = visibleCalendarEvents\.filter\(\(event\) => Number\(event\.localTime/);
 });
 
-test('optional dollar discount is sent only by receipt issuance and displayed in screen and print receipts', () => {
+test('manual discount entry is removed while historical discounts remain visible on receipts', () => {
   const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
-  assert.match(app, /Manual discount \(\$\) — optional/);
-  assert.match(app, /type="number" min="0" step="0\.01" placeholder="0\.00"/);
+  assert.doesNotMatch(app, /Manual discount \(\$\) — optional|manualReceiptDiscount/);
   const issueReceipt = app.slice(app.indexOf('const issueReceipt ='), app.indexOf('const markBookingPaid ='));
-  assert.match(issueReceipt, /manualDiscount: manualReceiptDiscount/);
-  assert.match(issueReceipt, /!selectedCalendarEvent\?\.booking\?\.receiptNumber/);
+  assert.match(issueReceipt, /body: JSON\.stringify\(\{ bookingId \}\)/);
+  assert.doesNotMatch(issueReceipt, /confirmReconciliation:|manualDiscount:/);
   const deleteBooking = app.slice(app.indexOf('const deleteBooking ='), app.indexOf('const issueReceipt ='));
   assert.doesNotMatch(deleteBooking, /manualDiscount/);
-  assert.match(app, /setManualReceiptDiscount\(''\)/);
   assert.match(app, /issuedReceipt\.receipt\.manualDiscount\.toFixed\(2\)/);
   assert.match(app, /insertAdjacentHTML\('beforebegin', `<div class="row"><span>\$\{label\('Manual discount'\)\}/);
   assert.match(app, /no automatic refund has been issued/);
 });
 
-test('receipt discounts require staff reconciliation and refresh booking records even after email failures', () => {
+test('receipts refresh booking records even after email failures without reconciliation entry controls', () => {
   const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
-  assert.match(app, /Confirm reconciliation/);
-  assert.match(app, /confirmReconciliation: confirmReceiptReconciliation/);
-  assert.match(app, /Number\(manualReceiptDiscount\) > 0 && !confirmReceiptReconciliation/);
-  assert.match(app, /setManualReceiptDiscount\(event\.target\.value\); setConfirmReceiptReconciliation\(false\)/);
+  assert.doesNotMatch(app, /Confirm reconciliation|confirmReceiptReconciliation|setManualReceiptDiscount/);
   const issue = app.slice(app.indexOf('const issueReceipt ='), app.indexOf('const markBookingPaid ='));
   assert.equal((issue.match(/Promise\.all\(\[loadCalendar\(\), loadBookingsFromBackend\(\)\]\)/g) || []).length, 2);
   assert.ok(issue.indexOf('setBookings(') < issue.indexOf('if (!response.ok)'));

@@ -4264,8 +4264,6 @@ function AdminPortal({
   const [linkEventForm, setLinkEventForm] = useState(null);
   const [receiptError, setReceiptError] = useState('');
   const [receiptNotice, setReceiptNotice] = useState('');
-  const [manualReceiptDiscount, setManualReceiptDiscount] = useState('');
-  const [confirmReceiptReconciliation, setConfirmReceiptReconciliation] = useState(false);
   const [therapistReassignTo, setTherapistReassignTo] = useState('');
   const [isReassigningTherapist, setIsReassigningTherapist] = useState(false);
   const [appointmentNotes, setAppointmentNotes] = useState([]);
@@ -4445,8 +4443,6 @@ function AdminPortal({
   // Clear any half-made therapist choice when a different appointment is opened.
   useEffect(() => {
     setTherapistReassignTo('');
-    setManualReceiptDiscount('');
-    setConfirmReceiptReconciliation(false);
   }, [selectedCalendarEvent?.booking?.id]);
 
   const loadGoogleAdsReport = async (startDate = googleAdsStartDate, endDate = googleAdsEndDate) => {
@@ -5248,7 +5244,7 @@ function AdminPortal({
       const response = await fetch('/api/booking?view=issue-receipt', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ bookingId, ...(!selectedCalendarEvent?.booking?.receiptNumber ? { manualDiscount: manualReceiptDiscount, confirmReconciliation: confirmReceiptReconciliation } : {}) }),
+        body: JSON.stringify({ bookingId }),
       });
       const data = await response.json();
       if (data.booking && data.receipt) {
@@ -8064,8 +8060,8 @@ function AdminPortal({
               {receiptNotice && <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-sm text-emerald-900">{tr(receiptNotice)}</div>}
               {(() => {
                 const booking = issuedReceipt?.booking || selectedCalendarEvent.booking;
-                const paidInFull = booking && (Number(booking.total) > 0 || Boolean(booking.receiptNumber)) && Number(booking.paidAmount) + 0.005 >= Number(booking.total);
-                const needsDetails = booking?.autoLinked && !booking.receiptNumber && (!booking.email || !(Number(booking.total) > 0));
+                const paidInFull = booking && (Number(booking.total) > 0 || Boolean(booking.receiptNumber) || Number(booking.manualBookingDiscount) > 0) && Number(booking.paidAmount) + 0.005 >= Number(booking.total);
+                const needsDetails = booking?.autoLinked && !booking.receiptNumber && (!booking.email || (!(Number(booking.total) > 0) && !(Number(booking.manualBookingDiscount) > 0)));
                 return booking ? (
                   <>
                     <button type="button" onClick={() => openBookingEditor(selectedCalendarEvent.booking)} className="rounded-lg border border-emerald-300 px-3 py-2 text-xs font-bold text-emerald-900">{tr("Edit booking")}</button>
@@ -8186,20 +8182,9 @@ function AdminPortal({
                       </div>
                     )}
                     {!issuedReceipt && !needsDetails && (
-                      <label className="block rounded-xl border border-slate-200 p-4 text-xs font-semibold text-slate-600">{tr("Manual discount ($) — optional")}<input type="number" min="0" step="0.01" placeholder="0.00" value={booking.receiptNumber ? booking.receiptManualDiscount || 0 : manualReceiptDiscount} disabled={isIssuingReceipt || Boolean(booking.receiptNumber) || /prepaid package redemption/i.test(booking.paymentOption || '')} onChange={(event) => { setManualReceiptDiscount(event.target.value); setConfirmReceiptReconciliation(false); }} className="mt-2 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-50" />
-                        <span className="mt-2 block font-normal leading-5">{booking.receiptNumber ? tr("An issued receipt keeps its original discount.") : /prepaid package redemption/i.test(booking.paymentOption || '') ? tr("Verified prepaid package allocations cannot be discounted.") : tr("Deducted before HST, after membership and loyalty discounts. Leave blank for no discount. Confirm reconciliation below to update the booking total and paid amount when issuing the receipt.")}</span>
-                      </label>
-                    )}
-                    {!issuedReceipt && !needsDetails && !booking.receiptNumber && Number(manualReceiptDiscount) > 0 && (
-                      <label className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4">
-                        <input type="checkbox" checked={confirmReceiptReconciliation} disabled={isIssuingReceipt} onChange={(event) => setConfirmReceiptReconciliation(event.target.checked)} className="mt-0.5 h-4 w-4" />
-                        <span className="text-xs text-amber-950"><strong className="block">{tr("Confirm reconciliation")}</strong><span className="mt-1 block leading-5">{tr("I confirm any payment adjustment or refund has been handled. Issuing the receipt will save the discounted total and paid amount to the database and refresh the bookings list. No Square refund is sent automatically.")}</span></span>
-                      </label>
-                    )}
-                    {!issuedReceipt && !needsDetails && (
                       <div className="flex flex-col-reverse gap-3 border-t border-slate-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
                         <p className="text-xs leading-5 text-slate-500">{!paidInFull ? tr("Receipts are available only after full payment is recorded.") : !booking.email ? tr("Add a valid patient email to the booking before issuing a receipt.") : !booking.id ? tr("This appointment is not linked to a booking record.") : tr("A receipt will be emailed to the patient and recorded with this booking.")}</p>
-                        <button type="button" disabled={isIssuingReceipt || !paidInFull || !booking.email || !booking.id || (!booking.receiptNumber && Number(manualReceiptDiscount) > 0 && !confirmReceiptReconciliation)} onClick={() => issueReceipt(booking.id)} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-emerald-950 px-4 py-2.5 text-xs font-bold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"><ReceiptText className="h-4 w-4" />{isIssuingReceipt ? tr("Issuing…") : tr("Issue & email receipt")}</button>
+                        <button type="button" disabled={isIssuingReceipt || !paidInFull || !booking.email || !booking.id} onClick={() => issueReceipt(booking.id)} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-emerald-950 px-4 py-2.5 text-xs font-bold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-50"><ReceiptText className="h-4 w-4" />{isIssuingReceipt ? tr("Issuing…") : tr("Issue & email receipt")}</button>
                       </div>
                     )}
                     {booking.id && (

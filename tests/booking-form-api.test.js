@@ -542,14 +542,99 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
     const discountRecord = { ...editable, booking_id: `discount-${staffCookie === managerCookie ? 'manager' : 'receptionist'}`, receipt_number: '', receipt_email_status: '' };
     records.push(discountRecord);
     assert.equal((await request('issue-receipt', { bookingId: discountRecord.booking_id, manualDiscount: '10' })).code, 400);
-    const discounted = await request('issue-receipt', { bookingId: discountRecord.booking_id, manualDiscount: '10', confirmReconciliation: true });
-    assert.equal(discounted.code, 200, JSON.stringify(discounted.data));
+    assert.equal((await request('issue-receipt', { bookingId: discountRecord.booking_id, manualDiscount: '10', confirmReconciliation: true })).code, 400);
+    assert.equal(discountRecord.receipt_number, '');
+    assert.equal(discountRecord.total, 113);
+    assert.equal(discountRecord.paid_amount, 113);
+    const discountEdit = () => ({
+      ...editBody(), bookingId: discountRecord.booking_id,
+      expectedVersion: bookingEditVersion(BOOKING_TABLE_FIELDS.map((field) => discountRecord[field.name])),
+      total: '113.00', paidAmount: String(discountRecord.paid_amount), manualDiscount: '10',
+    });
+    const patchCount = patches.length;
+    assert.equal((await request('edit-booking', discountEdit())).code, 400);
+    assert.equal(patches.length, patchCount, 'Unconfirmed discounts do not change Calendar');
+    failBookingWrite = true;
+    assert.equal((await request('edit-booking', { ...discountEdit(), confirmReconciliation: true })).code, 500);
+    failBookingWrite = false;
+    assert.equal(discountRecord.total, 113);
+    assert.equal(discountRecord.receipt_reconciliation || '', '');
+    assert.equal(patches.at(-1).requestBody.summary, originalEvent.summary);
+    const applied = await request('edit-booking', { ...discountEdit(), confirmReconciliation: true });
+    assert.equal(applied.code, 200, JSON.stringify(applied.data));
     assert.equal(discountRecord.total, 101.7);
     assert.equal(discountRecord.paid_amount, 101.7);
+    assert.equal(applied.data.booking.originalBookingTotal, 113);
+    assert.equal(applied.data.booking.manualBookingDiscount, 10);
     assert.equal(JSON.parse(discountRecord.receipt_reconciliation).confirmedBy, staffCookie === managerCookie ? 'manager@example.com' : 'reception@example.com');
-    assert.equal((await request('issue-receipt', { bookingId: discountRecord.booking_id, manualDiscount: '10' })).code, 200);
-    assert.equal(discountRecord.total, 101.7, 'Retry does not apply the discount twice');
+    assert.match(patches.at(-1).requestBody.description, /Paid: 101\.7[\s\S]*Total: 101\.7/);
+    const repeated = await request('edit-booking', { ...discountEdit(), bookingNote: 'Discount saved once' });
+    assert.equal(repeated.code, 200, JSON.stringify(repeated.data));
+    assert.equal(discountRecord.total, 101.7);
+    assert.equal((await request('complete-booking-details', { bookingId: discountRecord.booking_id, total: 100 })).code, 403);
+    const issued = await request('issue-receipt', { bookingId: discountRecord.booking_id });
+    assert.equal(issued.code, 200, JSON.stringify(issued.data));
+    assert.equal(issued.data.receipt.manualDiscount, 10);
+    assert.equal(issued.data.receipt.total, 101.7);
+    assert.equal(discountRecord.total, 101.7);
+    assert.equal(discountRecord.paid_amount, 101.7);
+    assert.equal(JSON.parse(discountRecord.receipt_reconciliation).receipt.manualDiscount, 10);
+    assert.equal((await request('issue-receipt', { bookingId: discountRecord.booking_id })).code, 200);
+    assert.equal(discountRecord.total, 101.7, 'Receipt retries cannot deduct the saved discount again');
+    assert.equal((await request('edit-booking', { ...discountEdit(), total: '101.70', manualDiscount: 5, confirmReconciliation: true })).code, 409);
+    const listedDiscount = (await request('', null, { method: 'GET' })).data.bookings.find((item) => item.id === discountRecord.booking_id);
+    assert.equal(listedDiscount.total, 101.7);
+    assert.equal(listedDiscount.manualBookingDiscount, 10);
   }
+  const partialRecord = { ...editable, booking_id: 'discount-partial', paid_amount: 50, receipt_number: '', receipt_reconciliation: '' };
+  records.push(partialRecord);
+  const partialEdit = () => ({
+    ...editBody(), bookingId: partialRecord.booking_id,
+    expectedVersion: bookingEditVersion(BOOKING_TABLE_FIELDS.map((field) => partialRecord[field.name])),
+    total: '113.00', paidAmount: String(partialRecord.paid_amount), manualDiscount: '10', confirmReconciliation: true,
+  });
+  assert.equal((await request('edit-booking', partialEdit())).code, 200);
+  assert.equal(partialRecord.total, 101.7);
+  assert.equal(partialRecord.paid_amount, 50, 'Discounts do not mark unpaid balances as paid');
+  assert.equal((await request('issue-receipt', { bookingId: partialRecord.booking_id })).code, 409);
+  assert.equal((await request('mark-paid', { bookingId: partialRecord.booking_id })).code, 200);
+  assert.equal(partialRecord.paid_amount, 101.7);
+  assert.equal(JSON.parse(partialRecord.receipt_reconciliation).adjustedPaid, 101.7);
+  assert.equal((await request('edit-booking', { ...partialEdit(), manualDiscount: '5' })).code, 200);
+  assert.equal(partialRecord.total, 107.35);
+  assert.equal(partialRecord.paid_amount, 107.35);
+  assert.equal((await request('edit-booking', { ...partialEdit(), manualDiscount: '' })).code, 200);
+  assert.equal(partialRecord.total, 113);
+  assert.equal(partialRecord.paid_amount, 113);
+  const fullyDiscounted = { ...editable, booking_id: 'discount-free', receipt_number: '', receipt_reconciliation: '' };
+  records.push(fullyDiscounted);
+  const freeEdit = { ...editBody(), bookingId: fullyDiscounted.booking_id, expectedVersion: bookingEditVersion(BOOKING_TABLE_FIELDS.map((field) => fullyDiscounted[field.name])),
+    manualDiscount: '100', confirmReconciliation: true };
+  assert.equal((await request('edit-booking', freeEdit)).code, 200);
+  assert.equal(fullyDiscounted.total, 0);
+  const freeReceipt = await request('issue-receipt', { bookingId: fullyDiscounted.booking_id });
+  assert.equal(freeReceipt.code, 200, JSON.stringify(freeReceipt.data));
+  assert.equal(freeReceipt.data.receipt.total, 0);
+  assert.equal((await request('issue-receipt', { bookingId: fullyDiscounted.booking_id })).data.receipt.total, 0);
+  const retryRecord = { ...editable, booking_id: 'discount-email-failure', receipt_number: '', receipt_reconciliation: '' };
+  records.push(retryRecord);
+  const retryEdit = { ...editBody(), bookingId: retryRecord.booking_id,
+    expectedVersion: bookingEditVersion(BOOKING_TABLE_FIELDS.map((field) => retryRecord[field.name])),
+    manualDiscount: '7.50', confirmReconciliation: true };
+  assert.equal((await request('edit-booking', retryEdit)).code, 200);
+  t.mock.method(google, 'gmail', () => ({ users: { messages: { send: async () => { throw new Error('Synthetic discounted receipt delivery failure'); } } } }));
+  const failedReceipt = await request('issue-receipt', { bookingId: retryRecord.booking_id });
+  assert.equal(failedReceipt.code, 500);
+  assert.equal(failedReceipt.data.booking.total, 104.53);
+  assert.equal(retryRecord.total, 104.53);
+  assert.equal(retryRecord.receipt_email_status, 'failed');
+  t.mock.method(google, 'gmail', () => ({ users: { messages: { send: async (message) => { emails.push(message); return { data: { id: 'retry-receipt' } }; } } } }));
+  const recoveredReceipt = await request('issue-receipt', { bookingId: retryRecord.booking_id });
+  assert.equal(recoveredReceipt.code, 200, JSON.stringify(recoveredReceipt.data));
+  assert.equal(recoveredReceipt.data.receipt.manualDiscount, 7.5);
+  assert.equal(recoveredReceipt.data.receipt.total, 104.53);
+  assert.equal(retryRecord.paid_amount, 104.53);
+  assert.equal(retryRecord.receipt_email_status, 'sent');
   editable.receipt_number = 'ISSUED';
   assert.equal((await request('edit-booking', { ...editBody(), total: '100', paidAmount: '100' })).code, 409);
   assert.equal((await request('edit-booking', { ...editBody(), bookingNote: 'Note after receipt' })).code, 200);

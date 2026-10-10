@@ -5,7 +5,7 @@ import { createWixContactStore, prepareWixContacts } from '../lib/wix-contacts.j
 import { applyWixCataloguePrices, applyWixTherapistMappings, importWixBookings, prepareWixBookings } from '../lib/wix-bookings.js';
 import { BOOKING_TABLE_FIELDS } from '../lib/booking-schema.js';
 import { validateBookingNote } from '../lib/booking-note.js';
-import { bookingEditVersion, staffBooking, validateBookingEdit, zonedBookingInstant } from '../lib/booking-edit.js';
+import { applyBookingDiscount, bookingDiscount, bookingEditVersion, staffBooking, validateBookingEdit, zonedBookingInstant } from '../lib/booking-edit.js';
 import { createPackageStore, historicalPackageVisit, readPackageUsage, packageReceiptDetails } from '../lib/packages.js';
 import { createBookingHistoryStore } from '../lib/booking-history.js';
 import { syncWixCalendarBatch } from '../lib/wix-calendar.js';
@@ -6992,6 +6992,8 @@ export default async function handler(req, res) {
                   status: bookingRow[24] || '',
                   statusNotes: bookingRow[25] || '',
                   paymentLocked: staffBooking(bookingRow).paymentLocked,
+                  manualBookingDiscount: staffBooking(bookingRow).manualBookingDiscount,
+                  originalBookingTotal: staffBooking(bookingRow).originalBookingTotal,
                 } : null;
 
                 if (!booking) {
@@ -7132,6 +7134,8 @@ export default async function handler(req, res) {
           ) : '',
           ...(dashboardSession.role === 'owner' ? { intakeNotes: row[14] || '' } : {}),
           paymentLocked: staffBooking(row).paymentLocked,
+          manualBookingDiscount: staffBooking(row).manualBookingDiscount,
+          originalBookingTotal: staffBooking(row).originalBookingTotal,
           calendarId: row[15] || '',
           calendarEventId: row[16] || '',
           createdAt: row[17] || '',
@@ -7237,10 +7241,17 @@ export default async function handler(req, res) {
             zonedBookingInstant(addMinutes(parseBookingDateTime(candidate[7], candidate[8]), Number(candidate[12]) || 60), CALENDAR_TIME_ZONE)));
         if (conflict || databaseConflict) return res.status(409).json({ message: 'The selected therapist already has an appointment at this time.' });
       }
-      const fields = {
+      if (!locked && (Number(req.body.manualDiscount) > 0 || bookingDiscount(row)?.manualDiscount > 0)) {
+        await ensureLoyaltyTables();
+        const ledger = await bqLoyaltyValuesGet('LoyaltyLedger!A:J');
+        if ((ledger.data.values || []).slice(1).some((entry) => entry[2] === bookingId && entry[3] === 'REDEEM')) {
+          return res.status(409).json({ message: 'Resolve linked loyalty redemptions before applying a manual booking discount.' });
+        }
+      }
+      const fields = applyBookingDiscount(row, {
         ...edited, serviceName: service.name, therapistName, durationMinutes,
         statusNotes: `${row[25] || ''}${row[25] ? '\n' : ''}Booking edited by ${dashboardSession.email} at ${new Date().toISOString()}.`,
-      };
+      }, req.body, dashboardSession.email);
       const updatedRow = [...row];
       for (const [prop, value] of Object.entries(fields)) updatedRow[BOOKING_TABLE_FIELDS.findIndex((field) => field.prop === prop)] = value;
       let originalEvent;
@@ -7252,7 +7263,7 @@ export default async function handler(req, res) {
         for (const [label, value] of Object.entries({
           Customer: edited.customerName, Email: edited.email, Phone: edited.phone,
           Therapist: therapistName, Service: service.name, Payment: edited.paymentOption,
-          Paid: edited.paidAmount, Total: edited.total,
+          Paid: fields.paidAmount, Total: fields.total,
         })) {
           const matcher = new RegExp(`^${label}:.*$`, 'm');
           const line = `${label}: ${String(value).replace(/[\r\n]/g, ' ')}`;
@@ -7339,6 +7350,7 @@ export default async function handler(req, res) {
 
       const row = rows[rowIndex];
       const resolvedTotal = total !== null ? total : (Number(row[11]) || 0);
+      if (bookingDiscount(row)) return res.status(409).json({ message: 'Use Edit booking to update a booking with a saved manual discount.' });
       if (readPackageUsage(row[14])) return res.status(409).json({ message: 'Package-linked booking amounts and contact details are locked to preserve its usage record and receipt.' });
       const resolvedPaid = paidAmount !== null ? paidAmount : (Number(row[10]) || 0);
       if (resolvedPaid > resolvedTotal + 0.005) {
@@ -7591,7 +7603,11 @@ export default async function handler(req, res) {
       }
       const paidAmount = Number(row[10]) || 0;
       if (paidAmount + 0.005 < total) {
-        await bqUpdateBookingFields(bigquery, bookingId, { paidAmount: total });
+        const discount = bookingDiscount(row);
+        await bqUpdateBookingFields(bigquery, bookingId, {
+          paidAmount: total,
+          ...(discount ? { receiptReconciliation: JSON.stringify({ ...discount, adjustedPaid: total, originalPaid: discount.originalTotal }) } : {}),
+        }, null, discount ? row : null);
       }
       return res.status(200).json({
         booking: {
@@ -7630,17 +7646,20 @@ export default async function handler(req, res) {
       if (hasDiscountInput && (!['string', 'number'].includes(typeof discountInput) || !/^\d+(\.\d{1,2})?$/.test(discountText) || !Number.isFinite(Number(discountText)))) {
         return res.status(400).json({ message: 'Enter a non-negative manual discount in dollars, with at most two decimal places.' });
       }
-      const manualDiscount = row[18] ? Number(row[26]) || 0 : hasDiscountInput ? Number(discountText) : 0;
+      if (!row[18] && hasDiscountInput && Number(discountText) !== 0) {
+        return res.status(400).json({ message: 'Apply manual discounts in Edit booking, not Issue receipt.' });
+      }
+      const editedDiscount = bookingDiscount(row);
+      const manualDiscount = editedDiscount?.manualDiscount ?? (row[18] ? Number(row[26]) || 0 : 0);
       if (row[18] && hasDiscountInput && Number(discountText) !== manualDiscount) {
         return res.status(409).json({ message: 'This receipt has already been created. Its manual discount cannot be changed.' });
       }
       const savedReconciliation = row[27] ? JSON.parse(row[27]) : null;
-      if (savedReconciliation && (!savedReconciliation.receipt || !Number.isFinite(savedReconciliation.originalTotal) || !Number.isFinite(savedReconciliation.originalPaid))) {
-        throw new Error('Stored receipt reconciliation is invalid. Reconcile the booking record before issuing a receipt.');
+      if (savedReconciliation && !row[18] && !editedDiscount) {
+        return res.status(409).json({ message: 'Stored receipt reconciliation has no issued receipt. Correct the booking record before issuing a receipt.' });
       }
-      const reconcileDiscount = manualDiscount > 0 && !row[18];
-      if (reconcileDiscount && req.body?.confirmReconciliation !== true) {
-        return res.status(400).json({ message: 'Confirm reconciliation of the discounted payment before issuing this receipt.' });
+      if (savedReconciliation && ((!savedReconciliation.receipt && !editedDiscount) || !Number.isFinite(savedReconciliation.originalTotal) || !Number.isFinite(savedReconciliation.originalPaid))) {
+        throw new Error('Stored receipt reconciliation is invalid. Reconcile the booking record before issuing a receipt.');
       }
       const booking = {
         id: row[0] || '',
@@ -7688,6 +7707,7 @@ export default async function handler(req, res) {
         return res.status(409).json({ message: 'Multiple loyalty redemptions are linked to this booking. Resolve the ledger entries before issuing a receipt.' });
       }
       const redemption = linkedRedemptions[0]?.row;
+      if (editedDiscount?.manualDiscount > 0 && redemption) return res.status(409).json({ message: 'Resolve linked loyalty redemptions before applying a manual booking discount.' });
       if (packageUsage && (redemption || Number(row[22]) > 0 || Number(row[23]) > 0)) return res.status(409).json({ message: 'Package usage cannot be combined with loyalty or membership receipt discounts.' });
       const loyaltyDiscount = Number(redemption?.[5]) || 0;
       const pointsRedeemed = Math.abs(Number(redemption?.[4]) || 0);
@@ -7711,7 +7731,7 @@ export default async function handler(req, res) {
         return res.status(400).json({ message: 'The manual discount cannot exceed the subtotal remaining after membership and loyalty discounts.' });
       }
       const receiptSubtotal = Math.round((discountedSubtotal - loyaltyDiscount - manualDiscount) * 100) / 100;
-      const tax = packageUsage ? packageUsage.allocatedTax : isTaxExempt ? 0 : Math.round(receiptSubtotal * 0.13 * 100) / 100;
+      const tax = packageUsage ? packageUsage.allocatedTax : editedDiscount && !redemption ? editedDiscount.tax : isTaxExempt ? 0 : Math.round(receiptSubtotal * 0.13 * 100) / 100;
       let receipt = {
         number: row[18] || `MTT-${new Date().getFullYear()}-${String(Math.floor(100000 + Math.random() * 900000))}`,
         issuedAt: row[19] || new Date().toISOString(),
@@ -7735,33 +7755,22 @@ export default async function handler(req, res) {
         loyaltyMember,
         packageUsage,
       };
-      if (savedReconciliation) receipt = savedReconciliation.receipt;
-      const reconciledFields = {};
-      if (reconcileDiscount) {
-        const reconciliation = {
-          originalTotal: booking.total, originalPaid: booking.paidAmount,
-          confirmedBy: dashboardSession.email, confirmedAt: new Date().toISOString(),
-          adjustedAmount: Math.round((booking.paidAmount - receipt.total) * 100) / 100,
-        };
-        receipt.recordedPaidAmount = receipt.total;
+      if (savedReconciliation?.receipt) receipt = savedReconciliation.receipt;
+      else if (editedDiscount) {
+        receipt.reconciliation = editedDiscount;
+        receipt.recordedPaidAmount = booking.paidAmount;
         receipt.overpaymentAmount = 0;
-        receipt.reconciliation = reconciliation;
-        Object.assign(reconciledFields, {
-          total: receipt.total, paidAmount: receipt.total,
-          receiptReconciliation: JSON.stringify({ ...reconciliation, receipt }),
-        });
+        if (!redemption && Math.abs(receipt.total - booking.total) > 0.005) {
+          return res.status(409).json({ message: 'The saved booking discount does not match the payment record. Reconcile the booking before editing or issuing a receipt.' });
+        }
       }
       await bqUpdateBookingFields(bigquery, bookingId, {
         receiptNumber: receipt.number,
         receiptIssuedAt: receipt.issuedAt,
         receiptEmailStatus: row[20] || 'pending',
         receiptManualDiscount: manualDiscount,
-        ...reconciledFields,
-      }, { notes: row[14], total: booking.total, paid: booking.paidAmount, receipt: row[18] });
-      if (reconcileDiscount) {
-        booking.total = receipt.total;
-        booking.paidAmount = receipt.total;
-      }
+        ...(editedDiscount && !savedReconciliation.receipt ? { receiptReconciliation: JSON.stringify({ ...editedDiscount, receipt }) } : {}),
+      }, null, row);
       for (const { rowNumber } of linkedRedemptions) {
         await bqLoyaltyValuesUpdate(`LoyaltyLedger!J${rowNumber}`, [[receipt.number]]);
       }

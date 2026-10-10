@@ -57,7 +57,7 @@ function render(tab, language = 'th', overrides = {}, propOverrides = {}) {
     React.createElement(AdminPortal, { ...props, lang: language, ...propOverrides })));
 }
 
-test('managers and receptionists can edit schedule bookings and apply receipt discounts without medical access', () => {
+test('managers and receptionists can edit bookings and issue receipts without manual discounts or medical access', () => {
   for (const role of ['branch_manager', 'branch_receptionist']) {
     const user = { dashboardUser: { role, branchIds: ['1'] } };
     const schedule = render('schedule', 'en', {}, user);
@@ -66,8 +66,7 @@ test('managers and receptionists can edit schedule bookings and apply receipt di
     assert.match(schedule, /\$107\.35/);
     assert.doesNotMatch(schedule, />Clear</);
     const details = render('calendar', 'en', { selectedCalendarEvent: { id: 'event', booking, localTime: booking.time } }, user);
-    assert.match(details, /Manual discount/);
-    assert.match(details, /Confirm reconciliation/);
+    assert.doesNotMatch(details, /Manual discount|Confirm reconciliation/);
     assert.match(details, />Edit booking</);
     assert.doesNotMatch(details, /Log a quick note about this appointment|Change therapist…/);
   }
@@ -105,16 +104,22 @@ for (const [tab, expected] of [
   });
 }
 
-test('localized appointment details include reconciliation, notes, payments and receipt controls', () => {
+test('localized appointment details include notes, payments and receipt controls without manual discounts', () => {
   const event = { id: 'event-1', booking, summary: 'English Customer', timeRange: booking.time };
   const html = render('calendar', 'th', { selectedCalendarEvent: event, calendarEvents: [event] });
   assert.match(html, /รายละเอียดนัดหมาย/);
-  assert.match(html, /ส่วนลดที่พนักงานกำหนด/);
-  assert.match(html, /ยืนยันการกระทบยอด/);
+  assert.doesNotMatch(html, /ส่วนลดที่พนักงานกำหนด|ยืนยันการกระทบยอด/);
   assert.match(html, /ออกและส่งใบเสร็จทางอีเมล/);
   assert.match(html, /หมายเหตุ/);
   assert.match(html, /11:00 น\. - 12:00 น\./);
   assert.match(html, /client@example\.com/);
+});
+
+test('a fully discounted appointment can issue a receipt without discount entry controls', () => {
+  const discounted = { ...booking, total: 0, paidAmount: 0, manualBookingDiscount: 95, autoLinked: true };
+  const html = render('calendar', 'en', { selectedCalendarEvent: { id: 'free-event', booking: discounted, localTime: '11:00 AM' } });
+  assert.match(html, /Issue &amp; email receipt/);
+  assert.doesNotMatch(html, /Receipts are available only after full payment|Manual discount \(\$\)|Confirm reconciliation/);
 });
 
 test('catalog covers every static dashboard display call and has no untranslated JSX or accessibility literals', () => {

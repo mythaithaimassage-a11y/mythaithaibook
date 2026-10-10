@@ -24,9 +24,12 @@ test('editor translates its fields while preserving contacts, notes and canonica
   assert.match(html, /client@example.com/);
   assert.match(html, /Internal reference/);
   assert.doesNotMatch(html, />Edit booking|>Save booking|>Client name/);
+  assert.match(html, /ส่วนลดที่พนักงานกำหนด/);
   const english = render('en');
   assert.match(english, /Appointment total \(\$\)/);
-  assert.match(english, /Use receipt reconciliation for manual discounts/);
+  assert.match(english, /Manual discount \(\$\)/);
+  assert.match(english, /Total after discount: \$.*113\.00/);
+  assert.doesNotMatch(english, /Amount paid \(\$\)/);
   const locked = render('en', { booking: { ...booking, receiptNumber: 'ISSUED' } });
   assert.match(locked, /records lock customer/);
   assert.match(locked, /disabled=""[^>]*value="Customer name"/);
@@ -37,7 +40,7 @@ test('editor translates its fields while preserving contacts, notes and canonica
 test('editor submits changes with a version, prevents duplicate saves and reports failed writes', async () => {
   const states = [], refs = [];
   let stateIndex = 0, refIndex = 0, writes = 0, saved = null;
-  let fail = false;
+  let fail = false, expectedDiscount = '0', expectedConfirmation = false;
   const jsx = (type, props) => ({ type, props });
   const shallowLoad = createTsLoader({
     react: {
@@ -59,6 +62,8 @@ test('editor submits changes with a version, prevents duplicate saves and report
       assert.equal(body.bookingId, booking.id);
       assert.equal(body.customerName, 'Edited customer');
       assert.equal(body.time, '10:00 AM');
+      assert.equal(body.manualDiscount, expectedDiscount);
+      assert.equal(body.confirmReconciliation, expectedConfirmation);
       assert.deepEqual(body.therapistNames, ['Tanya']);
       return { ok: !fail, json: async () => fail ? { message: 'Booking was not found.' } : { booking: { ...booking, customerName: body.customerName } } };
     },
@@ -86,4 +91,16 @@ test('editor submits changes with a version, prevents duplicate saves and report
   await nodes(shallow()).find((node) => node.type === 'form').props.onSubmit({ preventDefault() {} });
   assert.equal(saved, null);
   assert.equal(nodes(shallow()).find((node) => node.props?.role === 'alert').props.children, 'Booking was not found.');
+  fail = false;
+  nodes(shallow()).find((node) => node.type === 'input' && node.props.max === 100).props.onChange({ target: { value: '10' } });
+  let discounted = shallow();
+  assert.equal(nodes(discounted).find((node) => node.type === 'button' && node.props.type === 'submit').props.disabled, true);
+  assert.equal(nodes(discounted).find((node) => node.props?.role === 'status').props.children[1], '101.70');
+  nodes(discounted).find((node) => node.type === 'input' && node.props.type === 'checkbox').props.onChange({ target: { checked: true } });
+  expectedDiscount = '10'; expectedConfirmation = true;
+  discounted = shallow();
+  assert.equal(nodes(discounted).find((node) => node.type === 'button' && node.props.type === 'submit').props.disabled, false);
+  await nodes(discounted).find((node) => node.type === 'form').props.onSubmit({ preventDefault() {} });
+  nodes(shallow()).find((node) => node.type === 'input' && node.props.max === 100).props.onChange({ target: { value: '5' } });
+  assert.equal(nodes(shallow()).find((node) => node.type === 'input' && node.props.type === 'checkbox').props.checked, false);
 });

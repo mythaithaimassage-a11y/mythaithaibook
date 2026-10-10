@@ -7,6 +7,7 @@ export type EditableBooking = {
   branchName: string; serviceName: string; therapistName: string; date: string; time: string;
   paymentOption: string; total: number; paidAmount: number; editVersion: string;
   receiptNumber?: string; paymentLocked?: boolean;
+  manualBookingDiscount?: number; originalBookingTotal?: number;
 };
 type Service = { id: number; name: string; price: number; duration: number; taxRate: number; active?: boolean; isRmt?: boolean };
 type Therapist = { id: number; name: string; active?: boolean; rmtCertified?: boolean };
@@ -21,7 +22,9 @@ export default function EditBooking({ booking, services, therapists, times, isSc
   const [form, setForm] = useState(() => ({
     customerName: booking.customerName, email: booking.email, phone: booking.phone,
     bookingNote: booking.bookingNote || '', date: booking.date, time: booking.time,
-    total: String(booking.total), paidAmount: String(booking.paidAmount),
+    total: String(booking.receiptNumber || booking.paymentLocked ? booking.total : booking.originalBookingTotal ?? booking.total),
+    paidAmount: String(booking.paidAmount),
+    manualDiscount: String(booking.manualBookingDiscount || 0),
     paymentOption: booking.paymentOption || (booking.receiptNumber || booking.paymentLocked ? '' : 'Cash'),
     serviceId: String(services.find((service) => service.name === booking.serviceName)?.id || '__existing__'),
   }));
@@ -32,6 +35,7 @@ export default function EditBooking({ booking, services, therapists, times, isSc
   const [therapist2, setTherapist2] = useState(assigned[1]?.name || '');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [confirmed, setConfirmed] = useState(false);
   const dialog = useRef<HTMLDialogElement>(null);
   const submitting = useRef(false);
   const locked = Boolean(booking.receiptNumber || booking.paymentLocked);
@@ -39,7 +43,16 @@ export default function EditBooking({ booking, services, therapists, times, isSc
   const couple = /couple/i.test(service?.name || booking.serviceName) && (assigned.length > 0 || form.serviceId !== '__existing__');
   const eligible = therapists.filter((item) => item.active !== false && isScheduled(item, form.date) && (!service?.isRmt || item.rmtCertified));
   const choices = therapists.filter((item) => eligible.includes(item) || assigned.includes(item));
-  const update = (key: keyof typeof form, value: string) => setForm((current) => ({ ...current, [key]: value }));
+  const discountChanged = !locked && (Number(form.manualDiscount) !== (booking.manualBookingDiscount || 0) ||
+    Boolean(booking.manualBookingDiscount && (Number(form.total) !== booking.originalBookingTotal || (service?.name || booking.serviceName) !== booking.serviceName)));
+  const exempt = /registered massage therapy|\brmt\b|acupuncture/i.test(service?.name || booking.serviceName);
+  const subtotal = Math.round((exempt ? Number(form.total) : Number(form.total) / 1.13) * 100) / 100;
+  const remaining = Math.round((subtotal - Number(form.manualDiscount || 0)) * 100) / 100;
+  const discountedTotal = Number(form.manualDiscount) > 0 ? Math.round((remaining + (exempt ? 0 : Math.round(remaining * .13 * 100) / 100)) * 100) / 100 : Number(form.total);
+  const update = (key: keyof typeof form, value: string) => {
+    setForm((current) => ({ ...current, [key]: value }));
+    if (['manualDiscount', 'total', 'serviceId'].includes(key)) setConfirmed(false);
+  };
   useEffect(() => {
     dialog.current?.showModal();
     return () => dialog.current?.close();
@@ -53,7 +66,7 @@ export default function EditBooking({ booking, services, therapists, times, isSc
     try {
       const response = await fetch('/api/booking?view=edit-booking', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...form, bookingId: booking.id, expectedVersion: booking.editVersion, therapistNames: couple ? [therapist1, therapist2] : [therapist1] }),
+        body: JSON.stringify({ ...form, confirmReconciliation: confirmed, bookingId: booking.id, expectedVersion: booking.editVersion, therapistNames: couple ? [therapist1, therapist2] : [therapist1] }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || 'Unable to save this booking.');
@@ -83,12 +96,14 @@ export default function EditBooking({ booking, services, therapists, times, isSc
           {couple && <label className="text-xs font-semibold">{tr('Second therapist')}<select required value={therapist2} onChange={(event) => setTherapist2(event.target.value)} className={inputClass}><option value="">{tr('Choose a different therapist')}</option>{choices.filter((item) => item.name !== therapist1).map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}</select></label>}
           <label className="text-xs font-semibold">{tr('Payment method')}<select required disabled={locked} value={form.paymentOption} onChange={(event) => update('paymentOption', event.target.value)} className={inputClass}>{[...new Set([form.paymentOption, 'Cash', 'Card', 'E-transfer', 'Other'])].map((value) => <option key={value} value={value}>{tr(value)}</option>)}</select></label>
           <label className="text-xs font-semibold">{tr('Appointment total ($)')}<input type="number" required min="0" step="0.01" disabled={locked} value={form.total} onChange={(event) => update('total', event.target.value)} className={inputClass} /></label>
-          <label className="text-xs font-semibold">{tr('Amount paid ($)')}<input type="number" required min="0" max={form.total} step="0.01" disabled={locked} value={form.paidAmount} onChange={(event) => update('paidAmount', event.target.value)} className={inputClass} /></label>
+          <label className="text-xs font-semibold">{tr('Manual discount ($) — optional')}<input type="number" min="0" max={subtotal} step="0.01" disabled={locked} value={form.manualDiscount} onChange={(event) => update('manualDiscount', event.target.value)} className={inputClass} /></label>
           <label className="text-xs font-semibold sm:col-span-2">{tr('Shared internal booking note')}<textarea rows={3} maxLength={2000} value={form.bookingNote} onChange={(event) => update('bookingNote', event.target.value)} className={inputClass} /></label>
         </fieldset>
-        <p className="text-xs text-slate-500">{tr('Review the total and amount paid when changing a service. Use receipt reconciliation for manual discounts.')}</p>
+        {!locked && <p role="status" className="text-xs text-slate-600">{tr('Total after discount: $')}{Number.isFinite(discountedTotal) ? discountedTotal.toFixed(2) : '—'}</p>}
+        <p className="text-xs text-slate-500">{tr('Discounts are deducted before HST. Saved totals sync to bookings, calendar and receipts. No payment or refund is sent automatically.')}</p>
+        {discountChanged && <label className="flex items-start gap-3 rounded-lg bg-amber-50 p-3 text-xs text-amber-950"><input type="checkbox" checked={confirmed} disabled={saving} onChange={(event) => setConfirmed(event.target.checked)} /><span><strong className="block">{tr('Confirm reconciliation')}</strong>{tr('I confirm any external payment adjustment or refund has been handled. Save the discounted total and reconciled payment record.')}</span></label>}
         {error && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-800">{tr(error)}</p>}
-        <div className="flex justify-end gap-2"><button type="button" disabled={saving} onClick={onClose} className="rounded-lg border px-4 py-2 text-sm">{tr('Cancel')}</button><button disabled={saving} type="submit" className="rounded-lg bg-emerald-900 px-4 py-2 text-sm text-white">{tr(saving ? 'Saving…' : 'Save booking')}</button></div>
+        <div className="flex justify-end gap-2"><button type="button" disabled={saving} onClick={onClose} className="rounded-lg border px-4 py-2 text-sm">{tr('Cancel')}</button><button disabled={saving || (discountChanged && !confirmed)} type="submit" className="rounded-lg bg-emerald-900 px-4 py-2 text-sm text-white">{tr(saving ? 'Saving…' : 'Save booking')}</button></div>
       </form>
     </dialog>
   );
