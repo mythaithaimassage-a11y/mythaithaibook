@@ -468,6 +468,21 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
     date: editable.date, time: editable.time, serviceId: '1', therapistNames: ['Test Therapist'],
     paymentOption: 'Cash', total: '113.00', paidAmount: '113.00',
   });
+  const legacyTimeBooking = { ...editable, booking_id: 'MTT-legacy-24-hour-time', time: '16:30', calendar_event_id: '' };
+  records.push(legacyTimeBooking);
+  const listedBookings = await request('', null, { method: 'GET' });
+  assert.equal(listedBookings.code, 200, JSON.stringify(listedBookings.data));
+  const listedLegacyBooking = listedBookings.data.bookings.find((booking) => booking.id === legacyTimeBooking.booking_id);
+  assert.equal(listedLegacyBooking.time, '04:30 PM');
+  assert.equal(listedLegacyBooking.timeRange, '4:30 PM - 5:30 PM');
+  const legacyTimeEdit = await request('edit-booking', {
+    ...editBody(),
+    bookingId: legacyTimeBooking.booking_id,
+    expectedVersion: bookingEditVersion(BOOKING_TABLE_FIELDS.map((field) => legacyTimeBooking[field.name])),
+    time: listedLegacyBooking.time,
+  });
+  assert.equal(legacyTimeEdit.code, 200, JSON.stringify(legacyTimeEdit.data));
+  assert.equal(legacyTimeBooking.time, '04:30 PM');
   cookie = '';
   assert.equal((await request('edit-booking', editBody())).code, 401);
   cookie = receptionistCookie;

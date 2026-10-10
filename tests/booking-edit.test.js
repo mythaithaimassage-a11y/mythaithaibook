@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { applyBookingDiscount, bookingDiscount, bookingEditVersion, staffBooking, validateBookingEdit, zonedBookingInstant } from '../lib/booking-edit.js';
+import { applyBookingDiscount, bookingDiscount, bookingEditVersion, normalizeBookingTime, staffBooking, validateBookingEdit, zonedBookingInstant } from '../lib/booking-edit.js';
 import { BOOKING_TABLE_FIELDS } from '../lib/booking-schema.js';
 
 const valid = { customerName: ' Client ', email: 'CLIENT@EXAMPLE.COM', phone: '+1 (437) 555-0101',
@@ -42,6 +42,17 @@ test('staff edits use Toronto winter and summer offsets and reject nonexistent D
   assert.equal(zonedBookingInstant('2026-07-01T10:00:00', 'America/Toronto'), '2026-07-01T14:00:00.000Z');
   assert.equal(zonedBookingInstant('2026-11-01T10:00:00', 'America/Toronto'), '2026-11-01T15:00:00.000Z');
   assert.throws(() => zonedBookingInstant('2026-03-08T02:30:00', 'America/Toronto'), (error) => error.statusCode === 400);
+});
+
+test('legacy 24-hour booking times normalize for editing and preserve locked schedules', () => {
+  assert.equal(normalizeBookingTime('00:00'), '12:00 AM');
+  assert.equal(normalizeBookingTime('16:30'), '04:30 PM');
+  assert.equal(normalizeBookingTime('24:00'), '24:00');
+  const row = ['MTT-OLD-TIME', 'Old customer', '555', 'CLIENT@EXAMPLE.COM', 'Branch', 'Massage', 'Tanya',
+    valid.date, '16:30', 'Cash', 113, 113, 60, '', '', '', '', '', 'ISSUED'];
+  const edited = validateBookingEdit({ ...valid, customerName: row[1], phone: row[2], email: row[3],
+    date: row[7], time: '04:30 PM', paymentOption: row[9], total: '113', paidAmount: '113' }, row);
+  assert.equal(edited.time, '16:30');
 });
 
 test('locked bookings permit note corrections without rewriting or revalidating historical contact data', () => {

@@ -5,7 +5,7 @@ import { createWixContactStore, prepareWixContacts } from '../lib/wix-contacts.j
 import { applyWixCataloguePrices, applyWixTherapistMappings, importWixBookings, prepareWixBookings } from '../lib/wix-bookings.js';
 import { BOOKING_TABLE_FIELDS } from '../lib/booking-schema.js';
 import { validateBookingNote } from '../lib/booking-note.js';
-import { applyBookingDiscount, bookingDiscount, bookingEditVersion, staffBooking, validateBookingEdit, zonedBookingInstant } from '../lib/booking-edit.js';
+import { applyBookingDiscount, bookingDiscount, bookingEditVersion, normalizeBookingTime, staffBooking, validateBookingEdit, zonedBookingInstant } from '../lib/booking-edit.js';
 import { createPackageStore, historicalPackageVisit, readPackageUsage, packageReceiptDetails } from '../lib/packages.js';
 import { createBookingHistoryStore } from '../lib/booking-history.js';
 import { syncWixCalendarBatch } from '../lib/wix-calendar.js';
@@ -1449,7 +1449,7 @@ function isSameOriginRequest(req) {
 }
 
 function parseBookingDateTime(date, time) {
-  const match = /^(\d{1,2}):(\d{2})\s*(AM|PM)$/i.exec(time || '');
+  const match = /^(\d{1,2}):(\d{2})\s*(AM|PM)$/i.exec(normalizeBookingTime(time || ''));
   if (!date || !match) {
     throw new Error('Booking date and time must be provided as YYYY-MM-DD and h:mm AM/PM');
   }
@@ -1530,7 +1530,7 @@ function getLocalDateTime(value) {
       timeZone: CALENDAR_TIME_ZONE,
       hour: 'numeric',
       minute: '2-digit',
-      hour12: false,
+      hourCycle: 'h23',
     }).format(date),
   };
 }
@@ -6900,7 +6900,7 @@ export default async function handler(req, res) {
             serviceName: row[5] || '',
             therapistName: row[6] || '',
             date: row[7] || '',
-            time: row[8] || '',
+            time: normalizeBookingTime(row[8] || ''),
             paymentOption: row[9] || '',
             paidAmount: Number(row[10]) || 0,
             total: Number(row[11]) || 0,
@@ -7025,7 +7025,7 @@ export default async function handler(req, res) {
                     autoServiceName,
                     eventTherapist,
                     localStart.date,
-                    localStart.time,
+                    normalizeBookingTime(localStart.time),
                     parsedDescription.paymentOption || '',
                     parsedDescription.paidAmount || 0,
                     parsedDescription.total || 0,
@@ -7047,7 +7047,7 @@ export default async function handler(req, res) {
                     serviceName: autoServiceName,
                     therapistName: eventTherapist,
                     date: localStart.date,
-                    time: localStart.time,
+                    time: normalizeBookingTime(localStart.time),
                     paymentOption: parsedDescription.paymentOption || '',
                     paidAmount: parsedDescription.paidAmount || 0,
                     total: parsedDescription.total || 0,
@@ -7130,15 +7130,15 @@ export default async function handler(req, res) {
           serviceName: row[5] || '',
           therapistName: row[6] || '',
           date: row[7] || '',
-          time: row[8] || '',
+          time: normalizeBookingTime(row[8] || ''),
           paymentOption: row[9] || '',
           paidAmount: Number(row[10]) || 0,
           total: Number(row[11]) || 0,
           durationMinutes: Number(row[12]) || 0,
           branchAddress: row[13] || '',
           timeRange: row[7] && row[8] ? getCalendarTimeRange(
-            zonedBookingInstant(parseBookingDateTime(row[7], row[8]), CALENDAR_TIME_ZONE),
-            zonedBookingInstant(addMinutes(parseBookingDateTime(row[7], row[8]), Number(row[12]) || 60), CALENDAR_TIME_ZONE),
+            zonedBookingInstant(parseBookingDateTime(row[7], normalizeBookingTime(row[8])), CALENDAR_TIME_ZONE),
+            zonedBookingInstant(addMinutes(parseBookingDateTime(row[7], normalizeBookingTime(row[8])), Number(row[12]) || 60), CALENDAR_TIME_ZONE),
           ) : '',
           ...(dashboardSession.role === 'owner' ? { intakeNotes: row[14] || '' } : {}),
           paymentLocked: staffBooking(row).paymentLocked,
