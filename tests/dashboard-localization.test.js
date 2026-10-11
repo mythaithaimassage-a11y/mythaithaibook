@@ -58,7 +58,7 @@ function render(tab, language = 'th', overrides = {}, propOverrides = {}) {
     React.createElement(AdminPortal, { ...props, lang: language, ...propOverrides })));
 }
 
-test('owner mobile shortcuts and grouped menu retain every unique section and identify the current page', () => {
+test('owner navigation retains each section once and identifies the current page', () => {
   const html = render('schedule', 'en', { mobileNavOpen: true });
   const shortcuts = html.match(/<nav aria-label="Owner dashboard shortcuts"[\s\S]*?<\/nav>/)?.[0];
   assert.ok(shortcuts);
@@ -72,6 +72,7 @@ test('owner mobile shortcuts and grouped menu retain every unique section and id
   assert.equal((menu.match(/<button /g) || []).length, 19);
   assert.equal((menu.match(/aria-current="page"/g) || []).length, 1);
   assert.doesNotMatch(menu, /Events &amp; bookings/);
+  assert.doesNotMatch(html, /Events &amp; bookings/);
   assert.match(menu, /Dashboard access/);
   assert.match(menu, /Therapist approvals/);
   assert.doesNotMatch(render('schedule', 'en'), /<nav id="mobile-dashboard-menu"/);
@@ -114,6 +115,15 @@ test('dashboard KPIs are scoped to sales, bookings and calendar context', () => 
   assert.match(calendar, /Therapists booked/);
   assert.match(calendar, /Unassigned appointments/);
   assert.doesNotMatch(calendar, /Revenue Today|HST Tax Collected/);
+});
+
+test('Wix calendar sync appears below the calendar and appointment list', () => {
+  const html = render('calendar', 'en');
+  const calendarContentIndex = html.indexOf('No appointments match this date');
+  const syncSectionIndex = html.indexOf('Append missing imported Wix bookings');
+  assert.notEqual(calendarContentIndex, -1);
+  assert.notEqual(syncSectionIndex, -1);
+  assert.ok(syncSectionIndex > calendarContentIndex);
 });
 
 test('mobile booking cards retain all nine fields, booking data and existing actions', () => {

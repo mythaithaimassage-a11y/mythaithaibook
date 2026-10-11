@@ -5949,7 +5949,6 @@ function AdminPortal({
   const adminNavigation = [
     { id: 'schedule', label: 'Home', icon: Home, section: 'Workspace' },
     { id: 'calendar', label: 'Booking Calendar', icon: CalendarDays, section: 'Workspace' },
-    { id: 'schedule', label: 'Events & bookings', icon: CalendarIcon, section: 'Workspace' },
     { id: 'reports', label: 'Sales & reports', icon: BarChart3, section: 'Workspace' },
     { id: 'services', label: 'Service catalogue', icon: Layers, section: 'Manage' },
     { id: 'staff', label: 'Staff', icon: Users, section: 'Manage' },
@@ -6069,7 +6068,7 @@ function AdminPortal({
           </div>
           {dashboardUser.role === 'owner' && (
             <nav aria-label={tr("Owner dashboard shortcuts")} className="mt-3 grid grid-cols-4 gap-1 lg:hidden">
-              {visibleAdminNavigation.filter((item) => ['schedule', 'calendar', 'reports'].includes(item.id) && item.label !== 'Events & bookings').map((item) => {
+              {visibleAdminNavigation.filter((item) => ['schedule', 'calendar', 'reports'].includes(item.id)).map((item) => {
                 const Icon = item.icon;
                 return <button key={item.id} type="button" aria-current={activeTab === item.id ? 'page' : undefined} onClick={() => { setActiveTab(item.id); setMobileNavOpen(false); }} className={`flex min-h-11 flex-col items-center justify-center gap-1 rounded-xl px-1 py-2 text-[11px] font-semibold ${activeTab === item.id ? 'bg-emerald-950 text-white' : 'text-slate-600 hover:bg-slate-100'}`}><Icon className="h-5 w-5 shrink-0" /><span>{tr(item.label)}</span></button>;
               })}
@@ -6082,7 +6081,7 @@ function AdminPortal({
                 <section key={section} aria-label={tr(section)}>
                   <h2 className="mb-2 px-2 text-xs font-bold uppercase tracking-wider text-slate-500">{tr(section)}</h2>
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                    {visibleAdminNavigation.filter((item) => item.section === section && item.label !== 'Events & bookings').map((item) => {
+                    {visibleAdminNavigation.filter((item) => item.section === section).map((item) => {
                       const Icon = item.icon;
                       return <button key={item.id} type="button" aria-current={activeTab === item.id ? 'page' : undefined} onClick={() => { setActiveTab(item.id); setMobileNavOpen(false); }} className={`flex min-h-11 items-center gap-2 rounded-xl px-3 py-3 text-left text-sm font-semibold ${activeTab === item.id ? 'bg-emerald-950 text-white' : 'bg-slate-50 text-slate-700 hover:bg-slate-100'}`}><Icon className="h-4 w-4 shrink-0" /><span className="min-w-0 break-words">{tr(item.label)}</span>{item.badge > 0 && <span className="ml-auto rounded-full bg-amber-400 px-1.5 text-[10px] font-bold text-slate-950">{item.badge}</span>}</button>;
                     })}
@@ -6413,9 +6412,6 @@ function AdminPortal({
               return <span key={branch.id}><strong>{branch.name}</strong>: {hours.closed ? tr('Closed') : `${hours.open} - ${hours.close}`}</span>;
             })}
           </div>
-          <WixCalendarSync onSynced={async () => {
-            await Promise.all([loadCalendar(), loadBookingsFromBackend()]);
-          }} />
           {calendarWarnings.length > 0 && (
             <div className="p-3 bg-amber-50 border border-amber-200 text-amber-900 rounded-xl text-xs">{tr("Calendar access warning:")}{calendarWarnings.join(' · ')}
             </div>
@@ -6543,6 +6539,11 @@ function AdminPortal({
             </div>
           )}
         </div>
+      )}
+      {activeTab === 'calendar' && (
+        <WixCalendarSync onSynced={async () => {
+          await Promise.all([loadCalendar(), loadBookingsFromBackend()]);
+        }} />
       )}
 
       {editingBooking && <EditBooking
