@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import { message, useTranslation, type TranslationMessage } from './localization';
 import { branchAppointmentTimes, type WeeklyBusinessHours } from '../lib/booking-options.js';
+import useTherapistAvailability from './useTherapistAvailability';
 
 type Branch = { id: number; name: string; active?: boolean; businessHours?: WeeklyBusinessHours };
 type Service = { id: number; name: string; active?: boolean; isRmt?: boolean; duration?: number };
@@ -47,8 +48,12 @@ export default function QuickBooking(props: Props) {
   const availableTimes = date && branch ? branchAppointmentTimes(branch, date, service?.duration ?? 60) : [];
   const validTime = availableTimes.includes(time) ? time : '';
   const couple = /couple/i.test(service?.name || '');
+  const availability = useTherapistAvailability({
+    branchId, date, time: validTime, durationMinutes: service?.duration ?? 60, isRmt: Boolean(service?.isRmt),
+  });
   const therapists = props.therapists.filter((item) => item.active !== false
-    && props.isScheduled(item, branchId, date) && (!service?.isRmt || item.rmtCertified));
+    && props.isScheduled(item, branchId, date) && (!service?.isRmt || item.rmtCertified)
+    && availability.therapistIds.has(String(item.id)));
   const validTherapistId = therapists.some((item) => String(item.id) === therapistId) ? therapistId : '';
   const validTherapistId2 = therapists.some((item) => String(item.id) === therapistId2 && String(item.id) !== validTherapistId) ? therapistId2 : '';
 
@@ -187,9 +192,11 @@ export default function QuickBooking(props: Props) {
           <label className="col-span-2 text-xs font-bold text-stone-700">{tr('Service')}<select required value={serviceId} onChange={(event) => setServiceId(event.target.value)} className={inputClass}>{props.services.filter((item) => item.active !== false).map((item) => <option key={item.id} value={item.id}>{tr(item.name)}</option>)}</select></label>
         </div>
         {availableTimes.length === 0 && <p role="alert" className="text-xs text-amber-800">{tr('No appointment times fit the business hours for this branch, date and service.')}</p>}
-        {therapists.length === 0 && <p role="alert" className="text-xs text-amber-800">{tr('No eligible therapists are scheduled for this branch, date, and service. Choose different appointment details.')}</p>}
+        {availability.loading && <p role="status" className="text-xs text-stone-600">{tr('Checking therapist availability…')}</p>}
+        {availability.error && <p role="alert" className="text-xs text-red-800">{tr(availability.error)}</p>}
+        {!availability.loading && !availability.error && validTime && therapists.length === 0 && <p role="alert" className="text-xs text-amber-800">{tr('No eligible therapists are available for this branch, date, time, and service. Choose different appointment details.')}</p>}
         {error && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-800">{tr(error)}</p>}
-        <div className="flex justify-end gap-2"><button type="button" disabled={saving} onClick={props.onClose} className="rounded-lg border border-stone-300 px-4 py-2 text-sm">{tr('Cancel')}</button><button type="submit" disabled={saving || !therapists.length || !availableTimes.length} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-50">{tr(saving ? 'Saving...' : 'Save appointment')}</button></div>
+        <div className="flex justify-end gap-2"><button type="button" disabled={saving} onClick={props.onClose} className="rounded-lg border border-stone-300 px-4 py-2 text-sm">{tr('Cancel')}</button><button type="submit" disabled={saving || availability.loading || Boolean(availability.error) || !therapists.length || !validTime} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-50">{tr(saving ? 'Saving...' : 'Save appointment')}</button></div>
       </form>
     </dialog>
   );

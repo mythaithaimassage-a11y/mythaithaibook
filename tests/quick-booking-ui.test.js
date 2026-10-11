@@ -17,9 +17,13 @@ const compiled = ts.transpileModule(source, {
 }).outputText;
 const module = { exports: {} };
 const loadTs = createTsLoader();
-const requireWithLocalization = (specifier) => specifier === './localization'
-  ? loadTs(new URL('../src/localization.tsx', import.meta.url).pathname)
-  : createRequire(import.meta.url)(specifier);
+const requireWithLocalization = (specifier) => {
+  if (specifier === './localization') return loadTs(new URL('../src/localization.tsx', import.meta.url).pathname);
+  if (specifier === './useTherapistAvailability') return { __esModule: true, default: () => ({
+    therapistIds: new Set(['1', '2', '3', '4']), loading: false, error: '',
+  }) };
+  return createRequire(import.meta.url)(specifier);
+};
 vm.runInNewContext(compiled, { exports: module.exports, require: requireWithLocalization });
 const QuickBooking = module.exports.default;
 
@@ -73,6 +77,9 @@ function customerHarness(fetch) {
         useTranslation: () => ({ translate: (value) => value, formatTime: (value) => value }),
         message: (key, values) => ({ key, values }),
       };
+      if (specifier === './useTherapistAvailability') return { __esModule: true, default: () => ({
+        therapistIds: new Set(['1', '2', '3', '4']), loading: false, error: '',
+      }) };
       return createRequire(import.meta.url)(specifier);
     },
   });

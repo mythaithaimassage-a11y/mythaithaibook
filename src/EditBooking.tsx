@@ -3,6 +3,7 @@ import { X } from 'lucide-react';
 import { useTranslation } from './localization';
 import { bookingTaxTreatment, HST_RATE, isCashPayment, preTaxSubtotal, taxOn } from '../lib/booking-tax.js';
 import { branchAppointmentTimes, type WeeklyBusinessHours } from '../lib/booking-options.js';
+import useTherapistAvailability from './useTherapistAvailability';
 
 export type EditableBooking = {
   id: string; customerName: string; email: string; phone: string; bookingNote?: string;
@@ -17,11 +18,12 @@ type Therapist = { id: number; name: string; active?: boolean; rmtCertified?: bo
 type Props = {
   booking: EditableBooking; services: Service[]; therapists: Therapist[];
   times: string[]; isScheduled: (therapist: Therapist, date: string) => boolean;
+  branchId?: number | string;
   branch?: { businessHours?: WeeklyBusinessHours };
-  onClose: () => void; onSaved: (booking: EditableBooking) => Promise<void>;
+  onClose: () => void; onSaved: (booking: EditableBooking, notification?: { emailSent: boolean; emailError?: string }) => Promise<void>;
 };
 
-export default function EditBooking({ booking, services, therapists, times, branch, isScheduled, onClose, onSaved }: Props) {
+export default function EditBooking({ booking, services, therapists, times, branch, branchId, isScheduled, onClose, onSaved }: Props) {
   const { translate: tr, formatTime } = useTranslation();
   const [form, setForm] = useState(() => ({
     customerName: booking.customerName, email: booking.email, phone: booking.phone,
@@ -40,18 +42,27 @@ export default function EditBooking({ booking, services, therapists, times, bran
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [confirmed, setConfirmed] = useState(false);
+  const [notifyClient, setNotifyClient] = useState(false);
   const dialog = useRef<HTMLDialogElement>(null);
   const submitting = useRef(false);
   const locked = Boolean(booking.receiptNumber || booking.paymentLocked);
   const service = services.find((item) => String(item.id) === form.serviceId);
   const availableTimes = branch && form.date ? branchAppointmentTimes(branch, form.date, service?.duration ?? booking.durationMinutes ?? 60) : times;
+  const availability = useTherapistAvailability({
+    branchId, date: form.date, time: form.time,
+    durationMinutes: service?.duration ?? booking.durationMinutes ?? 60, isRmt: Boolean(service?.isRmt),
+    excludeBookingId: booking.id,
+  });
   const preservingSchedule = form.date === booking.date && service?.name === booking.serviceName;
   const timeChoices = [...new Set([...(locked || preservingSchedule || form.serviceId === '__existing__' && form.date === booking.date ? [booking.time] : []), ...availableTimes])];
   const validTime = timeChoices.includes(form.time) ? form.time : '';
   const couple = /couple/i.test(service?.name || booking.serviceName) && (assigned.length > 0 || form.serviceId !== '__existing__');
-  const eligible = therapists.filter((item) => item.active !== false && isScheduled(item, form.date) && (!service?.isRmt || item.rmtCertified));
-  const choices = therapists.filter((item) => eligible.includes(item) || assigned.includes(item));
   const serviceName = service?.name || booking.serviceName;
+  const schedulingChanged = form.date !== booking.date || form.time !== booking.time || serviceName !== booking.serviceName ||
+    (couple ? [therapist1, therapist2] : [therapist1]).join(', ') !== booking.therapistName;
+  const eligible = therapists.filter((item) => item.active !== false && isScheduled(item, form.date) &&
+    (!service?.isRmt || item.rmtCertified) && availability.therapistIds.has(String(item.id)));
+  const choices = therapists.filter((item) => eligible.includes(item) || (assigned.includes(item) && !schedulingChanged));
   const discountChanged = !locked && (Number(form.manualDiscount) !== (booking.manualBookingDiscount || 0) ||
     Boolean(booking.manualBookingDiscount && (Number(form.total) !== booking.originalBookingTotal || serviceName !== booking.serviceName ||
       isCashPayment(form.paymentOption) !== isCashPayment(booking.paymentOption))));
@@ -75,6 +86,7 @@ export default function EditBooking({ booking, services, therapists, times, bran
       return next;
     });
     if (['manualDiscount', 'total', 'serviceId', 'paymentOption'].includes(key)) setConfirmed(false);
+    if (['date', 'time', 'serviceId'].includes(key)) setNotifyClient(false);
   };
   useEffect(() => {
     dialog.current?.showModal();
@@ -89,11 +101,11 @@ export default function EditBooking({ booking, services, therapists, times, bran
     try {
       const response = await fetch('/api/booking?view=edit-booking', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...form, confirmReconciliation: confirmed, bookingId: booking.id, expectedVersion: booking.editVersion, therapistNames: couple ? [therapist1, therapist2] : [therapist1] }),
+        body: JSON.stringify({ ...form, confirmReconciliation: confirmed, notifyClient, bookingId: booking.id, expectedVersion: booking.editVersion, therapistNames: couple ? [therapist1, therapist2] : [therapist1] }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || 'Unable to save this booking.');
-      await onSaved(data.booking);
+      await onSaved(data.booking, { emailSent: data.emailSent === true, emailError: data.emailError || '' });
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'Unable to save this booking.');
     } finally {
@@ -115,19 +127,22 @@ export default function EditBooking({ booking, services, therapists, times, bran
           <label className="text-xs font-semibold">{tr('Service')}<select required disabled={locked} value={form.serviceId} onChange={(event) => update('serviceId', event.target.value)} className={inputClass}><option value="">{tr('Choose service')}</option>{!services.some((item) => item.name === booking.serviceName) && <option value="__existing__">{tr(booking.serviceName)}</option>}{services.filter((item) => item.active !== false || item.name === booking.serviceName).map((item) => <option key={item.id} value={item.id}>{tr(item.name)}</option>)}</select></label>
           <label className="text-xs font-semibold">{tr('Date')}<input type="date" required disabled={locked} value={form.date} onChange={(event) => update('date', event.target.value)} className={inputClass} /></label>
           <label className="text-xs font-semibold">{tr('Time')}<select required disabled={locked} value={validTime} onChange={(event) => update('time', event.target.value)} className={inputClass}><option value="">{tr('Choose time')}</option>{timeChoices.map((time) => <option key={time} value={time}>{formatTime(time)}</option>)}</select></label>
-          <label className="text-xs font-semibold">{tr('Therapist')}<select required value={therapist1} onChange={(event) => setTherapist1(event.target.value)} className={inputClass}><option value="">{tr('Choose therapist')}</option>{!choices.some((item) => item.name === therapist1) && therapist1 && <option value={therapist1}>{therapist1}</option>}{choices.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}</select></label>
-          {couple && <label className="text-xs font-semibold">{tr('Second therapist')}<select required value={therapist2} onChange={(event) => setTherapist2(event.target.value)} className={inputClass}><option value="">{tr('Choose a different therapist')}</option>{choices.filter((item) => item.name !== therapist1).map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}</select></label>}
+          <label className="text-xs font-semibold">{tr('Therapist')}<select required value={therapist1} onChange={(event) => { setTherapist1(event.target.value); setNotifyClient(false); }} className={inputClass}><option value="">{tr('Choose therapist')}</option>{!choices.some((item) => item.name === therapist1) && therapist1 && <option value={therapist1}>{therapist1}</option>}{choices.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}</select></label>
+          {couple && <label className="text-xs font-semibold">{tr('Second therapist')}<select required value={therapist2} onChange={(event) => { setTherapist2(event.target.value); setNotifyClient(false); }} className={inputClass}><option value="">{tr('Choose a different therapist')}</option>{choices.filter((item) => item.name !== therapist1).map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}</select></label>}
           <label className="text-xs font-semibold">{tr('Payment method')}<select required disabled={locked} value={form.paymentOption} onChange={(event) => update('paymentOption', event.target.value)} className={inputClass}>{[...new Set([form.paymentOption, 'Cash', 'Card', 'E-transfer', 'Other'])].map((value) => <option key={value} value={value}>{tr(value)}</option>)}</select></label>
           <label className="text-xs font-semibold">{tr('Appointment total ($)')}<input type="number" required min="0" step="0.01" disabled={locked} value={form.total} onChange={(event) => update('total', event.target.value)} className={inputClass} /></label>
           <label className="text-xs font-semibold">{tr('Manual discount ($) — optional')}<input type="number" min="0" max={subtotal} step="0.01" disabled={locked} value={form.manualDiscount} onChange={(event) => update('manualDiscount', event.target.value)} className={inputClass} /></label>
           <label className="text-xs font-semibold sm:col-span-2">{tr('Shared internal booking note')}<textarea rows={3} maxLength={2000} value={form.bookingNote} onChange={(event) => update('bookingNote', event.target.value)} className={inputClass} /></label>
         </fieldset>
+        {availability.loading && <p role="status" className="text-xs text-slate-600">{tr('Checking therapist availability…')}</p>}
+        {availability.error && <p role="alert" className="text-xs text-red-800">{tr(availability.error)}</p>}
+        {schedulingChanged && <label className="flex items-start gap-2 rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-950"><input type="checkbox" checked={notifyClient} disabled={saving} onChange={(event) => setNotifyClient(event.target.checked)} /><span><strong className="block">{tr('Email client about this appointment change')}</strong>{tr('Optional. An email is sent only when you check this box.')}</span></label>}
         {!locked && <p role="status" className="text-xs text-slate-600">{tr('Total after discount: $')}{Number.isFinite(discountedTotal) ? discountedTotal.toFixed(2) : '—'} · {tr(taxTreatment.label)}</p>}
         <p className="text-xs text-slate-500">{tr('Cash payments are not charged HST; card and other payments include 13% HST. Changing to or from cash recalculates the appointment total.')}</p>
         <p className="text-xs text-slate-500">{tr('Discounts are deducted before HST. Saved totals sync to bookings, calendar and receipts. No payment or refund is sent automatically.')}</p>
         {discountChanged && <label className="flex items-start gap-3 rounded-lg bg-amber-50 p-3 text-xs text-amber-950"><input type="checkbox" checked={confirmed} disabled={saving} onChange={(event) => setConfirmed(event.target.checked)} /><span><strong className="block">{tr('Confirm reconciliation')}</strong>{tr('I confirm any external payment adjustment or refund has been handled. Save the discounted total and reconciled payment record.')}</span></label>}
         {error && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-800">{tr(error)}</p>}
-        <div className="flex justify-end gap-2"><button type="button" disabled={saving} onClick={onClose} className="rounded-lg border px-4 py-2 text-sm">{tr('Cancel')}</button><button disabled={saving || (discountChanged && !confirmed)} type="submit" className="rounded-lg bg-emerald-900 px-4 py-2 text-sm text-white">{tr(saving ? 'Saving…' : 'Save booking')}</button></div>
+        <div className="flex justify-end gap-2"><button type="button" disabled={saving} onClick={onClose} className="rounded-lg border px-4 py-2 text-sm">{tr('Cancel')}</button><button disabled={saving || availability.loading || Boolean(availability.error) || (discountChanged && !confirmed)} type="submit" className="rounded-lg bg-emerald-900 px-4 py-2 text-sm text-white">{tr(saving ? 'Saving…' : 'Save booking')}</button></div>
       </form>
     </dialog>
   );

@@ -28,6 +28,9 @@ import { emptyPatientHistory } from '../lib/patient-history.js';
 import { anatomicalBodyParts } from '../lib/body-map.js';
 import { portalEntry } from '../lib/portal-entry.js';
 import { bookingTaxTreatment } from '../lib/booking-tax.js';
+import { isTherapistScheduledAtBranch } from '../lib/work-schedule.js';
+import useTherapistAvailability from './useTherapistAvailability';
+import WorkSchedule from './WorkSchedule';
 
 const MOCK_BRANCHES = [
   { id: 1, name: "Mississauga Central", address: "4310 Sherwoodtowne Blvd", city: "Mississauga, ON", phone: "+1 437 898 7424" },
@@ -74,34 +77,6 @@ const MOCK_THERAPISTS = [
   { id: 3, name: "Priya P.", thaiCertified: true, rmtCertified: false, branches: [2, 4], schedule: {}, rating: 4.9, bio: "Hot stone specialist and body stretch master" },
   { id: 4, name: "Somchai R., RMT", thaiCertified: true, rmtCertified: true, branches: [1, 4], schedule: {}, rating: 5.0, bio: "Acupuncture practitioner and sports rehabilitation" }
 ];
-
-const WEEKDAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
-
-// Mirrors the backend's weekdayKeyForDate — avoids timezone shifts on YYYY-MM-DD strings.
-function weekdayKeyForDate(dateStr) {
-  const parsed = new Date(`${String(dateStr || '').slice(0, 10)}T12:00:00Z`);
-  if (Number.isNaN(parsed.getTime())) return null;
-  return WEEKDAY_KEYS[parsed.getUTCDay()];
-}
-
-// Mirrors the backend's isTherapistScheduledAtBranch — filters the roster to whoever is
-// actually rotated into a branch on a given date, falling back to the static branch list
-// when no per-weekday rotation has been configured for that therapist.
-function isTherapistScheduledAtBranch(therapist, branchId, dateStr) {
-  const targetBranchId = Number(branchId);
-  const dayKey = weekdayKeyForDate(dateStr);
-  const scheduledBranch = dayKey ? therapist?.schedule?.[dayKey] : undefined;
-  if (scheduledBranch !== undefined && scheduledBranch !== null && scheduledBranch !== '') {
-    return Number(scheduledBranch) === targetBranchId;
-  }
-  const hasAnySchedule = therapist?.schedule && WEEKDAY_KEYS.some((key) => {
-    const value = therapist.schedule[key];
-    return value !== undefined && value !== null && value !== '';
-  });
-  if (hasAnySchedule) return false;
-  return (therapist?.branches || []).map(Number).includes(targetBranchId);
-}
-
 
 // Medical history questions. Shared by the intake grid, the select-all controls, and
 // the blank default state so the three can never drift apart.
@@ -2556,11 +2531,21 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
 
   const isCoupleService = /couple/i.test(bookingData.service?.name || '');
 
-  // Only offer therapists actually rotated into the selected branch on the selected date;
-  // falls back to full branch list if that therapist has no per-weekday rotation configured.
+  const requestedDurationMinutes = (Number(bookingData.service?.duration) || 60) +
+    (bookingData.hotStoneAddOn && hotStoneAddOnService ? Number(hotStoneAddOnService.duration) || 0 : 0);
+  const therapistAvailability = useTherapistAvailability({
+    branchId: bookingData.branch?.id,
+    date: bookingData.date,
+    time: bookingData.time,
+    durationMinutes: requestedDurationMinutes,
+    isRmt: Boolean(bookingData.service?.isRmt),
+  });
   const branchTherapists = useMemo(
-    () => therapists.filter((therapist) => isTherapistScheduledAtBranch(therapist, bookingData.branch?.id, bookingData.date)),
-    [therapists, bookingData.branch, bookingData.date]
+    () => therapists.filter((therapist) => therapist.active !== false &&
+      isTherapistScheduledAtBranch(therapist, bookingData.branch?.id, bookingData.date) &&
+      (!bookingData.service?.isRmt || therapist.rmtCertified) &&
+      therapistAvailability.therapistIds.has(String(therapist.id))),
+    [therapists, bookingData.branch, bookingData.date, bookingData.service, therapistAvailability.therapistIds]
   );
 
   useEffect(() => {
@@ -3079,6 +3064,34 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
         {/* STEP 2: Therapist, Date & Time */}
         {portalMode === 'book' && step === 2 && (
           <div className="space-y-6">
+            <div className="pt-4 border-b border-stone-200 pb-5">
+              <h2 className="text-xl font-bold text-stone-900 mb-3">Select Date & Appointment Slot</h2>
+              <div className="flex flex-col sm:flex-row gap-4 mb-4">
+                <div className="w-full sm:w-1/2">
+                  <label className="block text-xs font-semibold text-stone-700 mb-1">Date</label>
+                  <input
+                    type="date"
+                    value={bookingData.date}
+                    min={new Date().toISOString().split('T')[0]}
+                    onChange={(e) => updateBooking('date', e.target.value)}
+                    className="w-full p-2.5 rounded-xl border border-stone-300 focus:ring-2 focus:ring-emerald-600 focus:outline-none"
+                  />
+                </div>
+              </div>
+              <label className="block text-xs font-semibold text-stone-700 mb-2">Available Time Slots</label>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                {appointmentTimes.map((time) => (
+                  <button key={time} type="button" onClick={() => updateBooking('time', time)}
+                    className={`py-2.5 px-3 rounded-xl border text-sm font-semibold transition ${
+                      bookingData.time === time
+                        ? 'bg-emerald-800 text-white border-emerald-800 shadow'
+                        : 'bg-stone-50 border-stone-200 text-stone-700 hover:bg-stone-100'
+                    }`}
+                  >{time}</button>
+                ))}
+              </div>
+              {appointmentTimes.length === 0 && <p role="alert" className="mt-3 text-sm text-amber-800">No appointment times fit the business hours for this branch, date and service.</p>}
+            </div>
             <div>
               <h2 className="text-xl font-bold text-stone-900 mb-1">Select Therapist{isCoupleService ? 's' : ''}</h2>
               <p className="text-xs text-stone-500 mb-3">
@@ -3086,15 +3099,19 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                   ? 'This is a couple session for 2 people. Pick a specific practitioner for each guest, or request any available therapist — we will always assign 2 different therapists.'
                   : 'Choose a specific practitioner or request any available therapist'}
               </p>
-              <p className="text-[11px] text-stone-400 mb-3">Showing therapists rotated into {bookingData.branch?.name || 'this branch'} on {bookingData.date}. Change the date below to see who is scheduled on a different day.</p>
-              {branchTherapists.length === 0 && (
-                <p role="status" className="text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-3">No therapist is specifically rotated to this branch on the selected date — choose "Any Available Practitioner" and the clinic will confirm staffing.</p>
+              <p className="text-[11px] text-stone-500 mb-3">Available therapists at {bookingData.branch?.name || 'this branch'} for {bookingData.date} and {bookingData.time || 'the selected time'}.</p>
+              {therapistAvailability.loading && <p role="status" className="mb-3 text-xs text-slate-600">Checking staff schedules and existing appointments…</p>}
+              {therapistAvailability.error && <p role="alert" className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">{therapistAvailability.error}</p>}
+              {!bookingData.time && <p role="status" className="mb-3 text-xs text-amber-700">Select a date and time above to see therapists who can take this appointment.</p>}
+              {!therapistAvailability.loading && !therapistAvailability.error && bookingData.time && branchTherapists.length === 0 && (
+                <p role="status" className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">No qualified therapist is available for this date, time and service. Choose another appointment slot.</p>
               )}
 
               {isCoupleService && <p className="text-xs font-bold text-emerald-800 mb-2">Guest 1 therapist</p>}
               <div className="grid gap-3 sm:grid-cols-3">
                 <button
                   type="button"
+                  disabled={!bookingData.time || therapistAvailability.loading || Boolean(therapistAvailability.error) || branchTherapists.length === 0}
                   onClick={() => updateBooking('therapist', null)}
                   className={`p-3.5 rounded-xl border text-center transition ${
                     bookingData.therapist === null 
@@ -3112,7 +3129,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                     <button
                       key={t.id}
                       type="button"
-                      disabled={disabled}
+                        disabled={disabled || !bookingData.time || therapistAvailability.loading || Boolean(therapistAvailability.error)}
                       onClick={() => updateBooking('therapist', t)}
                       className={`p-3.5 rounded-xl border text-left transition ${disabled ? 'opacity-40 cursor-not-allowed' : ''} ${
                         bookingData.therapist?.id === t.id 
@@ -3137,6 +3154,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                   <div className="grid gap-3 sm:grid-cols-3">
                     <button
                       type="button"
+                      disabled={!bookingData.time || therapistAvailability.loading || Boolean(therapistAvailability.error) || branchTherapists.length < 2}
                       onClick={() => updateBooking('therapist2', null)}
                       className={`p-3.5 rounded-xl border text-center transition ${
                         bookingData.therapist2 === null 
@@ -3154,7 +3172,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                         <button
                           key={t.id}
                           type="button"
-                          disabled={disabled}
+                          disabled={disabled || !bookingData.time || therapistAvailability.loading || Boolean(therapistAvailability.error)}
                           onClick={() => updateBooking('therapist2', t)}
                           className={`p-3.5 rounded-xl border text-left transition ${disabled ? 'opacity-40 cursor-not-allowed' : ''} ${
                             bookingData.therapist2?.id === t.id 
@@ -3176,42 +3194,6 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
               )}
             </div>
 
-            <div className="pt-4 border-t border-stone-200">
-              <h2 className="text-xl font-bold text-stone-900 mb-3">Select Date & Appointment Slot</h2>
-              
-              <div className="flex flex-col sm:flex-row gap-4 mb-4">
-                <div className="w-full sm:w-1/2">
-                  <label className="block text-xs font-semibold text-stone-700 mb-1">Date</label>
-                  <input 
-                    type="date"
-                    value={bookingData.date}
-                    min={new Date().toISOString().split('T')[0]}
-                    onChange={(e) => updateBooking('date', e.target.value)}
-                    className="w-full p-2.5 rounded-xl border border-stone-300 focus:ring-2 focus:ring-emerald-600 focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              <label className="block text-xs font-semibold text-stone-700 mb-2">Available Time Slots</label>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                {appointmentTimes.map(t => (
-                  <button
-                    key={t}
-                    type="button"
-                    onClick={() => updateBooking('time', t)}
-                    className={`py-2.5 px-3 rounded-xl border text-sm font-semibold transition ${
-                      bookingData.time === t 
-                        ? 'bg-emerald-800 text-white border-emerald-800 shadow' 
-                        : 'bg-stone-50 border-stone-200 text-stone-700 hover:bg-stone-100'
-                    }`}
-                  >
-                    {t}
-                  </button>
-                ))}
-              </div>
-              {appointmentTimes.length === 0 && <p role="alert" className="mt-3 text-sm text-amber-800">No appointment times fit the business hours for this branch, date and service.</p>}
-            </div>
-
             <div className="flex justify-between pt-4">
               <button
                 type="button"
@@ -3222,7 +3204,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
               </button>
               <button
                 type="button"
-                disabled={!validBookingTime}
+                disabled={!validBookingTime || therapistAvailability.loading || Boolean(therapistAvailability.error) || branchTherapists.length < (isCoupleService ? 2 : 1)}
                 onClick={() => setStep(3)}
                 className="px-6 py-2.5 bg-emerald-800 text-white font-semibold rounded-xl hover:bg-emerald-900 disabled:opacity-40 disabled:cursor-not-allowed transition shadow-sm flex items-center"
               >
@@ -4286,6 +4268,18 @@ function AdminPortal({
   const [receiptNotice, setReceiptNotice] = useState('');
   const [therapistReassignTo, setTherapistReassignTo] = useState('');
   const [isReassigningTherapist, setIsReassigningTherapist] = useState(false);
+  const [notifyClientOnReassign, setNotifyClientOnReassign] = useState(false);
+  const reassignBooking = selectedCalendarEvent?.booking;
+  const reassignBranchId = branches.find((branch) => branch.name === reassignBooking?.branchName || branch.address === reassignBooking?.branchName)?.id;
+  const reassignService = services.find((service) => service.name === reassignBooking?.serviceName);
+  const reassignAvailability = useTherapistAvailability({
+    branchId: reassignBranchId,
+    date: reassignBooking?.date || '',
+    time: reassignBooking?.time,
+    durationMinutes: Number(reassignBooking?.durationMinutes) || 60,
+    isRmt: Boolean(reassignService?.isRmt),
+    excludeBookingId: String(reassignBooking?.id || ''),
+  });
   const [appointmentNotes, setAppointmentNotes] = useState([]);
   const [isLoadingAppointmentNotes, setIsLoadingAppointmentNotes] = useState(false);
   const [appointmentNotesError, setAppointmentNotesError] = useState('');
@@ -4312,6 +4306,10 @@ function AdminPortal({
   const [isSendingReviewRequests, setIsSendingReviewRequests] = useState(false);
   const [reviewRequestError, setReviewRequestError] = useState('');
   const [reviewRequestResult, setReviewRequestResult] = useState('');
+  useEffect(() => {
+    setNotifyClientOnReassign(false);
+    setTherapistReassignTo('');
+  }, [selectedCalendarEvent?.booking?.id]);
   const [googleAdsStartDate, setGoogleAdsStartDate] = useState(() => {
     const date = new Date();
     date.setDate(date.getDate() - 29);
@@ -5418,7 +5416,7 @@ function AdminPortal({
       const response = await fetch('/api/booking?view=reassign-therapist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ bookingId: booking.id, therapistName: therapistReassignTo }),
+        body: JSON.stringify({ bookingId: booking.id, therapistName: therapistReassignTo, notifyClient: notifyClientOnReassign }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
@@ -5427,7 +5425,11 @@ function AdminPortal({
         : current);
       setBookings((current) => current.map((item) => item.id === booking.id ? { ...item, therapistName: data.therapistName } : item));
       setTherapistReassignTo('');
-      setReceiptNotice(message("Reassigned from {value0} to {value1}.", { value0: (data.previousTherapist || message("Unassigned")), value1: data.therapistName }));
+      setReceiptNotice(data.emailError
+        ? message("Reassigned from {value0} to {value1}, but the client email could not be sent: {value2}", { value0: (data.previousTherapist || message("Unassigned")), value1: data.therapistName, value2: data.emailError })
+        : data.emailSent
+          ? message("Reassigned from {value0} to {value1}. The client was emailed.", { value0: (data.previousTherapist || message("Unassigned")), value1: data.therapistName })
+          : message("Reassigned from {value0} to {value1}.", { value0: (data.previousTherapist || message("Unassigned")), value1: data.therapistName }));
     } catch (error) {
       setReceiptError(error.message || 'Unable to change the therapist for this appointment.');
     } finally {
@@ -5921,6 +5923,7 @@ function AdminPortal({
     { id: 'staff', label: 'Staff', icon: Users, section: 'Manage' },
     { id: 'branches', label: 'Branches', icon: MapPin, section: 'Manage' },
     { id: 'availability', label: 'Availability', icon: CalendarX, section: 'Manage' },
+    { id: 'work-schedule', label: 'Work schedule', icon: CalendarDays, section: 'Manage' },
     { id: 'patient-history', label: 'Patients', icon: UserRound, section: 'Manage' },
     { id: 'wix-contacts', label: 'Wix contacts import', icon: Upload, section: 'Manage' },
     { id: 'wix-bookings', label: 'Wix bookings import', icon: Database, section: 'Manage' },
@@ -5935,7 +5938,7 @@ function AdminPortal({
   ];
   const visibleAdminNavigation = adminNavigation.filter((item) => {
     if (dashboardUser.role === 'owner') return true;
-    if (item.id === 'schedule' || item.id === 'calendar') return true;
+    if (item.id === 'schedule' || item.id === 'calendar' || item.id === 'work-schedule') return true;
     if (dashboardUser.role === 'branch_manager' && item.id === 'reports') return true;
     return false;
   });
@@ -5956,6 +5959,7 @@ function AdminPortal({
     staff: t.staff,
     branches: 'Branches',
     availability: 'Availability',
+    'work-schedule': 'Work schedule',
     'patient-history': 'Patient Summary',
     'wix-contacts': 'Historical Wix contacts',
     'wix-bookings': 'Historical Wix bookings',
@@ -6495,14 +6499,19 @@ function AdminPortal({
         therapists={therapists}
         times={AVAILABLE_TIMES}
         branch={branches.find((branch) => branch.name === editingBooking.branchName || branch.address === editingBooking.branchName)}
+        branchId={branches.find((branch) => branch.name === editingBooking.branchName || branch.address === editingBooking.branchName)?.id}
         isScheduled={(therapist, date) => isTherapistScheduledAtBranch(therapist, branches.find((branch) => branch.name === editingBooking.branchName || branch.address === editingBooking.branchName)?.id, date)}
         onClose={() => setEditingBooking(null)}
-        onSaved={async (booking) => {
+        onSaved={async (booking, notification) => {
           setBookings((current) => current.map((item) => item.id === booking.id ? { ...item, ...booking } : item));
           setSelectedCalendarEvent(null);
           setIssuedReceipt(null);
           setEditingBooking(null);
-          setBookingEditNotice(message("Booking saved."));
+          setBookingEditNotice(notification?.emailError
+            ? message("Booking saved, but the client email could not be sent: {value0}", { value0: notification.emailError })
+            : notification?.emailSent
+              ? message("Booking saved. An appointment update email was sent to the client.")
+              : message("Booking saved."));
           const refreshed = await Promise.all([loadCalendar(), loadBookingsFromBackend()]);
           if (refreshed.some((success) => !success)) setBookingEditNotice(message("Booking saved, but refreshed data could not be loaded. Refresh before making further changes."));
         }}
@@ -6776,6 +6785,11 @@ function AdminPortal({
           </div>
         </div>
       )}
+
+      {activeTab === 'work-schedule' && <WorkSchedule
+        branches={dashboardBranches.filter((branch) => branch.active !== false)}
+        therapists={therapists.filter((therapist) => therapist.active !== false)}
+      />}
 
       {/* TAB CONTENT: AVAILABILITY */}
       {activeTab === 'availability' && (
@@ -8172,6 +8186,7 @@ function AdminPortal({
                       const isCancelled = String(booking.status || '') === 'Cancelled';
                       const options = therapists
                         .filter((therapist) => therapist.active !== false)
+                        .filter((therapist) => reassignAvailability.therapistIds.has(String(therapist.id)))
                         .map((therapist) => therapist.name)
                         .filter((name) => name && name !== currentTherapist);
                       return (
@@ -8185,7 +8200,7 @@ function AdminPortal({
                               <div className="flex flex-wrap items-center gap-2">
                                 <select
                                   value={therapistReassignTo}
-                                  onChange={(event) => setTherapistReassignTo(event.target.value)}
+                                  onChange={(event) => { setTherapistReassignTo(event.target.value); setNotifyClientOnReassign(false); }}
                                   aria-label={tr("Reassign this appointment to another therapist")}
                                   className="rounded-lg border border-slate-300 px-2.5 py-2 text-xs text-slate-800"
                                 >
@@ -8205,6 +8220,14 @@ function AdminPortal({
                               </div>
                             )}
                           </div>
+                          {dashboardUser.role === 'owner' && !isCancelled && !issuedReceipt && therapistReassignTo && (
+                            <label className="mt-3 flex items-start gap-2 text-xs text-slate-700">
+                              <input type="checkbox" checked={notifyClientOnReassign} disabled={isReassigningTherapist} onChange={(event) => setNotifyClientOnReassign(event.target.checked)} />
+                              <span>{tr('Email client about this therapist change (optional)')}</span>
+                            </label>
+                          )}
+                          {dashboardUser.role === 'owner' && !isCancelled && !issuedReceipt && reassignAvailability.loading && <p role="status" className="mt-2 text-[11px] text-slate-500">{tr('Checking therapist availability…')}</p>}
+                          {dashboardUser.role === 'owner' && !isCancelled && !issuedReceipt && reassignAvailability.error && <p role="alert" className="mt-2 text-[11px] text-red-700">{tr(reassignAvailability.error)}</p>}
                           {!isCancelled && !issuedReceipt && (
                             <p className="mt-2 text-[11px] leading-4 text-slate-500">{tr("Only therapists who are free at this date and time can be assigned. The calendar event is updated to match.")}</p>
                           )}

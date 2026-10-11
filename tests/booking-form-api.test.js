@@ -26,6 +26,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   let branchRows = [[1, 'Test Branch', 'Address', 'City', '555', 'TRUE', '', 'TRUE', 'TRUE', 'TRUE', 'TRUE']];
   let busyEvents = [];
   let blockRows = [['Block ID']];
+  let scheduleRows = [['Therapist ID', 'Date', 'Branch ID', 'Working', 'Start Time', 'End Time', 'Updated By', 'Updated At']];
   const serviceRows = [
     [1, 'Massage', 'Thai', 60, 100, 10, 'FALSE', 0.13, '', 'TRUE'],
     [2, 'Couple Massage', 'Thai', 60, 180, 10, 'FALSE', 0.13, '', 'TRUE'],
@@ -43,7 +44,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   let legacyAccount = false;
   t.mock.method(google, 'sheets', () => ({
     spreadsheets: {
-      get: async () => ({ data: { sheets: ['Branches', 'Unavailability', 'Services', 'Therapists', 'BusinessProfile', ...(aliasRows.length ? ['TherapistAliases'] : []), ...(legacyAccount ? ['TherapistAccounts'] : [])].map((title) => ({ properties: { title } })) } }),
+      get: async () => ({ data: { sheets: ['Branches', 'Unavailability', 'Services', 'Therapists', 'BusinessProfile', 'StaffWorkSchedule', ...(aliasRows.length ? ['TherapistAliases'] : []), ...(legacyAccount ? ['TherapistAccounts'] : [])].map((title) => ({ properties: { title } })) } }),
       batchUpdate: async ({ requestBody }) => {
         assert.equal(requestBody.requests[0].addSheet.properties.title, 'TherapistAliases');
       },
@@ -54,6 +55,8 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
           if (range === 'Branches!A2:L') return { data: { values: branchRows } };
           if (range === 'Unavailability!A1:J1') return { data: { values: [['Block ID']] } };
           if (range === 'Unavailability!A:J') return { data: { values: blockRows } };
+          if (range === 'StaffWorkSchedule!A1:H1') return { data: { values: [['Therapist ID', 'Date', 'Branch ID', 'Working', 'Start Time', 'End Time', 'Updated By', 'Updated At']] } };
+          if (range === 'StaffWorkSchedule!A:H') return { data: { values: scheduleRows } };
           if (range === 'Services!A2:K') return { data: { values: serviceRows } };
           if (range === 'Therapists!A2:J') return { data: { values: therapistRows } };
           if (range === 'BusinessProfile!A1:I1' || range === 'BusinessProfile!A1:I2') return { data: { values: [['businessName', 'legalName', 'tagline', 'email', 'phone', 'website', 'address', 'taxRegistrationNumber', 'photoUrl'], ['Test Clinic']] } };
@@ -435,7 +438,8 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   branchRows.push([2, 'Unassigned Branch', '', '', '', 'TRUE', '', 'TRUE', 'TRUE', 'TRUE', 'TRUE']);
   assert.equal((await request('manual-booking', { ...manual, branchId: '2' })).code, 403);
   busyEvents = [{ start: { dateTime: '2026-11-01T10:00:00-04:00' }, end: { dateTime: '2026-11-01T11:00:00-04:00' }, description: 'Therapist: Test Therapist' }];
-  assert.equal((await request('manual-booking', manual)).code, 409);
+  const busyBooking = await request('manual-booking', manual);
+  assert.equal(busyBooking.code, 409, JSON.stringify(busyBooking.data));
   busyEvents = [];
   blockRows.push(['block-1', 'business', 'Test Branch', '', manual.date, '10:00', '11:00', 'Closed']);
   assert.equal((await request('manual-booking', manual)).code, 409);
@@ -549,6 +553,34 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   assert.equal((await request('edit-booking', editBody(), { origin: 'https://untrusted.example' })).code, 403);
   assert.equal((await request('edit-booking', { ...editBody(), expectedVersion: 'stale' })).code, 409);
   const stale = editBody();
+  const notificationRecord = { ...editable, booking_id: 'notify-client-edit', calendar_event_id: '' };
+  records.push(notificationRecord);
+  const emailsBeforeEdit = emails.length;
+  const notificationEdit = await request('edit-booking', {
+    ...editBody(),
+    bookingId: notificationRecord.booking_id,
+    expectedVersion: bookingEditVersion(BOOKING_TABLE_FIELDS.map((field) => notificationRecord[field.name])),
+    time: '02:00 PM',
+    notifyClient: true,
+  });
+  assert.equal(notificationEdit.code, 200, JSON.stringify(notificationEdit.data));
+  assert.equal(notificationEdit.data.emailSent, true);
+  assert.equal(emails.length, emailsBeforeEdit + 1, 'Opted-in schedule edits send a client notification');
+  const failedNotificationRecord = { ...editable, booking_id: 'notify-client-edit-failure', calendar_event_id: '' };
+  records.push(failedNotificationRecord);
+  t.mock.method(google, 'gmail', () => ({ users: { messages: { send: async () => { throw new Error('Synthetic notification email failure'); } } } }));
+  const failedNotification = await request('edit-booking', {
+    ...editBody(),
+    bookingId: failedNotificationRecord.booking_id,
+    expectedVersion: bookingEditVersion(BOOKING_TABLE_FIELDS.map((field) => failedNotificationRecord[field.name])),
+    time: '03:00 PM',
+    notifyClient: true,
+  });
+  assert.equal(failedNotification.code, 200);
+  assert.equal(failedNotification.data.emailSent, false);
+  assert.match(failedNotification.data.emailError, /Synthetic notification email failure/);
+  assert.equal(failedNotificationRecord.time, '03:00 PM', 'Email failure does not roll back the saved booking');
+  t.mock.method(google, 'gmail', () => ({ users: { messages: { send: async (email) => { emails.push(email); return { data: { id: 'retry-email' } }; } } } }));
   const savedEdit = await request('edit-booking', stale);
   assert.equal(savedEdit.code, 200, JSON.stringify(savedEdit.data));
   assert.equal(editable.customer_name, 'Updated client');
@@ -735,6 +767,13 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   hours.sun = { open: '08:00', close: '22:00', closed: false };
   hours.mon.closed = true;
   branchRows[0][11] = JSON.stringify(hours);
+  scheduleRows.push([1, '2026-11-01', 1, 'TRUE', '08:00', '22:00', 'owner@example.com', 'test']);
+  const morningAvailability = await request('available-therapists', null, {
+    method: 'GET',
+    query: { date: '2026-11-01', branchId: '1', time: '09:00 AM', durationMinutes: '60', isRmt: 'false' },
+  });
+  assert.equal(morningAvailability.code, 200, JSON.stringify(morningAvailability.data));
+  assert.deepEqual(morningAvailability.data.therapistIds, [1], 'Date-specific shifts filter exact appointment availability');
   const beforeHoursBookings = events.length;
   for (const change of [
     { time: '07:45 AM' }, { time: '09:15 PM' }, { date: '2026-11-02' },
