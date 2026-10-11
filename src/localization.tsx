@@ -49,6 +49,14 @@ export function createTranslator(language: Language) {
 
 export function localizeTimeLabel(value: string | null | undefined, language: Language): string {
   const text = value ?? '';
+  const clockTime = /^(\d{2}):([0-5]\d)$/.exec(text);
+  if (clockTime) {
+    const hour = Number(clockTime[1]);
+    if (hour <= 23) {
+      if (language === 'th') return `${clockTime[1]}:${clockTime[2]} น.`;
+      return `${hour % 12 || 12}:${clockTime[2]} ${hour < 12 ? 'AM' : 'PM'}`;
+    }
+  }
   if (language !== 'th') return text;
   return text.replace(/\b(\d{1,2}):(\d{2})\s*(AM|PM)\b/gi, (match, hour: string, minute: string, period: string) => {
     const numericHour = Number(hour);

@@ -416,6 +416,10 @@ test('Thai clock labels preserve appointment ranges, midnight, noon and original
   assert.equal(localizeTimeLabel('11:00 AM - 12:00 PM', 'th'), '11:00 น. - 12:00 น.');
   assert.equal(localizeTimeLabel('11:00 PM - 12:00 AM', 'th'), '23:00 น. - 00:00 น.');
   assert.equal(localizeTimeLabel('02:15 PM', 'en'), '02:15 PM');
+  assert.equal(localizeTimeLabel('10:00', 'en'), '10:00 AM');
+  assert.equal(localizeTimeLabel('17:15', 'en'), '5:15 PM');
+  assert.equal(localizeTimeLabel('20:00', 'en'), '8:00 PM');
+  assert.equal(localizeTimeLabel('17:15', 'th'), '17:15 น.');
   assert.equal(localizeTimeLabel('25:00 PM', 'th'), '25:00 PM');
   assert.equal(localizeTimeLabel(undefined, 'th'), '');
 });

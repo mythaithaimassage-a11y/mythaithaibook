@@ -5961,11 +5961,11 @@ function AdminPortal({
     visibleCalendarEvents.some((event) => !event.therapistName || event.therapistName === 'Any Available');
   const calendarGapMinutes = Math.max(0, Number(businessProfile.therapistBufferMinutes) || 0);
   const calendarFirstMinute = Math.min(
-    8 * 60,
+    10 * 60,
     ...calendarHours.map((hours) => Number(hours.open.split(':')[0]) * 60 + Number(hours.open.split(':')[1])),
   );
   const calendarLastMinute = Math.max(
-    19 * 60,
+    20 * 60,
     ...calendarHours.map((hours) => Number(hours.close.split(':')[0]) * 60 + Number(hours.close.split(':')[1])),
   );
   const calendarDisplaySlots = Array.from(
