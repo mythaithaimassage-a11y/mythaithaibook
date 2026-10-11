@@ -1768,6 +1768,16 @@ function therapistAssignmentNames(value, roster = []) {
   return assigned;
 }
 
+function findBookingService(serviceName, services) {
+  const exactMatch = services.find((service) => service.name === serviceName);
+  if (exactMatch) return exactMatch;
+  const hotStoneService = services.find((service) => /hot stone add-?on/i.test(service.name || ''));
+  const addOnSuffix = hotStoneService ? ` + ${hotStoneService.name}` : '';
+  if (!addOnSuffix || !String(serviceName || '').endsWith(addOnSuffix)) return null;
+  const baseServiceName = String(serviceName).slice(0, -addOnSuffix.length);
+  return services.find((service) => service.name === baseServiceName) || null;
+}
+
 function parseBookingFieldsFromDescription(description = '') {
   const field = (label) => description.match(new RegExp(`^${label}:\\s*(.+)$`, 'm'))?.[1]?.trim() || '';
   const paid = field('Paid').replace(/^\$/, '');
@@ -9324,7 +9334,7 @@ export default async function handler(req, res) {
           getServices(sheets), getStaffWorkScheduleRows(sheets),
         ]);
         const therapists = assignmentRoster;
-        const service = services.find((item) => item.name === row[5]);
+        const service = findBookingService(row[5], services);
         const startTime = time24FromMinutes(appointmentTimeMinutes(normalizeBookingTime(time)));
         if (!service || realNames.some((name) => {
           const therapist = therapists.find((item) => item.name === name && item.active !== false &&
@@ -9738,7 +9748,7 @@ export default async function handler(req, res) {
         return requested;
       }
       const idx = remainingCandidates.findIndex((name) => !assignedNames.includes(name));
-      if (idx === -1) return requested === 'Any Available' ? 'Any Available' : '';
+      if (idx === -1) return '';
       const picked = remainingCandidates[idx];
       assignedNames.push(picked);
       remainingCandidates.splice(idx, 1);

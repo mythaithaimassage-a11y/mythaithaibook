@@ -5279,12 +5279,19 @@ function AdminPortal({
     [dashboardBookings, calendarDate, calendarBranchDetails, calendarTherapistName],
   );
   const calendarTherapistsBooked = useMemo(
-    () => new Set(calendarDateBookings.map((booking) => booking.therapistName).filter(Boolean)).size,
-    [calendarDateBookings],
+    () => new Set(calendarDateBookings
+      .filter((booking) => !['Cancelled', 'No Show'].includes(booking.status))
+      .flatMap((booking) => getAssignedTherapistNames(booking.therapistName, therapists))
+      .filter((name) => name.toLowerCase() !== 'any available' &&
+        therapists.some((therapist) => therapist.name === name))).size,
+    [calendarDateBookings, therapists],
   );
   const unassignedCalendarBookings = useMemo(
-    () => calendarDateBookings.filter((booking) => !booking.therapistName).length,
-    [calendarDateBookings],
+    () => calendarDateBookings.filter((booking) =>
+      !['Cancelled', 'No Show'].includes(booking.status) &&
+      (!booking.therapistName || getAssignedTherapistNames(booking.therapistName, therapists)
+        .some((name) => name.toLowerCase() === 'any available'))).length,
+    [calendarDateBookings, therapists],
   );
 
   const loadBookingsFromBackend = async () => {
@@ -5949,7 +5956,8 @@ function AdminPortal({
       (dashboardUser.role === 'owner' || dashboardUser.branchIds.includes(String(branch.id))),
     ),
   );
-  const calendarHasUnassignedColumn = calendarTherapist === 'all';
+  const calendarHasUnassignedColumn = calendarTherapist === 'all' &&
+    visibleCalendarEvents.some((event) => !event.therapistName || event.therapistName === 'Any Available');
   const calendarGapMinutes = Math.max(0, Number(businessProfile.therapistBufferMinutes) || 0);
   const calendarFirstMinute = Math.min(
     8 * 60,
@@ -5989,7 +5997,7 @@ function AdminPortal({
     nextAvailabilityRequest.current?.abort();
     const controller = new AbortController();
     nextAvailabilityRequest.current = controller;
-    setCalendarNextAvailability({ therapistId: String(therapist.id), loading: true, slot: null, error: '' });
+    setCalendarNextAvailability({ therapistId: availabilityKey, loading: true, slot: null, error: '' });
     try {
       const dateParts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
         timeZone: 'America/Toronto', year: 'numeric', month: '2-digit', day: '2-digit',
@@ -6859,7 +6867,10 @@ function AdminPortal({
                       </div>}
                     </div>
                   ))}
-                  {calendarHasUnassignedColumn && <div className="relative border-b border-stone-200 p-1.5 text-[11px] font-bold text-stone-600">
+                  {calendarHasUnassignedColumn && <div className="border-b border-stone-200 p-1.5 text-[11px] font-bold text-stone-600">{tr("Unassigned appointments")}</div>}
+                </div>
+                <div className="sticky top-7 z-20 bg-white">
+                  <div className="relative w-56 border-b border-stone-200 p-1.5 text-[11px] font-bold text-stone-600">
                     <div className="flex items-center justify-between gap-1">
                       <span className="truncate">{tr("Any Available")}</span>
                       <button
@@ -6894,7 +6905,7 @@ function AdminPortal({
                             </>
                             : <p className="mt-1 text-stone-500">{tr("No availability in the next 14 days.")}</p>}
                     </div>}
-                  </div>}
+                  </div>
                 </div>
                 {calendarDisplaySlots.map(({ label, minutes }) => (
                   <div key={label} className="grid min-h-[40px] border-b border-stone-100" style={{ gridTemplateColumns: `56px repeat(${calendarColumnTherapists.length + Number(calendarHasUnassignedColumn)}, minmax(128px, 220px))` }}>
@@ -6965,7 +6976,7 @@ function AdminPortal({
             })}
             {calendarTherapist === 'all' && (
               <span className="inline-flex items-center gap-1.5 text-xs text-stone-500">
-                <span className="w-2.5 h-2.5 rounded-full bg-stone-400" />{tr("Any Available")}</span>
+                <span className="w-2.5 h-2.5 rounded-full bg-stone-400" />{tr("Unassigned appointments")}</span>
             )}
           </div>}
           {visibleCalendarEvents.length === 0 && !isLoadingCalendar ? (

@@ -311,6 +311,16 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   assert.equal((await request('reschedule-booking', { bookingId: 'MTT-test', email: base.email, date: base.date, time: '09:30 AM' })).code, 404);
   assert.equal(events.length, 0);
   assert.equal((await request('', { ...base, skipPatientHistory: false, patientHistory: {} })).code, 400);
+  busyEvents = [{
+    description: 'Therapist: Test Therapist, Second Therapist',
+    start: { dateTime: '2026-11-01T10:00:00-05:00' },
+    end: { dateTime: '2026-11-01T11:00:00-05:00' },
+  }];
+  const noAutomaticTherapist = await request('', { ...base, therapistName: 'Any Available' });
+  assert.equal(noAutomaticTherapist.code, 409, JSON.stringify(noAutomaticTherapist.data));
+  assert.equal(events.length, 0, 'Automatic selection must not save Any Available as a substitute therapist');
+  assert.equal(records.length, 0);
+  busyEvents = [];
   for (const [option, amount, time] of [['clinic', 0, '10:00 AM'], ['deposit', 10, '11:15 AM'], ['full', 113, '12:30 PM']]) {
     const result = await request('', { ...base, id: `MTT-${option}`, time, paymentOption: option, paidAmount: '999' });
     assert.equal(result.code, 200, JSON.stringify(result.data));
@@ -730,20 +740,28 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
     bookingId: completedForCorrection.booking_id, therapistName: 'Test Therapist',
   })).code, 401, 'Therapist corrections require a dashboard sign-in');
   const upcomingCorrection = { ...completedForCorrection, booking_id: 'upcoming-therapist-correction',
-    date: '2026-11-01', status: 'Confirmed', therapist_name: 'Test Therapist',
+    date: '2099-01-01', status: 'Confirmed', therapist_name: 'Test Therapist',
     receipt_number: '', calendar_event_id: '' };
+  upcomingCorrection.service_name = 'Massage + Hot Stone Add-on';
+  upcomingCorrection.duration_minutes = 75;
   records.push(upcomingCorrection);
   busyEvents = [{
     id: 'busy-second-therapist',
     description: 'Therapist: Second Therapist',
-    start: { dateTime: '2026-11-01T11:00:00-04:00' },
-    end: { dateTime: '2026-11-01T12:00:00-04:00' },
+    start: { dateTime: '2099-01-01T11:00:00-05:00' },
+    end: { dateTime: '2099-01-01T12:00:00-05:00' },
   }];
   cookie = managerCookie;
   assert.equal((await request('reassign-therapist', {
     bookingId: upcomingCorrection.booking_id, therapistName: 'Second Therapist',
   })).code, 409, 'Upcoming appointments continue to enforce therapist availability');
   busyEvents = [];
+  const reassignedAddOn = await request('reassign-therapist', {
+    bookingId: upcomingCorrection.booking_id, therapistName: 'Second Therapist',
+  });
+  assert.equal(reassignedAddOn.code, 200, JSON.stringify(reassignedAddOn.data));
+  assert.equal(upcomingCorrection.therapist_name, 'Second Therapist',
+    'Therapist reassignment recognizes bookings whose saved service includes the Hot Stone add-on');
   const version = () => bookingEditVersion(BOOKING_TABLE_FIELDS.map((field) => editable[field.name]));
   const editBody = () => ({
     bookingId: editable.booking_id, expectedVersion: version(), customerName: 'Updated client',

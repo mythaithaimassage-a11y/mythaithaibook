@@ -152,6 +152,24 @@ test('dashboard KPIs are scoped to sales, bookings and calendar context', () => 
   assert.doesNotMatch(calendar, /Revenue Today|HST Tax Collected/);
 });
 
+test('calendar counts only real individual therapists and treats automatic selection as unassigned', () => {
+    const date = '2026-10-11';
+    const therapists = ['Tanya', 'Sukas', 'Janry', 'Tun', 'Fifth therapist']
+      .map((name, index) => ({ id: index + 1, name, active: true, branches: [1], schedule: {} }));
+    const bookings = [
+      ...therapists.map((therapist, index) => ({ ...booking, id: `named-${index}`, date, therapistName: therapist.name })),
+      { ...booking, id: 'automatic', date, therapistName: 'Any Available' },
+      { ...booking, id: 'couple', date, therapistName: 'Tanya, Sukas' },
+    ];
+    const html = render('calendar', 'en', {
+      calendarDate: date, calendarViewMode: 'therapists',
+      calendarEvents: [{ id: 'automatic-event', therapistName: 'Any Available', localTime: '11:00', summary: 'Unassigned booking' }],
+    }, { therapists, bookings });
+    assert.match(html, /Therapists booked<\/div>[\s\S]*?text-2xl[^>]*>5<\/div>/);
+    assert.match(html, /Unassigned appointments<\/div>[\s\S]*?text-2xl[^>]*>1<\/div>/);
+    assert.match(source, /aria-controls="any-therapist-next-availability"/);
+});
+
 test('today availability shortcut displays the Work Schedule shift graphic for the selected branch', () => {
   const todayTranslator = createTranslator('en');
   const todayScheduleLoader = createTsLoader({
