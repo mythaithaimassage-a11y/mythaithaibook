@@ -109,6 +109,8 @@ test('business profile configures appointment gaps and the calendar offers thera
   assert.match(source, /minmax\(128px, 220px\)/);
   assert.match(source, /Next available \(60 min\)/);
   assert.match(source, /available-therapists&\$\{query\}/);
+  assert.match(source, /calendarNextAvailability\?\.therapistId === 'any'/);
+  assert.match(source, /therapistNames\.join\(', '\)/);
   assert.match(source, /No availability in the next 14 days/);
   assert.match(source, /Buffer · \{value0\} min/);
 });

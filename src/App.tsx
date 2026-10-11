@@ -5978,8 +5978,9 @@ function AdminPortal({
 
   useEffect(() => () => nextAvailabilityRequest.current?.abort(), []);
 
-  const toggleTherapistNextAvailability = async (therapist) => {
-    if (calendarNextAvailability?.therapistId === String(therapist.id)) {
+  const toggleTherapistNextAvailability = async (therapist = null) => {
+    const availabilityKey = therapist ? String(therapist.id) : 'any';
+    if (calendarNextAvailability?.therapistId === availabilityKey) {
       nextAvailabilityRequest.current?.abort();
       nextAvailabilityRequest.current = null;
       setCalendarNextAvailability(null);
@@ -6005,7 +6006,11 @@ function AdminPortal({
           branch.active !== false &&
           (dashboardUser.role === 'owner' || dashboardUser.branchIds.includes(String(branch.id))) &&
           (calendarBranch === 'all' || String(branch.id) === calendarBranch) &&
-          isTherapistScheduledAtBranch(therapist, branch.id, candidateDate));
+          (therapist
+            ? isTherapistScheduledAtBranch(therapist, branch.id, candidateDate)
+            : therapists.some((candidate) => candidate.active !== false &&
+              (dashboardUser.role === 'owner' || dashboardUser.branchIds.includes(String(branch.id))) &&
+              isTherapistScheduledAtBranch(candidate, branch.id, candidateDate))));
         const branchAvailability = await Promise.all(candidateBranches.map(async (branch) => {
           let times = branchAppointmentTimes(branch, candidateDate, 60);
           if (candidateDate === today) {
@@ -6029,31 +6034,43 @@ function AdminPortal({
               Array.isArray(data.therapistIdsByTime)) {
             throw new Error('Therapist availability could not be verified. Refresh and try again.');
           }
-          const time = times.find((candidate) => {
+          const slot = times.map((candidate) => {
             const ids = data.therapistIdsByTime[candidate];
             if (!Array.isArray(ids) || !ids.every((id) => typeof id === 'string' || typeof id === 'number')) {
               throw new Error('Therapist availability could not be verified. Refresh and try again.');
             }
-            return ids.map(String).includes(String(therapist.id));
-          });
-          return time ? { date: candidateDate, time, branchName: branch.name } : null;
+            const availableTherapists = therapists.filter((candidateTherapist) =>
+              ids.map(String).includes(String(candidateTherapist.id)) &&
+              candidateTherapist.active !== false &&
+              (dashboardUser.role === 'owner' || dashboardUser.branchIds.includes(String(branch.id))) &&
+              isTherapistScheduledAtBranch(candidateTherapist, branch.id, candidateDate));
+            const available = therapist
+              ? availableTherapists.some((candidateTherapist) =>
+                String(candidateTherapist.id) === String(therapist.id))
+              : availableTherapists.length > 0;
+            return available
+              ? { date: candidateDate, time: candidate, branchName: branch.name,
+                therapistNames: availableTherapists.map((candidateTherapist) => candidateTherapist.name) }
+              : null;
+          }).find(Boolean);
+          return slot;
         }));
         const slots = branchAvailability.filter(Boolean).sort((left, right) =>
           appointmentTimeMinutes(left.time) - appointmentTimeMinutes(right.time));
         if (slots.length) {
           setCalendarNextAvailability({
-            therapistId: String(therapist.id), loading: false, slot: slots[0], error: '',
+            therapistId: availabilityKey, loading: false, slot: slots[0], error: '',
           });
           return;
         }
       }
       setCalendarNextAvailability({
-        therapistId: String(therapist.id), loading: false, slot: null, error: '',
+        therapistId: availabilityKey, loading: false, slot: null, error: '',
       });
     } catch (error) {
       if (!controller.signal.aborted) {
         setCalendarNextAvailability({
-          therapistId: String(therapist.id), loading: false, slot: null,
+          therapistId: availabilityKey, loading: false, slot: null,
           error: error.message || 'Unable to check therapist availability.',
         });
       }
@@ -6842,7 +6859,42 @@ function AdminPortal({
                       </div>}
                     </div>
                   ))}
-                  {calendarHasUnassignedColumn && <div className="border-b border-stone-200 p-1.5 text-[11px] font-bold text-stone-600">{tr("Any Available")}</div>}
+                  {calendarHasUnassignedColumn && <div className="relative border-b border-stone-200 p-1.5 text-[11px] font-bold text-stone-600">
+                    <div className="flex items-center justify-between gap-1">
+                      <span className="truncate">{tr("Any Available")}</span>
+                      <button
+                        type="button"
+                        aria-expanded={calendarNextAvailability?.therapistId === 'any'}
+                        aria-controls="any-therapist-next-availability"
+                        onClick={() => toggleTherapistNextAvailability()}
+                        className="shrink-0 rounded px-1 py-0.5 text-[9px] font-semibold text-emerald-800 hover:bg-emerald-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-700"
+                      >
+                        {tr("Next slot")}
+                      </button>
+                    </div>
+                    {calendarNextAvailability?.therapistId === 'any' && <div
+                      id="any-therapist-next-availability"
+                      className="absolute right-1 top-full z-30 mt-1 w-56 max-w-[calc(100vw-2rem)] rounded-lg border border-stone-200 bg-white p-2.5 text-[11px] font-normal text-stone-700 shadow-lg"
+                    >
+                      <p className="font-semibold text-stone-900">{tr("Next available (60 min)")}</p>
+                      {calendarNextAvailability.loading
+                        ? <p className="mt-1 text-stone-500">{tr("Checking availability…")}</p>
+                        : calendarNextAvailability.error
+                          ? <p className="mt-1 text-red-700">{tr(calendarNextAvailability.error)}</p>
+                          : calendarNextAvailability.slot
+                            ? <>
+                              <p className="mt-1 font-semibold text-emerald-800">
+                                {new Date(`${calendarNextAvailability.slot.date}T12:00:00`).toLocaleDateString(locale, { weekday: 'short', month: 'short', day: 'numeric' })}
+                                {' · '}{formatTime(calendarNextAvailability.slot.time)}
+                              </p>
+                              {calendarNextAvailability.slot.branchName && <p className="mt-0.5 text-stone-500">{calendarNextAvailability.slot.branchName}</p>}
+                              {calendarNextAvailability.slot.therapistNames?.length > 0 && <p className="mt-1 text-stone-600">
+                                {tr("Available:")} {calendarNextAvailability.slot.therapistNames.join(', ')}
+                              </p>}
+                            </>
+                            : <p className="mt-1 text-stone-500">{tr("No availability in the next 14 days.")}</p>}
+                    </div>}
+                  </div>}
                 </div>
                 {calendarDisplaySlots.map(({ label, minutes }) => (
                   <div key={label} className="grid min-h-[40px] border-b border-stone-100" style={{ gridTemplateColumns: `56px repeat(${calendarColumnTherapists.length + Number(calendarHasUnassignedColumn)}, minmax(128px, 220px))` }}>
