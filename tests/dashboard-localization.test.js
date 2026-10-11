@@ -5,6 +5,7 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import ts from 'typescript';
 import vm from 'node:vm';
+import postcss from 'postcss';
 import { createTsLoader } from './helpers/load-ts-module.js';
 
 const appPath = new URL('../src/App.tsx', import.meta.url).pathname;
@@ -56,6 +57,124 @@ function render(tab, language = 'th', overrides = {}, propOverrides = {}) {
   return renderToStaticMarkup(React.createElement(LanguageProvider, { language },
     React.createElement(AdminPortal, { ...props, lang: language, ...propOverrides })));
 }
+
+test('owner mobile shortcuts and grouped menu retain every unique section and identify the current page', () => {
+  const html = render('schedule', 'en', { mobileNavOpen: true });
+  const shortcuts = html.match(/<nav aria-label="Owner dashboard shortcuts"[\s\S]*?<\/nav>/)?.[0];
+  assert.ok(shortcuts);
+  assert.match(shortcuts, /aria-current="page"[^>]*>[\s\S]*?Home/);
+  assert.match(shortcuts, /Booking Calendar/);
+  assert.match(shortcuts, /Sales &amp; reports/);
+  assert.match(shortcuts, /aria-expanded="true" aria-controls="mobile-dashboard-menu"/);
+  const menu = html.match(/<nav id="mobile-dashboard-menu"[\s\S]*?<\/nav>/)?.[0];
+  assert.ok(menu);
+  for (const section of ['Workspace', 'Manage', 'Grow']) assert.match(menu, new RegExp(`aria-label="${section}"`));
+  assert.equal((menu.match(/<button /g) || []).length, 19);
+  assert.equal((menu.match(/aria-current="page"/g) || []).length, 1);
+  assert.doesNotMatch(menu, /Events &amp; bookings/);
+  assert.match(menu, /Dashboard access/);
+  assert.match(menu, /Therapist approvals/);
+  assert.doesNotMatch(render('schedule', 'en'), /<nav id="mobile-dashboard-menu"/);
+  const thai = render('schedule', 'th', { mobileNavOpen: true });
+  assert.match(thai, /ทางลัดแผงควบคุมเจ้าของ/);
+  assert.match(thai, /เมนูทั้งหมด/);
+});
+
+test('mobile booking cards retain all nine fields, booking data and existing actions', () => {
+  const html = render('schedule', 'en');
+  const table = html.match(/<table role="table"[\s\S]*?<\/table>/)?.[0];
+  assert.ok(table);
+  for (const label of ['Ref ID', 'Customer', 'Service', 'Therapist', 'Time', 'Database', 'Check-in', 'Total', 'Actions']) {
+    assert.ok(table.includes(`role="cell" data-label="${label}"`), label);
+  }
+  for (const value of [booking.id, booking.customerName, booking.phone, booking.bookingNote, booking.serviceName, booking.therapistName, booking.time, '107.35']) {
+    assert.ok(table.includes(value), value);
+  }
+  for (const action of ['Edit booking', 'Appointment details', 'Clear']) assert.ok(table.includes(`>${action}</button>`));
+  assert.match(render('schedule', 'th'), /data-label="ลูกค้า"/);
+});
+
+test('responsive styles are owner-only, below 1024px, with scrollable menus and 44px touch controls', () => {
+  const css = postcss.parse(readFileSync(new URL('../src/index.css', import.meta.url), 'utf8'));
+  const media = css.nodes.find((node) => node.type === 'atrule' && node.name === 'media');
+  assert.equal(media.params, '(max-width: 1023px)');
+  media.walkRules((rule) => {
+    for (const selector of rule.selectors) assert.ok(selector.startsWith('.owner-dashboard '), selector);
+  });
+  const declarations = (selector) => {
+    const result = {};
+    media.walkRules((rule) => {
+      if (rule.selectors.includes(selector)) rule.walkDecls((decl) => { result[decl.prop] = decl.value; });
+    });
+    return result;
+  };
+  assert.equal(declarations('.owner-dashboard .dashboard-toolbar button')['min-height'], '44px');
+  assert.equal(declarations('.owner-dashboard .dashboard-booking-row-actions button')['min-height'], '44px');
+  assert.equal(declarations('.owner-dashboard .dashboard-mobile-menu')['max-height'], 'calc(100dvh - 240px)');
+  assert.equal(declarations('.owner-dashboard .dashboard-booking-table tbody tr').display, 'grid');
+  assert.equal(declarations('.owner-dashboard .dashboard-booking-table td::before').content, 'attr(data-label)');
+  for (const role of ['branch_manager', 'branch_receptionist']) {
+    const html = render('schedule', 'en', { mobileNavOpen: true }, { dashboardUser: { role, branchIds: ['1'] } });
+    assert.doesNotMatch(html, /class="[^"]*\bowner-dashboard\b|Owner dashboard shortcuts|dashboard-mobile-menu/);
+    assert.match(html, /Mobile owner dashboard navigation/);
+  }
+});
+
+test('owner menu toggles, closes after navigation and supports Escape without booking mutations', () => {
+  let index = 0;
+  const values = { activeTab: 'schedule', mobileNavOpen: false, hasLoadedBusinessProfile: true };
+  const interactionLoad = createTsLoader({
+    react: {
+      ...React,
+      useState(initial) {
+        const name = states[index++];
+        if (!Object.prototype.hasOwnProperty.call(values, name)) values[name] = typeof initial === 'function' ? initial() : initial;
+        return [values[name], (value) => { values[name] = typeof value === 'function' ? value(values[name]) : value; }];
+      },
+      useEffect() {},
+      useMemo(compute) { return compute(); },
+      useRef(current) { return { current }; },
+    },
+    './localization': {
+      useTranslation: () => ({ translate: createTranslator('en'), locale: 'en-CA', formatTime: (value) => value }),
+      message,
+      createTranslator,
+    },
+  });
+  const { AdminPortal: InteractivePortal } = interactionLoad(appPath, '\nexport { AdminPortal };\n');
+  const walk = (node, predicate) => {
+    if (!node || typeof node !== 'object') return undefined;
+    if (Array.isArray(node)) return node.map((child) => walk(child, predicate)).find(Boolean);
+    return predicate(node) ? node : walk(node.props?.children, predicate);
+  };
+  const tree = () => {
+    index = 0;
+    return InteractivePortal({ ...props, lang: 'en', setBookings() { assert.fail('Navigation must not mutate bookings'); } });
+  };
+  const toggle = () => walk(tree(), (node) => node.props?.['aria-label'] === 'Toggle dashboard menu');
+  toggle().props.onClick();
+  assert.equal(values.mobileNavOpen, true);
+  const menu = walk(tree(), (node) => node.props?.id === 'mobile-dashboard-menu');
+  const packages = walk(menu, (node) => node.type === 'button' && walk(node, (child) => child.type === 'span' && child.props.children === 'Package tracking'));
+  assert.ok(packages);
+  packages.props.onClick();
+  assert.equal(values.activeTab, 'packages');
+  assert.equal(values.mobileNavOpen, false);
+  assert.equal(walk(tree(), (node) => node.props?.id === 'mobile-dashboard-menu'), undefined);
+  toggle().props.onClick();
+  let focused = false;
+  walk(tree(), (node) => node.props?.id === 'mobile-dashboard-menu').props.onKeyDown({
+    key: 'Escape',
+    currentTarget: { parentElement: { querySelector: () => ({ focus() { focused = true; } }) } },
+  });
+  assert.equal(values.mobileNavOpen, false);
+  assert.equal(focused, true);
+  const shortcuts = walk(tree(), (node) => node.props?.['aria-label'] === 'Owner dashboard shortcuts');
+  const calendar = walk(shortcuts, (node) => node.type === 'button' && walk(node, (child) => child.type === 'span' && child.props.children === 'Booking Calendar'));
+  calendar.props.onClick();
+  assert.equal(values.activeTab, 'calendar');
+  assert.equal(values.mobileNavOpen, false);
+});
 
 test('managers and receptionists can edit bookings and issue receipts without manual discounts or medical access', () => {
   for (const role of ['branch_manager', 'branch_receptionist']) {

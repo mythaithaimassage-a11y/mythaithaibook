@@ -76,6 +76,13 @@ the primary calendar with `GOOGLE_PRIMARY_CALENDAR_ID`.
 
 ## Staff calendar and quick booking
 
+On the **owner dashboard only**, screens below 1024px have sticky Home,
+Booking Calendar, and Sales & reports shortcuts. **All sections** opens a
+scrollable menu grouped by Workspace, Manage, and Grow; selecting a section
+closes the menu. Schedule bookings appear as labeled cards with the same
+Edit booking, Appointment details, and Clear actions. Touch controls are larger.
+Desktop, other staff views, and customer booking workflows are unchanged.
+
 The dashboard **Booking Calendar** includes appointment search, Daily/Agenda
 views, branch and therapist filters, display/auto-refresh settings, and
 **Manage** and **Add** menus. **Add > Quick Sale** and **Add > Appointment**

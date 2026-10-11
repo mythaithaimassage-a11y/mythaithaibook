@@ -5969,7 +5969,7 @@ function AdminPortal({
   }[activeTab] || 'Owner dashboard';
 
   return (
-    <div className="min-h-[calc(100vh-58px)] bg-[#f1f3f7] lg:flex">
+    <div className={`min-h-[calc(100vh-58px)] bg-[#f1f3f7] lg:flex ${dashboardUser.role === 'owner' ? 'owner-dashboard' : ''}`}>
       <aside className="sticky top-[58px] hidden h-[calc(100vh-58px)] w-64 shrink-0 flex-col bg-[#111722] text-slate-300 lg:flex">
         <div className="flex items-center gap-3 border-b border-white/10 px-5 py-5">
           <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-400 text-sm font-black text-slate-950">M</div>
@@ -6017,13 +6017,13 @@ function AdminPortal({
       </aside>
 
       <div className="min-w-0 flex-1">
-        <div className="sticky top-[58px] z-20 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur sm:px-6 lg:top-[58px]">
+        <div className="dashboard-toolbar sticky top-[58px] z-20 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur sm:px-6 lg:top-[58px]">
           <div className="flex items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-3">
-              <button type="button" aria-label={tr("Toggle dashboard menu")} aria-expanded={mobileNavOpen} onClick={() => setMobileNavOpen((open) => !open)} className="rounded-lg border border-slate-200 p-2 text-slate-600 hover:bg-slate-50 lg:hidden"><Menu className="h-4 w-4" /></button>
+              <button type="button" aria-label={tr("Toggle dashboard menu")} aria-expanded={mobileNavOpen} aria-controls="mobile-dashboard-menu" onClick={() => setMobileNavOpen((open) => !open)} className="dashboard-menu-toggle rounded-lg border border-slate-200 p-2 text-slate-600 hover:bg-slate-50 lg:hidden">{mobileNavOpen && dashboardUser.role === 'owner' ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}</button>
               <div className="min-w-0">
                 <p className="truncate text-sm font-bold text-slate-900">{businessProfile.businessName || 'MY THAI THAI'}</p>
-                <p className="hidden text-[11px] text-slate-500 sm:block">{tr(pageTitle)} <span className="px-1 text-slate-300">/</span> {tr("Owner workspace")}</p>
+                <p className="dashboard-page-title hidden text-[11px] text-slate-500 sm:block">{tr(pageTitle)} <span className="dashboard-workspace-label px-1 text-slate-300">/</span> <span className="dashboard-workspace-label">{tr("Owner workspace")}</span></p>
               </div>
             </div>
             <div className="flex items-center gap-2 sm:gap-3">
@@ -6035,8 +6035,31 @@ function AdminPortal({
               <div className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-100 text-[10px] font-bold text-emerald-950">MT</div>
             </div>
           </div>
-          {mobileNavOpen && (
-            <nav aria-label={tr("Mobile owner dashboard navigation")} className="mt-3 grid grid-cols-2 gap-1 border-t border-slate-100 pt-3 sm:grid-cols-3">
+          {dashboardUser.role === 'owner' && (
+            <nav aria-label={tr("Owner dashboard shortcuts")} className="mt-3 grid grid-cols-4 gap-1 lg:hidden">
+              {visibleAdminNavigation.filter((item) => ['schedule', 'calendar', 'reports'].includes(item.id) && item.label !== 'Events & bookings').map((item) => {
+                const Icon = item.icon;
+                return <button key={item.id} type="button" aria-current={activeTab === item.id ? 'page' : undefined} onClick={() => { setActiveTab(item.id); setMobileNavOpen(false); }} className={`flex min-h-11 flex-col items-center justify-center gap-1 rounded-xl px-1 py-2 text-[11px] font-semibold ${activeTab === item.id ? 'bg-emerald-950 text-white' : 'text-slate-600 hover:bg-slate-100'}`}><Icon className="h-5 w-5 shrink-0" /><span>{tr(item.label)}</span></button>;
+              })}
+              <button type="button" aria-expanded={mobileNavOpen} aria-controls="mobile-dashboard-menu" onClick={() => setMobileNavOpen((open) => !open)} className={`flex min-h-11 flex-col items-center justify-center gap-1 rounded-xl px-1 py-2 text-[11px] font-semibold ${mobileNavOpen ? 'bg-emerald-100 text-emerald-950' : 'text-slate-600 hover:bg-slate-100'}`}><Menu className="h-5 w-5" />{tr("All sections")}</button>
+            </nav>
+          )}
+          {mobileNavOpen && dashboardUser.role === 'owner' ? (
+            <nav id="mobile-dashboard-menu" aria-label={tr("Mobile owner dashboard navigation")} onKeyDown={(event) => { if (event.key === 'Escape') { setMobileNavOpen(false); event.currentTarget.parentElement.querySelector('.dashboard-menu-toggle')?.focus(); } }} className="dashboard-mobile-menu mt-3 space-y-4 overflow-y-auto overscroll-contain border-t border-slate-100 pt-3 lg:hidden">
+              {navigationSections.map((section) => (
+                <section key={section} aria-label={tr(section)}>
+                  <h2 className="mb-2 px-2 text-xs font-bold uppercase tracking-wider text-slate-500">{tr(section)}</h2>
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                    {visibleAdminNavigation.filter((item) => item.section === section && item.label !== 'Events & bookings').map((item) => {
+                      const Icon = item.icon;
+                      return <button key={item.id} type="button" aria-current={activeTab === item.id ? 'page' : undefined} onClick={() => { setActiveTab(item.id); setMobileNavOpen(false); }} className={`flex min-h-11 items-center gap-2 rounded-xl px-3 py-3 text-left text-sm font-semibold ${activeTab === item.id ? 'bg-emerald-950 text-white' : 'bg-slate-50 text-slate-700 hover:bg-slate-100'}`}><Icon className="h-4 w-4 shrink-0" /><span className="min-w-0 break-words">{tr(item.label)}</span>{item.badge > 0 && <span className="ml-auto rounded-full bg-amber-400 px-1.5 text-[10px] font-bold text-slate-950">{item.badge}</span>}</button>;
+                    })}
+                  </div>
+                </section>
+              ))}
+            </nav>
+          ) : mobileNavOpen && (
+            <nav id="mobile-dashboard-menu" aria-label={tr("Mobile owner dashboard navigation")} className="mt-3 grid grid-cols-2 gap-1 border-t border-slate-100 pt-3 sm:grid-cols-3">
               {visibleAdminNavigation.map((item, index) => {
                 const Icon = item.icon;
                 return <button key={`${item.label}-${index}`} onClick={() => { setActiveTab(item.id); setMobileNavOpen(false); }} className={`flex items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-semibold ${activeTab === item.id ? 'bg-emerald-950 text-white' : 'text-slate-600 hover:bg-slate-100'}`}><Icon className="h-4 w-4" />{tr(item.label)}{item.badge > 0 && <span className="ml-auto rounded-full bg-amber-400 px-1.5 text-[10px] font-bold text-slate-950">{item.badge}</span>}</button>;
@@ -6047,7 +6070,7 @@ function AdminPortal({
 
         <main className="mx-auto max-w-[1600px] space-y-6 p-4 sm:p-6 xl:p-8">
       {bookingEditNotice && <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">{tr(bookingEditNotice)}</p>}
-      <section className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-slate-950 via-emerald-950 to-emerald-800 px-5 py-6 text-white shadow-xl shadow-emerald-950/10 sm:px-8 sm:py-8">
+      <section className="dashboard-banner relative overflow-hidden rounded-3xl bg-gradient-to-br from-slate-950 via-emerald-950 to-emerald-800 px-5 py-6 text-white shadow-xl shadow-emerald-950/10 sm:px-8 sm:py-8">
         <div aria-hidden="true" className="absolute -right-16 -top-28 h-72 w-72 rounded-full border border-white/10" />
         <div aria-hidden="true" className="absolute -right-2 -top-14 h-48 w-48 rounded-full border border-white/10" />
         <div className="relative z-10 flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
@@ -6181,8 +6204,8 @@ function AdminPortal({
 
       {/* TAB CONTENT: SCHEDULE */}
       {activeTab === 'schedule' && (
-        <div className="bg-white rounded-2xl p-6 border border-stone-200 shadow-sm space-y-4">
-          <div className="flex justify-between items-center">
+        <div className="dashboard-bookings bg-white rounded-2xl p-6 border border-stone-200 shadow-sm space-y-4">
+          <div className="dashboard-booking-actions flex justify-between items-center">
             <h2 className="text-lg font-bold text-stone-900">{t.schedule}</h2>
             <div className="flex items-center gap-2">
               <button
@@ -6218,7 +6241,7 @@ function AdminPortal({
           {dashboardUser.role === 'owner' && <ClearBookingHistory onCleared={loadBookingsFromBackend} />}
 
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs sm:text-sm">
+            <table role="table" aria-label={t.schedule} className="dashboard-booking-table w-full text-left text-xs sm:text-sm">
               <thead className="bg-stone-50 text-stone-600 font-bold border-b">
                 <tr>
                   <th className="p-3">{tr("Ref ID")}</th>
@@ -6232,19 +6255,19 @@ function AdminPortal({
                   <th className="p-3">{tr("Actions")}</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-stone-100">
+              <tbody role="rowgroup" className="divide-y divide-stone-100">
                 {bookings.map(b => (
-                  <tr key={b.id} className="hover:bg-stone-50 transition">
-                    <td className="p-3 font-mono font-bold text-stone-900">{b.id}</td>
-                    <td className="p-3">
+                  <tr role="row" key={b.id} className="hover:bg-stone-50 transition">
+                    <td role="cell" data-label={tr("Ref ID")} className="p-3 font-mono font-bold text-stone-900">{b.id}</td>
+                    <td role="cell" data-label={tr("Customer")} className="p-3">
                       <div className="font-bold text-stone-800">{b.customerName}</div>
                       <div className="text-stone-400 text-[11px]">{b.phone}</div>
                       {b.bookingNote && <div className="mt-1 whitespace-pre-wrap text-[11px] text-blue-800">{tr("Team note:")} {b.bookingNote}</div>}
                     </td>
-                    <td className="p-3 font-medium text-stone-700">{tr(b.serviceName)}</td>
-                    <td className="p-3 text-stone-600">{b.therapistName}</td>
-                    <td className="p-3 font-semibold text-stone-800">{formatTime(b.time)}</td>
-                    <td className="p-3">
+                    <td role="cell" data-label={tr("Service")} className="p-3 font-medium text-stone-700">{tr(b.serviceName)}</td>
+                    <td role="cell" data-label={tr("Therapist")} className="p-3 text-stone-600">{b.therapistName}</td>
+                    <td role="cell" data-label={tr("Time")} className="p-3 font-semibold text-stone-800">{formatTime(b.time)}</td>
+                    <td role="cell" data-label={tr("Database")} className="p-3">
                       {b.syncedToSheets ? (
                         <span className="bg-emerald-100 text-emerald-800 font-bold px-2 py-1 rounded-md text-[10px] inline-flex items-center">
                           <Check className="w-3 h-3 mr-1" />{tr("Synced")}</span>
@@ -6252,7 +6275,7 @@ function AdminPortal({
                         <span className="bg-stone-100 text-stone-600 font-bold px-2 py-1 rounded-md text-[10px]">{tr("Local Only")}</span>
                       )}
                     </td>
-                    <td className="p-3">
+                    <td role="cell" data-label={tr("Check-in")} className="p-3">
                       {b.checkedInAt ? (
                         <span title={b.checkedInBy || ''} className="bg-emerald-100 text-emerald-800 font-bold px-2 py-1 rounded-md text-[10px] inline-flex items-center">
                           <Check className="w-3 h-3 mr-1" />{tr("Checked in")}</span>
@@ -6260,8 +6283,8 @@ function AdminPortal({
                         <span className="bg-amber-50 text-amber-800 font-bold px-2 py-1 rounded-md text-[10px]">{tr("Not checked in")}</span>
                       )}
                     </td>
-                    <td className="p-3 font-bold text-stone-900">${b.total.toFixed(2)}</td>
-                    <td className="p-3">
+                    <td role="cell" data-label={tr("Total")} className="p-3 font-bold text-stone-900">${b.total.toFixed(2)}</td>
+                    <td role="cell" data-label={tr("Actions")} className="dashboard-booking-row-actions p-3">
                       <button type="button" onClick={() => openBookingEditor(b)} className="mr-2 rounded-lg border border-emerald-300 px-2 py-1 text-[11px] font-bold text-emerald-900">{tr("Edit booking")}</button>
                       <button type="button" onClick={() => {
                         setIssuedReceipt(null); setReceiptError(''); setReceiptNotice('');

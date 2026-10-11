@@ -1,3 +1,120 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@media (max-width: 1023px) {
+  .owner-dashboard .dashboard-menu-toggle,
+  .owner-dashboard .dashboard-toolbar button {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  .owner-dashboard .dashboard-page-title {
+    display: block;
+    overflow-wrap: anywhere;
+  }
+
+  .owner-dashboard .dashboard-workspace-label {
+    display: none;
+  }
+
+  .owner-dashboard .dashboard-mobile-menu {
+    max-height: calc(100dvh - 240px);
+  }
+
+  .owner-dashboard > div > main {
+    padding: 12px;
+  }
+
+  .owner-dashboard .dashboard-banner {
+    padding: 16px;
+  }
+
+  .owner-dashboard .dashboard-banner h1 {
+    font-size: 20px;
+  }
+
+  .owner-dashboard .dashboard-banner .gap-6 {
+    gap: 12px;
+  }
+
+  .owner-dashboard .dashboard-banner button,
+  .owner-dashboard .dashboard-booking-actions button,
+  .owner-dashboard .dashboard-booking-row-actions button {
+    min-height: 44px;
+  }
+
+  .owner-dashboard .dashboard-bookings {
+    padding: 12px;
+  }
+
+  .owner-dashboard .dashboard-booking-actions {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .owner-dashboard .dashboard-booking-actions > div {
+    flex-wrap: wrap;
+  }
+
+  .owner-dashboard .dashboard-booking-table,
+  .owner-dashboard .dashboard-booking-table tbody {
+    display: block;
+    width: 100%;
+  }
+
+  .owner-dashboard .dashboard-booking-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .owner-dashboard .dashboard-booking-table tbody {
+    display: grid;
+    gap: 12px;
+  }
+
+  .owner-dashboard .dashboard-booking-table tbody tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 12px;
+    min-width: 0;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 12px;
+  }
+
+  .owner-dashboard .dashboard-booking-table td:nth-child(1),
+  .owner-dashboard .dashboard-booking-table td:nth-child(2),
+  .owner-dashboard .dashboard-booking-table td:nth-child(3),
+  .owner-dashboard .dashboard-booking-table td:nth-child(5),
+  .owner-dashboard .dashboard-booking-row-actions {
+    grid-column: 1 / -1;
+  }
+
+  .owner-dashboard .dashboard-booking-table td {
+    display: block;
+    padding: 6px 0;
+    font-size: 14px;
+    overflow-wrap: anywhere;
+  }
+
+  .owner-dashboard .dashboard-booking-table td::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 4px;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 11px;
+    font-weight: 600;
+    color: #64748b;
+  }
+
+  .owner-dashboard .dashboard-booking-row-actions button {
+    margin: 4px 8px 0 0;
+    padding: 8px 12px;
+    font-size: 12px;
+  }
+}

@@ -1,4 +1,6 @@
 export const dashboardThai: Record<string, string> = {
+  'Owner dashboard shortcuts': 'ทางลัดแผงควบคุมเจ้าของ',
+  'All sections': 'เมนูทั้งหมด',
   'Use Edit booking to update a booking with a saved manual discount.': 'กรุณาใช้หน้าแก้ไขการจองเพื่ออัปเดตการจองที่มีส่วนลดบันทึกไว้',
   'Apply manual discounts in Edit booking, not Issue receipt.': 'กรุณาใช้ส่วนลดที่กำหนดเองในหน้าแก้ไขการจอง ไม่ใช่หน้าออกใบเสร็จ',
   'Total after discount: $': 'ยอดรวมหลังหักส่วนลด: $',
