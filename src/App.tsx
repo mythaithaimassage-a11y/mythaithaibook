@@ -4590,6 +4590,7 @@ function AdminPortal({
   const [calendarWarnings, setCalendarWarnings] = useState([]);
   const [calendarUnavailability, setCalendarUnavailability] = useState([]);
   const [calendarViewMode, setCalendarViewMode] = useState('daily');
+  const [calendarNextAvailability, setCalendarNextAvailability] = useState(null);
   const [calendarSearch, setCalendarSearch] = useState('');
   const [calendarFiltersOpen, setCalendarFiltersOpen] = useState(false);
   const [calendarAutoRefresh, setCalendarAutoRefresh] = useState(true);
@@ -4599,6 +4600,7 @@ function AdminPortal({
   const [bookingEditNotice, setBookingEditNotice] = useState('');
   const [quickBookingNotice, setQuickBookingNotice] = useState('');
   const calendarRequest = useRef<AbortController | null>(null);
+  const nextAvailabilityRequest = useRef<AbortController | null>(null);
   const [unavailabilityBlocks, setUnavailabilityBlocks] = useState([]);
   const [isLoadingUnavailability, setIsLoadingUnavailability] = useState(false);
   const [unavailabilityLoadError, setUnavailabilityLoadError] = useState('');
@@ -5968,6 +5970,98 @@ function AdminPortal({
     },
   );
 
+  useEffect(() => {
+    nextAvailabilityRequest.current?.abort();
+    nextAvailabilityRequest.current = null;
+    setCalendarNextAvailability(null);
+  }, [calendarDate, calendarBranch]);
+
+  useEffect(() => () => nextAvailabilityRequest.current?.abort(), []);
+
+  const toggleTherapistNextAvailability = async (therapist) => {
+    if (calendarNextAvailability?.therapistId === String(therapist.id)) {
+      nextAvailabilityRequest.current?.abort();
+      nextAvailabilityRequest.current = null;
+      setCalendarNextAvailability(null);
+      return;
+    }
+    nextAvailabilityRequest.current?.abort();
+    const controller = new AbortController();
+    nextAvailabilityRequest.current = controller;
+    setCalendarNextAvailability({ therapistId: String(therapist.id), loading: true, slot: null, error: '' });
+    try {
+      const dateParts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'America/Toronto', year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+      }).formatToParts(new Date()).map(({ type, value }) => [type, value]));
+      const today = `${dateParts.year}-${dateParts.month}-${dateParts.day}`;
+      const firstDate = calendarDate < today ? today : calendarDate;
+      const todayMinutes = Number(dateParts.hour) * 60 + Number(dateParts.minute);
+      for (let offset = 0; offset < 14; offset += 1) {
+        const date = new Date(`${firstDate}T12:00:00Z`);
+        date.setUTCDate(date.getUTCDate() + offset);
+        const candidateDate = date.toISOString().slice(0, 10);
+        const candidateBranches = branches.filter((branch) =>
+          branch.active !== false &&
+          (dashboardUser.role === 'owner' || dashboardUser.branchIds.includes(String(branch.id))) &&
+          (calendarBranch === 'all' || String(branch.id) === calendarBranch) &&
+          isTherapistScheduledAtBranch(therapist, branch.id, candidateDate));
+        const branchAvailability = await Promise.all(candidateBranches.map(async (branch) => {
+          let times = branchAppointmentTimes(branch, candidateDate, 60);
+          if (candidateDate === today) {
+            times = times.filter((time) => appointmentTimeMinutes(time) > todayMinutes);
+          }
+          if (!times.length) return null;
+          const query = new URLSearchParams({
+            branchId: String(branch.id),
+            date: candidateDate,
+            times: JSON.stringify(times),
+            durationMinutes: '60',
+            isRmt: 'false',
+          });
+          const response = await fetch(`/api/booking?view=available-therapists&${query}`, {
+            signal: controller.signal,
+            cache: 'no-store',
+          });
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+          if (!data.therapistIdsByTime || typeof data.therapistIdsByTime !== 'object' ||
+              Array.isArray(data.therapistIdsByTime)) {
+            throw new Error('Therapist availability could not be verified. Refresh and try again.');
+          }
+          const time = times.find((candidate) => {
+            const ids = data.therapistIdsByTime[candidate];
+            if (!Array.isArray(ids) || !ids.every((id) => typeof id === 'string' || typeof id === 'number')) {
+              throw new Error('Therapist availability could not be verified. Refresh and try again.');
+            }
+            return ids.map(String).includes(String(therapist.id));
+          });
+          return time ? { date: candidateDate, time, branchName: branch.name } : null;
+        }));
+        const slots = branchAvailability.filter(Boolean).sort((left, right) =>
+          appointmentTimeMinutes(left.time) - appointmentTimeMinutes(right.time));
+        if (slots.length) {
+          setCalendarNextAvailability({
+            therapistId: String(therapist.id), loading: false, slot: slots[0], error: '',
+          });
+          return;
+        }
+      }
+      setCalendarNextAvailability({
+        therapistId: String(therapist.id), loading: false, slot: null, error: '',
+      });
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        setCalendarNextAvailability({
+          therapistId: String(therapist.id), loading: false, slot: null,
+          error: error.message || 'Unable to check therapist availability.',
+        });
+      }
+    } finally {
+      if (nextAvailabilityRequest.current === controller) nextAvailabilityRequest.current = null;
+    }
+  };
+
   const openQuickBooking = (time = '') => {
     setQuickBookingNotice('');
     const slotBranch = calendarBranch === 'all' && time
@@ -6705,22 +6799,54 @@ function AdminPortal({
             </div>
           </div>}
           {calendarViewMode === 'therapists' && <div className="overflow-hidden rounded-xl border border-stone-200 bg-white">
-            <div className="border-b border-stone-200 bg-stone-50 px-4 py-3">
-              <p className="font-bold text-stone-900">{new Date(`${calendarDate}T12:00:00`).toLocaleDateString(locale, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</p>
+            <div className="border-b border-stone-200 bg-stone-50 px-3 py-2">
+              <p className="text-sm font-bold text-stone-900">{new Date(`${calendarDate}T12:00:00`).toLocaleDateString(locale, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</p>
               <p className="text-xs text-stone-500">{tr("Appointments grouped by therapist. The gap after each appointment is reserved automatically.")}</p>
             </div>
             <div className="max-h-[680px] overflow-auto">
-              <div className="min-w-max">
-                <div className="sticky top-0 z-10 grid bg-stone-50" style={{ gridTemplateColumns: `76px repeat(${calendarColumnTherapists.length + Number(calendarHasUnassignedColumn)}, minmax(180px, 1fr))` }}>
-                  <div className="border-b border-r border-stone-200 p-2 text-[11px] font-semibold text-stone-500">{tr("Time")}</div>
+              <div className="w-fit min-w-full">
+                <div className="sticky top-0 z-20 grid bg-stone-50" style={{ gridTemplateColumns: `56px repeat(${calendarColumnTherapists.length + Number(calendarHasUnassignedColumn)}, minmax(128px, 220px))` }}>
+                  <div className="border-b border-r border-stone-200 p-1.5 text-[10px] font-semibold text-stone-500">{tr("Time")}</div>
                   {calendarColumnTherapists.map((therapist) => (
-                    <div key={therapist.id} className="border-b border-r border-stone-200 p-2 text-xs font-bold text-stone-800">{therapist.name}</div>
+                    <div key={therapist.id} className="relative border-b border-r border-stone-200 p-1.5 text-[11px] font-bold text-stone-800">
+                      <div className="flex min-w-0 items-center justify-between gap-1">
+                        <span className="truncate">{therapist.name}</span>
+                        <button
+                          type="button"
+                          aria-expanded={calendarNextAvailability?.therapistId === String(therapist.id)}
+                          aria-controls={`therapist-next-availability-${therapist.id}`}
+                          onClick={() => toggleTherapistNextAvailability(therapist)}
+                          className="shrink-0 rounded px-1 py-0.5 text-[9px] font-semibold text-emerald-800 hover:bg-emerald-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-700"
+                        >
+                          {tr("Next slot")}
+                        </button>
+                      </div>
+                      {calendarNextAvailability?.therapistId === String(therapist.id) && <div
+                        id={`therapist-next-availability-${therapist.id}`}
+                        className="absolute left-1 top-full z-30 mt-1 w-56 max-w-[calc(100vw-2rem)] rounded-lg border border-stone-200 bg-white p-2.5 text-[11px] font-normal text-stone-700 shadow-lg"
+                      >
+                        <p className="font-semibold text-stone-900">{tr("Next available (60 min)")}</p>
+                        {calendarNextAvailability.loading
+                          ? <p className="mt-1 text-stone-500">{tr("Checking availability…")}</p>
+                          : calendarNextAvailability.error
+                            ? <p className="mt-1 text-red-700">{tr(calendarNextAvailability.error)}</p>
+                            : calendarNextAvailability.slot
+                              ? <>
+                                <p className="mt-1 font-semibold text-emerald-800">
+                                  {new Date(`${calendarNextAvailability.slot.date}T12:00:00`).toLocaleDateString(locale, { weekday: 'short', month: 'short', day: 'numeric' })}
+                                  {' · '}{formatTime(calendarNextAvailability.slot.time)}
+                                </p>
+                                {calendarNextAvailability.slot.branchName && <p className="mt-0.5 text-stone-500">{calendarNextAvailability.slot.branchName}</p>}
+                              </>
+                              : <p className="mt-1 text-stone-500">{tr("No availability in the next 14 days.")}</p>}
+                      </div>}
+                    </div>
                   ))}
-                  {calendarHasUnassignedColumn && <div className="border-b border-stone-200 p-2 text-xs font-bold text-stone-600">{tr("Any Available")}</div>}
+                  {calendarHasUnassignedColumn && <div className="border-b border-stone-200 p-1.5 text-[11px] font-bold text-stone-600">{tr("Any Available")}</div>}
                 </div>
                 {calendarDisplaySlots.map(({ label, minutes }) => (
-                  <div key={label} className="grid min-h-[56px] border-b border-stone-100" style={{ gridTemplateColumns: `76px repeat(${calendarColumnTherapists.length + Number(calendarHasUnassignedColumn)}, minmax(180px, 1fr))` }}>
-                    <div className="border-r border-stone-100 p-2 text-right text-[11px] text-stone-400">{formatTime(label)}</div>
+                  <div key={label} className="grid min-h-[40px] border-b border-stone-100" style={{ gridTemplateColumns: `56px repeat(${calendarColumnTherapists.length + Number(calendarHasUnassignedColumn)}, minmax(128px, 220px))` }}>
+                    <div className="border-r border-stone-100 px-1 py-1.5 text-right text-[10px] text-stone-400">{formatTime(label)}</div>
                     {calendarColumnTherapists.map((therapist) => {
                       const therapistEvents = visibleCalendarEvents.filter((event) =>
                         Number(event.localTime?.split(':')[0]) * 60 + Number(event.localTime?.split(':')[1]) === minutes &&
@@ -6743,16 +6869,16 @@ function AdminPortal({
                           return minutes >= eventEnd && minutes < eventEnd + calendarGapMinutes;
                         })());
                       return (
-                        <div key={therapist.id} className="space-y-1 border-r border-stone-100 p-1.5">
+                        <div key={therapist.id} className="space-y-1 border-r border-stone-100 p-1">
                           {therapistEvents.map((event) => (
-                            <button key={event.id} type="button" onClick={() => { setSelectedCalendarEvent(event); setIssuedReceipt(null); setReceiptError(''); setReceiptNotice(''); }} className={`block w-full rounded-lg border-l-4 px-2.5 py-2 text-left text-[11px] ${getTherapistCalendarColor(therapist.name, therapists).event}`}>
-                              <span className={`block font-bold ${getTherapistCalendarColor(therapist.name, therapists).text}`}>{event.summary}</span>
+                            <button key={event.id} type="button" onClick={() => { setSelectedCalendarEvent(event); setIssuedReceipt(null); setReceiptError(''); setReceiptNotice(''); }} className={`block w-full rounded-md border-l-4 px-2 py-1.5 text-left text-[10px] ${getTherapistCalendarColor(therapist.name, therapists).event}`}>
+                              <span className={`block truncate font-bold ${getTherapistCalendarColor(therapist.name, therapists).text}`}>{event.summary}</span>
                               <span className={getTherapistCalendarColor(therapist.name, therapists).text}>{formatTime(event.timeRange || event.localTime)}</span>
                             </button>
                           ))}
-                          {!therapistEvents.length && therapistBlock && <span className="block rounded-md bg-stone-100 px-2 py-1 text-[10px] text-stone-600">{tr("Unavailable")}</span>}
-                          {!therapistEvents.length && !therapistBlock && bufferEvent && <span className="block rounded-md border border-dashed border-amber-300 bg-amber-50 px-2 py-1 text-[10px] text-amber-800">{tr("Buffer · {value0} min", { value0: calendarGapMinutes })}</span>}
-                          {!therapistEvents.length && !therapistBlock && !bufferEvent && <span aria-hidden="true" className="block min-h-8" />}
+                          {!therapistEvents.length && therapistBlock && <span className="block rounded-md bg-stone-100 px-1.5 py-0.5 text-[9px] text-stone-600">{tr("Unavailable")}</span>}
+                          {!therapistEvents.length && !therapistBlock && bufferEvent && <span className="block rounded-md border border-dashed border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[9px] text-amber-800">{tr("Buffer · {value0} min", { value0: calendarGapMinutes })}</span>}
+                          {!therapistEvents.length && !therapistBlock && !bufferEvent && <span aria-hidden="true" className="block min-h-5" />}
                         </div>
                       );
                     })}

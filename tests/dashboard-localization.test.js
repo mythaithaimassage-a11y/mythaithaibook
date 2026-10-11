@@ -105,7 +105,11 @@ test('business profile configures appointment gaps and the calendar offers thera
   assert.match(source, /Therapist gap after appointments \(minutes\)/);
   assert.match(source, /min=\{field\.min\}[\s\S]*max=\{field\.max\}[\s\S]*step=\{field\.step\}/);
   assert.match(source, /calendarViewMode === 'therapists'/);
-  assert.match(source, /gridTemplateColumns: `76px repeat\(\$\{calendarColumnTherapists\.length/);
+  assert.match(source, /gridTemplateColumns: `56px repeat\(\$\{calendarColumnTherapists\.length/);
+  assert.match(source, /minmax\(128px, 220px\)/);
+  assert.match(source, /Next available \(60 min\)/);
+  assert.match(source, /available-therapists&\$\{query\}/);
+  assert.match(source, /No availability in the next 14 days/);
   assert.match(source, /Buffer · \{value0\} min/);
 });
 
