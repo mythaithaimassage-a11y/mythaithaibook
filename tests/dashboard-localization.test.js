@@ -102,6 +102,7 @@ test('appointment settings migration button disappears after BigQuery takes over
 });
 
 test('business profile configures appointment gaps and the calendar offers therapist columns', () => {
+  assert.match(source, /const \[calendarViewMode, setCalendarViewMode\] = useState\('therapists'\)/);
   assert.match(source, /Therapist gap after appointments \(minutes\)/);
   assert.match(source, /min=\{field\.min\}[\s\S]*max=\{field\.max\}[\s\S]*step=\{field\.step\}/);
   assert.match(source, /calendarViewMode === 'therapists'/);

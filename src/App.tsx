@@ -4590,7 +4590,7 @@ function AdminPortal({
   const [calendarUrl, setCalendarUrl] = useState('');
   const [calendarWarnings, setCalendarWarnings] = useState([]);
   const [calendarUnavailability, setCalendarUnavailability] = useState([]);
-  const [calendarViewMode, setCalendarViewMode] = useState('daily');
+  const [calendarViewMode, setCalendarViewMode] = useState('therapists');
   const [calendarNextAvailability, setCalendarNextAvailability] = useState(null);
   const [calendarSearch, setCalendarSearch] = useState('');
   const [calendarFiltersOpen, setCalendarFiltersOpen] = useState(false);
