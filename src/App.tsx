@@ -4269,10 +4269,29 @@ function AdminPortal({
   const [branchSaveError, setBranchSaveError] = useState('');
   const [branchSaveMessage, setBranchSaveMessage] = useState('');
   const [isMigratingBranches, setIsMigratingBranches] = useState(false);
+  const [appointmentConfigSource, setAppointmentConfigSource] = useState('sheets');
+  const [appointmentConfigError, setAppointmentConfigError] = useState('');
+  const [appointmentConfigMessage, setAppointmentConfigMessage] = useState('');
+  const [isMigratingAppointmentConfig, setIsMigratingAppointmentConfig] = useState(false);
 
   useEffect(() => {
     setBranchForm(branches.map((branch) => ({ ...branch })));
   }, [branches]);
+
+  useEffect(() => {
+    if (dashboardUser?.role !== 'owner') return;
+    let cancelled = false;
+    fetch('/api/booking?view=appointment-config-status', { cache: 'no-store' })
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+        if (!cancelled) setAppointmentConfigSource(data.source);
+      })
+      .catch((error) => {
+        if (!cancelled) setAppointmentConfigError(error.message || 'Unable to load appointment configuration status.');
+      });
+    return () => { cancelled = true; };
+  }, [dashboardUser?.role]);
 
   const updateBranchField = (id, field, value) => {
     setBranchForm((prev) => prev.map((branch) => (branch.id === id ? { ...branch, [field]: value } : branch)));
@@ -4330,6 +4349,27 @@ function AdminPortal({
       setBranchSaveError(error.message || 'Unable to import branches into BigQuery.');
     } finally {
       setIsMigratingBranches(false);
+    }
+  };
+
+  const migrateAppointmentConfigToBigQuery = async () => {
+    setIsMigratingAppointmentConfig(true);
+    setAppointmentConfigError('');
+    setAppointmentConfigMessage('');
+    try {
+      const response = await fetch('/api/booking?view=appointment-config-migrate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+      setAppointmentConfigSource(data.source);
+      setAppointmentConfigMessage('Appointment settings imported. BigQuery is now the source of truth for these settings.');
+    } catch (error) {
+      setAppointmentConfigError(error.message || 'Unable to import appointment settings into BigQuery.');
+    } finally {
+      setIsMigratingAppointmentConfig(false);
     }
   };
 
@@ -7020,6 +7060,32 @@ function AdminPortal({
           </div>
           {dashboardUser?.role === 'owner' && branchConfigSource === 'sheets' && (
             <p className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-900">{tr("This one-time import copies the current branch settings from Google Sheets. After import, BigQuery becomes the source of truth and branch edits are saved there.")}</p>
+          )}
+
+          {dashboardUser?.role === 'owner' && (
+            <section className="space-y-2 rounded-xl border border-indigo-200 bg-indigo-50/50 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-bold text-stone-900">{tr("Appointment settings storage")}</h3>
+                  <p className="mt-1 text-xs text-stone-600">{tr("This separate one-time import moves the business profile, services, therapists, therapist work schedules, unavailability blocks, and saved therapist identity mappings. Branch settings are managed above.")}</p>
+                </div>
+                {appointmentConfigSource === 'bigquery'
+                  ? <span className="rounded-full bg-emerald-100 px-3 py-1.5 text-xs font-semibold text-emerald-800">{tr("BigQuery source of truth")}</span>
+                  : <button
+                    type="button"
+                    onClick={migrateAppointmentConfigToBigQuery}
+                    disabled={isMigratingAppointmentConfig}
+                    className="rounded-xl border border-indigo-300 px-3 py-2 text-xs font-bold text-indigo-800 hover:bg-indigo-100 disabled:opacity-50"
+                  >
+                    {isMigratingAppointmentConfig ? tr("Importing…") : tr("One-time import appointment settings")}
+                  </button>}
+              </div>
+              {appointmentConfigSource === 'sheets' && (
+                <p className="text-xs text-indigo-900">{tr("Review the current settings before importing. After import, changes to these settings are saved in BigQuery and booking workflows no longer read these source tables from Google Sheets.")}</p>
+              )}
+              {appointmentConfigError && <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">{tr(appointmentConfigError)}</p>}
+              {appointmentConfigMessage && <p role="status" className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800">{tr(appointmentConfigMessage)}</p>}
+            </section>
           )}
 
           {branchesError && (

@@ -26,6 +26,9 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   let branchRows = [[1, 'Test Branch', 'Address', 'City', '555', 'TRUE', '', 'TRUE', 'TRUE', 'TRUE', 'TRUE']];
   let failBranchesSheetRead = false;
   let branchConfigRows = [];
+  let appointmentConfigRows = [];
+  let failAppointmentConfigSheetReads = false;
+  let appointmentConfigBatchGets = 0;
   let busyEvents = [];
   let blockRows = [['Block ID']];
   let scheduleRows = [
@@ -65,7 +68,30 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
         scheduleRows = [scheduleRows[0], ...rows];
       },
       values: {
+        batchGet: async ({ ranges }) => {
+          appointmentConfigBatchGets += 1;
+          return { data: {
+            valueRanges: ranges.map((range) => ({
+              range,
+              values: ({
+                'BusinessProfile!A1:J2': [
+                  ['businessName', 'legalName', 'tagline', 'email', 'phone', 'website', 'address', 'taxRegistrationNumber', 'photoUrl', 'therapistBufferMinutes'],
+                  ['Test Clinic', '', '', '', '', '', '', '', '', '15'],
+                ],
+                'Services!A2:K': serviceRows,
+                'Therapists!A2:J': therapistRows,
+                'StaffWorkSchedule!A:H': scheduleRows,
+                'Unavailability!A:J': blockRows,
+                'TherapistAliases!A:E': aliasRows,
+              })[range] || [],
+            })),
+          } };
+        },
         get: async ({ range }) => {
+          if (failAppointmentConfigSheetReads &&
+              /^(BusinessProfile!A1:J[12]|BusinessProfile!A2:J2|Services!A2:K|Therapists!A2:J|StaffWorkSchedule!A1:H1|StaffWorkSchedule!A:H|Unavailability!A1:J1|Unavailability!A:J|TherapistAliases!A:E)$/.test(range)) {
+            throw new Error('Synthetic appointment configuration Sheets read after migration');
+          }
           if (range === 'TherapistAliases!A:E') return { data: { values: aliasRows } };
           if (range === 'TherapistAccounts!A:F') return { data: { values: [['ID', 'Email', 'Name'], ['legacy-id', 'legacy@example.com', 'Legacy Staff']] } };
           if (range === 'Branches!A2:L') {
@@ -147,6 +173,29 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   t.mock.method(BigQuery.prototype, 'query', async ({ query, params }) => {
     const dashboardAuthResult = handleDashboardChallengeQuery(query, params, dashboardChallenges);
     if (dashboardAuthResult) return dashboardAuthResult;
+    if (query.includes('appointment_config')) {
+      if (query.startsWith('SELECT config_type, payload')) {
+        return [appointmentConfigRows.filter((row) =>
+          row.config_type === params.config_type || row.config_type === params.migration_key,
+        )];
+      }
+      if (query.includes('MERGE')) {
+        const existing = appointmentConfigRows.find((row) => row.config_type === params.config_type);
+        if (existing) {
+          existing.payload = params.payload;
+        } else {
+          appointmentConfigRows.push({ config_type: params.config_type, payload: params.payload });
+        }
+        return [[]];
+      }
+      if (query.includes('INSERT INTO')) {
+        const entryIndexes = Object.keys(params).map((key) => key.match(/^type_(\d+)$/)?.[1]).filter(Boolean);
+        entryIndexes.forEach((index) => appointmentConfigRows.push({
+          config_type: params[`type_${index}`], payload: params[`payload_${index}`],
+        }));
+        return [[]];
+      }
+    }
     if (query.includes('branch_config')) {
       if (query.startsWith('SELECT id, name, address')) return [branchConfigRows];
       if (query.includes('DELETE FROM')) {
@@ -1092,5 +1141,92 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
     therapistMappings: [{ sourceName: 'Test Therapist', therapistId: 2, therapistName: 'Second Therapist' }],
   });
   assert.equal(override.code, 409, JSON.stringify(override.data));
+
+  cookie = '';
+  assert.equal((await request('appointment-config-status', null, { method: 'GET' })).code, 401);
+  cookie = ownerCookie;
+  assert.equal((await request('appointment-config-status', null, { method: 'GET' })).data.source, 'sheets');
+  assert.equal((await request('appointment-config-migrate', {}, { origin: 'https://untrusted.example' })).code, 403);
+  const appointmentConfigImport = await request('appointment-config-migrate', {});
+  assert.equal(appointmentConfigImport.code, 200, JSON.stringify(appointmentConfigImport.data));
+  assert.equal(appointmentConfigBatchGets, 1, 'The one-time migration reads the source settings in a single Sheets batch request');
+  assert.deepEqual(appointmentConfigImport.data.importedCounts, {
+    businessProfile: 1,
+    services: serviceRows.length,
+    therapists: therapistRows.length,
+    workSchedule: scheduleRows.slice(1).filter((row) => row[0]).length,
+    unavailability: blockRows.length - 1,
+    therapistAliases: aliasRows.length - 1,
+  });
+  assert.equal(appointmentConfigRows.length, 7, 'All appointment datasets, therapist aliases, and the migration marker are saved together');
+  assert.deepEqual(
+    JSON.parse(appointmentConfigRows.find((row) => row.config_type === 'therapist_aliases').payload),
+    [{ sourceName: 'Legacy Staff', targetId: 1, targetName: 'Test Therapist' }],
+  );
+  assert.equal((await request('appointment-config-migrate', {})).code, 409, 'Appointment settings can only be imported once');
+  assert.equal((await request('appointment-config-status', null, { method: 'GET' })).data.source, 'bigquery');
+
+  failAppointmentConfigSheetReads = true;
+  failBranchesSheetRead = true;
+  assert.equal((await request('business-profile', null, { method: 'GET' })).code, 200);
+  assert.equal((await request('services', null, { method: 'GET' })).code, 200);
+  assert.equal((await request('therapists', null, { method: 'GET' })).code, 200);
+  assert.equal((await request('unavailability', null, { method: 'GET' })).code, 200);
+  const migratedSchedule = await request('staff-work-schedule', null, {
+    method: 'GET', query: { month: '2026-11', branchId: '1' },
+  });
+  assert.equal(migratedSchedule.code, 200, JSON.stringify(migratedSchedule.data));
+  const activeTherapistIds = new Set(therapistRows
+    .filter((row) => row[8] !== 'FALSE' && String(row[6] || '').split(',').includes('1'))
+    .map((row) => Number(row[0])));
+  const expectedScheduleCount = scheduleRows.slice(1).filter((row) =>
+    row[0] && row[1].startsWith('2026-11') && Number(row[2]) === 1 && activeTherapistIds.has(Number(row[0])),
+  ).length;
+  assert.equal(migratedSchedule.data.overrides.length, expectedScheduleCount);
+  const rescheduledFromBigQueryConfig = await request('reschedule-booking', {
+    bookingId: editable.booking_id, email: editable.email, date: '2026-11-03', time: '10:00 AM',
+  });
+  assert.equal(rescheduledFromBigQueryConfig.code, 200, JSON.stringify(rescheduledFromBigQueryConfig.data));
+  const reassignedFromBigQueryConfig = await request('reassign-therapist', {
+    bookingId: editable.booking_id, therapistName: 'Second Therapist',
+  });
+  assert.equal(reassignedFromBigQueryConfig.code, 200, JSON.stringify(reassignedFromBigQueryConfig.data));
+  const newBookingFromBigQueryConfig = await request('manual-booking', {
+    ...manual, customerName: 'BigQuery Config Booking', contact: 'bq-booking@example.com',
+    date: '2026-11-10', time: '03:00 PM', therapistId: '1',
+  });
+  assert.equal(newBookingFromBigQueryConfig.code, 200, JSON.stringify(newBookingFromBigQueryConfig.data));
+  const migratedServices = await request('services', null, { method: 'GET' });
+  assert.equal((await request('services', { services: migratedServices.data.services })).code, 200);
+  const migratedTherapists = await request('therapists', null, { method: 'GET' });
+  assert.equal((await request('therapists', { therapists: migratedTherapists.data.therapists })).code, 200);
+  assert.equal((await request('therapists', {
+    therapists: migratedTherapists.data.therapists.map((therapist) =>
+      therapist.id === 1 ? { ...therapist, name: 'Changed target' } : therapist),
+  })).code, 400, 'Imported aliases continue protecting their destination therapist identity');
+  assert.equal((await request('therapists', {
+    therapists: migratedTherapists.data.therapists.map((therapist) =>
+      therapist.id === 8 ? { ...therapist, active: true } : therapist),
+  })).code, 400, 'Imported aliases continue preventing historical names from being reactivated');
+  const migratedAliasPreview = await request('wix-bookings-import', { csv, preview: true });
+  assert.equal(migratedAliasPreview.code, 200, JSON.stringify(migratedAliasPreview.data));
+  assert.equal(migratedAliasPreview.data.sample[0].therapist_name, 'Test Therapist',
+    'Historical imports continue applying aliases from BigQuery after migration');
+  const migratedProfile = await request('business-profile', null, { method: 'GET' });
+  assert.equal((await request('business-profile', { profile: migratedProfile.data.profile })).code, 200);
+  const scheduleUpdate = await request('staff-work-schedule', {
+    date: '2026-11-04', branchId: 1, therapistId: 1,
+    override: { therapistId: 1, date: '2026-11-04', isWorking: true, startTime: '10:00', endTime: '18:00' },
+  });
+  assert.equal(scheduleUpdate.code, 200, JSON.stringify(scheduleUpdate.data));
+  assert.ok(JSON.parse(appointmentConfigRows.find((row) => row.config_type === 'work_schedule').payload)
+    .some((override) => override.date === '2026-11-04'));
+  const unavailable = await request('unavailability', {
+    scope: 'business', branchName: 'Test Branch', date: '2026-11-05',
+    startTime: '10:00', endTime: '11:00', reason: 'Test block',
+  });
+  assert.equal(unavailable.code, 201, JSON.stringify(unavailable.data));
+  const deletedUnavailable = await request('unavailability-delete', { id: unavailable.data.block.id });
+  assert.equal(deletedUnavailable.code, 200, JSON.stringify(deletedUnavailable.data));
   assert.match(override.data.message, /conflicts with a saved/);
 });

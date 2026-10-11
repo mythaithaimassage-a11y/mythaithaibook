@@ -11,7 +11,7 @@ import { createPackageStore, historicalPackageVisit, readPackageUsage, packageRe
 import { createBookingHistoryStore } from '../lib/booking-history.js';
 import { syncWixCalendarBatch } from '../lib/wix-calendar.js';
 import { searchBookingCustomers } from '../lib/customer-search.js';
-import { applySavedTherapistAliases, planTherapistRename, readTherapistAliases, renameTherapistBookingBatch, renameTherapistLabel, saveTherapistAlias } from '../lib/therapist-rename.js';
+import { applySavedTherapistAliases, parseTherapistAliases, planTherapistRename, readTherapistAliases, renameTherapistBookingBatch, renameTherapistLabel, saveTherapistAlias } from '../lib/therapist-rename.js';
 import { sendGmailMessage } from '../lib/gmail.js';
 import { BOOKING_DEPOSIT_AMOUNT, validateBranchPaymentOptions, validateAppointmentTime, validateBusinessHours, appointmentTimeMinutes } from '../lib/booking-options.js';
 import { validatePatientHistory, patientHistoryValues } from '../lib/patient-history.js';
@@ -65,6 +65,9 @@ const OWNER_INITIAL_SETUP_SECRET = process.env.OWNER_INITIAL_SETUP_SECRET || '';
 const DASHBOARD_USERS_TABLE = 'dashboard_users';
 const DASHBOARD_LOGIN_CHALLENGES_TABLE = 'dashboard_login_challenges';
 const BRANCH_CONFIG_TABLE = 'branch_config';
+const APPOINTMENT_CONFIG_TABLE = 'appointment_config';
+const APPOINTMENT_CONFIG_TYPES = ['business_profile', 'services', 'therapists', 'work_schedule', 'unavailability', 'therapist_aliases'];
+const APPOINTMENT_CONFIG_MIGRATION_KEY = 'migration_status';
 const SQUARE_ACCESS_TOKEN = process.env.SQUARE_ACCESS_TOKEN || '';
 const SQUARE_LOCATION_ID = process.env.SQUARE_LOCATION_ID || '';
 const SQUARE_ENVIRONMENT = (process.env.SQUARE_ENVIRONMENT || 'production').toLowerCase() === 'sandbox' ? 'sandbox' : 'production';
@@ -230,6 +233,128 @@ function bookingsTableRef() {
 
 function branchConfigTableRef() {
   return `\`${BIGQUERY_PROJECT_ID}.${BIGQUERY_DATASET_ID}.${BRANCH_CONFIG_TABLE}\``;
+}
+
+function appointmentConfigTableRef() {
+  return `\`${BIGQUERY_PROJECT_ID}.${BIGQUERY_DATASET_ID}.${APPOINTMENT_CONFIG_TABLE}\``;
+}
+
+let ensureAppointmentConfigTablePromise = null;
+async function ensureAppointmentConfigTable(bigquery) {
+  if (!ensureAppointmentConfigTablePromise) {
+    ensureAppointmentConfigTablePromise = (async () => {
+      const dataset = bigquery.dataset(BIGQUERY_DATASET_ID);
+      const [datasetExists] = await dataset.exists();
+      if (!datasetExists) {
+        try {
+          await bigquery.createDataset(BIGQUERY_DATASET_ID, { location: process.env.BIGQUERY_LOCATION || 'US' });
+        } catch (error) {
+          const [existsNow] = await dataset.exists();
+          if (!existsNow) throw error;
+        }
+      }
+      const table = dataset.table(APPOINTMENT_CONFIG_TABLE);
+      const [tableExists] = await table.exists();
+      if (!tableExists) {
+        try {
+          await dataset.createTable(APPOINTMENT_CONFIG_TABLE, {
+            schema: [
+              { name: 'config_type', type: 'STRING', mode: 'REQUIRED' },
+              { name: 'payload', type: 'STRING', mode: 'REQUIRED' },
+              { name: 'updated_at', type: 'TIMESTAMP', mode: 'REQUIRED' },
+            ],
+          });
+        } catch (error) {
+          const [existsNow] = await table.exists();
+          if (!existsNow) throw error;
+        }
+      }
+    })().catch((error) => {
+      ensureAppointmentConfigTablePromise = null;
+      throw error;
+    });
+  }
+  return ensureAppointmentConfigTablePromise;
+}
+
+async function readAppointmentConfig(bigquery, configType) {
+  await ensureAppointmentConfigTable(bigquery);
+  const [rows] = await bigquery.query({
+    query: `SELECT config_type, payload FROM ${appointmentConfigTableRef()} WHERE config_type IN (@config_type, @migration_key)`,
+    params: { config_type: configType, migration_key: APPOINTMENT_CONFIG_MIGRATION_KEY },
+  });
+  const migration = rows.find((row) => row.config_type === APPOINTMENT_CONFIG_MIGRATION_KEY);
+  if (!migration) return { migrated: false, value: null };
+  const config = rows.find((row) => row.config_type === configType);
+  if (!config) throw new Error(`Appointment configuration "${configType}" is missing from BigQuery after migration.`);
+  return { migrated: true, value: JSON.parse(config.payload) };
+}
+
+async function readAppointmentConfigStatus(bigquery) {
+  return (await readAppointmentConfig(bigquery, 'business_profile')).migrated;
+}
+
+async function getAppointmentConfigOrSheets(sheets, configType, readSheetValue) {
+  const { migrated, value } = await readAppointmentConfig(getBigQueryClient(), configType);
+  return migrated ? value : readSheetValue();
+}
+
+async function getTherapistAliases(sheets) {
+  return getAppointmentConfigOrSheets(sheets, 'therapist_aliases', () =>
+    readTherapistAliases(sheets, process.env.GOOGLE_SPREADSHEET_ID));
+}
+
+async function writeAppointmentConfig(bigquery, configType, value) {
+  await ensureAppointmentConfigTable(bigquery);
+  await bigquery.query({
+    query: `MERGE ${appointmentConfigTableRef()} AS target
+      USING (SELECT @config_type AS config_type, @payload AS payload) AS source
+      ON target.config_type = source.config_type
+      WHEN MATCHED THEN UPDATE SET payload = source.payload, updated_at = CURRENT_TIMESTAMP()
+      WHEN NOT MATCHED THEN INSERT (config_type, payload, updated_at) VALUES (source.config_type, source.payload, CURRENT_TIMESTAMP())`,
+    params: { config_type: configType, payload: JSON.stringify(value) },
+  });
+}
+
+async function saveAppointmentConfigOrSheets(sheets, configType, value, saveSheetValue) {
+  const bigquery = getBigQueryClient();
+  const { migrated } = await readAppointmentConfig(bigquery, configType);
+  if (migrated) {
+    await writeAppointmentConfig(bigquery, configType, value);
+    return value;
+  }
+  return saveSheetValue();
+}
+
+async function writeAppointmentConfigMigration(bigquery, values) {
+  await ensureAppointmentConfigTable(bigquery);
+  const entries = [...Object.entries(values), [APPOINTMENT_CONFIG_MIGRATION_KEY, { version: 1, importedAt: new Date().toISOString() }]];
+  const params = {};
+  const rows = entries.map(([configType, value], index) => {
+    params[`type_${index}`] = configType;
+    params[`payload_${index}`] = JSON.stringify(value);
+    return `(@type_${index}, @payload_${index}, CURRENT_TIMESTAMP())`;
+  });
+  await bigquery.query({
+    query: `BEGIN TRANSACTION;
+      ASSERT NOT EXISTS (SELECT 1 FROM ${appointmentConfigTableRef()} WHERE config_type = '${APPOINTMENT_CONFIG_MIGRATION_KEY}') AS 'Appointment configuration has already been imported';
+      INSERT INTO ${appointmentConfigTableRef()} (config_type, payload, updated_at) VALUES ${rows.join(', ')};
+      COMMIT TRANSACTION;`,
+    params,
+  });
+}
+
+async function saveAppointmentTherapistAlias(sheets, plan, ownerEmail) {
+  const bigquery = getBigQueryClient();
+  const { migrated, value } = await readAppointmentConfig(bigquery, 'therapist_aliases');
+  if (!migrated) {
+    return saveTherapistAlias(sheets, process.env.GOOGLE_SPREADSHEET_ID, plan, ownerEmail);
+  }
+  if (plan.existing) return;
+  await writeAppointmentConfig(bigquery, 'therapist_aliases', [
+    ...value,
+    { sourceName: plan.sourceName, targetId: plan.target.id, targetName: plan.target.name },
+  ]);
 }
 
 let ensureBranchConfigTablePromise = null;
@@ -1952,16 +2077,19 @@ async function ensureBusinessProfileSheet(sheets) {
 }
 
 async function getBusinessProfile(sheets) {
-  await ensureBusinessProfileSheet(sheets);
-  const result = await sheets.spreadsheets.values.get({
-    spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-    range: 'BusinessProfile!A1:J2',
+  const profile = await getAppointmentConfigOrSheets(sheets, 'business_profile', async () => {
+    await ensureBusinessProfileSheet(sheets);
+    const result = await sheets.spreadsheets.values.get({
+      spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+      range: 'BusinessProfile!A1:J2',
+    });
+    const row = result.data.values?.[1] || [];
+    return Object.fromEntries(BUSINESS_PROFILE_FIELDS.map((field, index) => [
+      field,
+      row[index] === undefined ? DEFAULT_BUSINESS_PROFILE[field] : row[index],
+    ]));
   });
-  const row = result.data.values?.[1] || [];
-  return Object.fromEntries(BUSINESS_PROFILE_FIELDS.map((field, index) => [
-    field,
-    row[index] === undefined ? DEFAULT_BUSINESS_PROFILE[field] : row[index],
-  ]));
+  return profile;
 }
 
 function therapistBufferMinutes(profile) {
@@ -2018,25 +2146,35 @@ async function ensureUnavailabilitySheet(sheets) {
 }
 
 async function getUnavailabilityBlocks(sheets) {
-  await ensureUnavailabilitySheet(sheets);
-  const result = await sheets.spreadsheets.values.get({
-    spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-    range: 'Unavailability!A:J',
+  return getAppointmentConfigOrSheets(sheets, 'unavailability', async () => {
+    await ensureUnavailabilitySheet(sheets);
+    const result = await sheets.spreadsheets.values.get({
+      spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+      range: 'Unavailability!A:J',
+    });
+    const rows = result.data.values || [];
+    const startIndex = rows[0]?.[0] === 'Block ID' ? 1 : 0;
+    return rows.slice(startIndex).filter((row) => row[0]).map((row) => ({
+      id: row[0] || '',
+      scope: row[1] || 'business',
+      branchName: row[2] || '',
+      therapistName: row[3] || '',
+      date: row[4] || '',
+      startTime: row[5] || '',
+      endTime: row[6] || '',
+      reason: row[7] || '',
+      createdBy: row[8] || '',
+      createdAt: row[9] || '',
+    }));
   });
-  const rows = result.data.values || [];
-  const startIndex = rows[0]?.[0] === 'Block ID' ? 1 : 0;
-  return rows.slice(startIndex).filter((row) => row[0]).map((row) => ({
-    id: row[0] || '',
-    scope: row[1] || 'business',
-    branchName: row[2] || '',
-    therapistName: row[3] || '',
-    date: row[4] || '',
-    startTime: row[5] || '',
-    endTime: row[6] || '',
-    reason: row[7] || '',
-    createdBy: row[8] || '',
-    createdAt: row[9] || '',
-  }));
+}
+
+async function saveUnavailabilityBlocksIfMigrated(blocks) {
+  const bigquery = getBigQueryClient();
+  const { migrated } = await readAppointmentConfig(bigquery, 'unavailability');
+  if (!migrated) return false;
+  await writeAppointmentConfig(bigquery, 'unavailability', blocks);
+  return true;
 }
 
 // True when a block's [date startTime, date endTime) window overlaps the
@@ -2079,25 +2217,27 @@ async function ensureStaffWorkScheduleSheet(sheets) {
 }
 
 async function getStaffWorkScheduleRows(sheets) {
-  await ensureStaffWorkScheduleSheet(sheets);
-  const result = await sheets.spreadsheets.values.get({
-    spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-    range: 'StaffWorkSchedule!A:H',
-  });
-  const rows = result.data.values || [];
-  const startIndex = rows[0]?.[0] === 'Therapist ID' ? 1 : 0;
-  return rows.slice(startIndex).filter((row) => row[0]).map((row) => {
-    const therapistId = Number(row[0]);
-    const branchId = Number(row[2]);
-    const date = String(row[1] || '');
-    const isWorking = String(row[3] || '').toUpperCase() === 'TRUE';
-    const startTime = String(row[4] || '');
-    const endTime = String(row[5] || '');
-    if (!Number.isInteger(therapistId) || therapistId <= 0 || !Number.isInteger(branchId) || branchId <= 0 || !validDate(date) ||
-        (isWorking && (minutesOfDay(startTime) === null || minutesOfDay(endTime) === null || minutesOfDay(startTime) >= minutesOfDay(endTime)))) {
-      throw new Error('A saved therapist work schedule entry is invalid. Correct the StaffWorkSchedule sheet before continuing.');
-    }
-    return { therapistId, date, branchId, isWorking, startTime, endTime, updatedBy: String(row[6] || ''), updatedAt: String(row[7] || '') };
+  return getAppointmentConfigOrSheets(sheets, 'work_schedule', async () => {
+    await ensureStaffWorkScheduleSheet(sheets);
+    const result = await sheets.spreadsheets.values.get({
+      spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+      range: 'StaffWorkSchedule!A:H',
+    });
+    const rows = result.data.values || [];
+    const startIndex = rows[0]?.[0] === 'Therapist ID' ? 1 : 0;
+    return rows.slice(startIndex).filter((row) => row[0]).map((row) => {
+      const therapistId = Number(row[0]);
+      const branchId = Number(row[2]);
+      const date = String(row[1] || '');
+      const isWorking = String(row[3] || '').toUpperCase() === 'TRUE';
+      const startTime = String(row[4] || '');
+      const endTime = String(row[5] || '');
+      if (!Number.isInteger(therapistId) || therapistId <= 0 || !Number.isInteger(branchId) || branchId <= 0 || !validDate(date) ||
+          (isWorking && (minutesOfDay(startTime) === null || minutesOfDay(endTime) === null || minutesOfDay(startTime) >= minutesOfDay(endTime)))) {
+        throw new Error('A saved therapist work schedule entry is invalid. Correct the StaffWorkSchedule sheet before continuing.');
+      }
+      return { therapistId, date, branchId, isWorking, startTime, endTime, updatedBy: String(row[6] || ''), updatedAt: String(row[7] || '') };
+    });
   });
 }
 
@@ -2119,6 +2259,12 @@ function workScheduleRowValues(entry) {
 }
 
 async function writeStaffWorkScheduleRows(sheets, currentRows, nextRows) {
+  const bigquery = getBigQueryClient();
+  const { migrated } = await readAppointmentConfig(bigquery, 'work_schedule');
+  if (migrated) {
+    await writeAppointmentConfig(bigquery, 'work_schedule', nextRows);
+    return;
+  }
   const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
   const scheduleSpreadsheet = await sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets.properties' });
   const scheduleSheetId = (scheduleSpreadsheet.data.sheets || [])
@@ -2345,48 +2491,52 @@ function validateServices(input) {
 }
 
 async function getServices(sheets) {
-  await ensureServicesSheet(sheets);
-  const result = await sheets.spreadsheets.values.get({
-    spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-    range: 'Services!A2:K',
+  return getAppointmentConfigOrSheets(sheets, 'services', async () => {
+    await ensureServicesSheet(sheets);
+    const result = await sheets.spreadsheets.values.get({
+      spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+      range: 'Services!A2:K',
+    });
+    const rows = result.data.values || [];
+    if (rows.length === 0) return DEFAULT_SERVICES;
+    return rows
+      .filter((row) => row[0] !== undefined && row[0] !== '')
+      .map((row) => ({
+        id: Number(row[0]) || row[0],
+        name: row[1] || '',
+        category: row[2] || '',
+        duration: Number(row[3]) || 0,
+        price: Number(row[4]) || 0,
+        deposit: Number(row[5]) || 0,
+        isRmt: String(row[6] || 'FALSE').toUpperCase() === 'TRUE',
+        taxRate: Number(row[7]) || 0,
+        description: row[8] || '',
+        active: String(row[9] || 'TRUE').toUpperCase() !== 'FALSE',
+      }));
   });
-  const rows = result.data.values || [];
-  if (rows.length === 0) return DEFAULT_SERVICES;
-  return rows
-    .filter((row) => row[0] !== undefined && row[0] !== '')
-    .map((row) => ({
-      id: Number(row[0]) || row[0],
-      name: row[1] || '',
-      category: row[2] || '',
-      duration: Number(row[3]) || 0,
-      price: Number(row[4]) || 0,
-      deposit: Number(row[5]) || 0,
-      isRmt: String(row[6] || 'FALSE').toUpperCase() === 'TRUE',
-      taxRate: Number(row[7]) || 0,
-      description: row[8] || '',
-      active: String(row[9] || 'TRUE').toUpperCase() !== 'FALSE',
-    }));
 }
 
 async function saveServices(sheets, services) {
   const validated = validateServices(services);
-  await ensureServicesSheet(sheets);
-  const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
-  const rows = validated.map((service) => [
-    service.id, service.name, service.category, service.duration, service.price, service.deposit,
-    service.isRmt ? 'TRUE' : 'FALSE', service.taxRate, service.description, service.active ? 'TRUE' : 'FALSE', new Date().toISOString(),
-  ]);
-  await sheets.spreadsheets.values.clear({
-    spreadsheetId,
-    range: 'Services!A2:K',
+  return saveAppointmentConfigOrSheets(sheets, 'services', validated, async () => {
+    await ensureServicesSheet(sheets);
+    const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
+    const rows = validated.map((service) => [
+      service.id, service.name, service.category, service.duration, service.price, service.deposit,
+      service.isRmt ? 'TRUE' : 'FALSE', service.taxRate, service.description, service.active ? 'TRUE' : 'FALSE', new Date().toISOString(),
+    ]);
+    await sheets.spreadsheets.values.clear({
+      spreadsheetId,
+      range: 'Services!A2:K',
+    });
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `Services!A2:K${rows.length + 1}`,
+      valueInputOption: 'RAW',
+      requestBody: { values: rows },
+    });
+    return validated;
   });
-  await sheets.spreadsheets.values.update({
-    spreadsheetId,
-    range: `Services!A2:K${rows.length + 1}`,
-    valueInputOption: 'RAW',
-    requestBody: { values: rows },
-  });
-  return validated;
 }
 
 async function ensureTherapistsSheet(sheets) {
@@ -2473,35 +2623,37 @@ function validateTherapists(input) {
 }
 
 async function getTherapists(sheets) {
-  await ensureTherapistsSheet(sheets);
-  const result = await sheets.spreadsheets.values.get({
-    spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-    range: 'Therapists!A2:J',
-  });
-  const rows = result.data.values || [];
-  if (rows.length === 0) return DEFAULT_THERAPISTS;
-  return rows
-    .filter((row) => row[0] !== undefined && row[0] !== '')
-    .map((row) => {
-      let schedule = {};
-      try { schedule = JSON.parse(row[7] || '{}') || {}; } catch { schedule = {}; }
-      return {
-        id: Number(row[0]) || row[0],
-        name: row[1] || '',
-        bio: row[2] || '',
-        rating: Number(row[3]) || 4.8,
-        thaiCertified: String(row[4] || 'FALSE').toUpperCase() === 'TRUE',
-        rmtCertified: String(row[5] || 'FALSE').toUpperCase() === 'TRUE',
-        branches: String(row[6] || '').split(',').map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0),
-        schedule,
-        active: String(row[8] || 'TRUE').toUpperCase() !== 'FALSE',
-      };
+  return getAppointmentConfigOrSheets(sheets, 'therapists', async () => {
+    await ensureTherapistsSheet(sheets);
+    const result = await sheets.spreadsheets.values.get({
+      spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+      range: 'Therapists!A2:J',
     });
+    const rows = result.data.values || [];
+    if (rows.length === 0) return DEFAULT_THERAPISTS;
+    return rows
+      .filter((row) => row[0] !== undefined && row[0] !== '')
+      .map((row) => {
+        let schedule = {};
+        try { schedule = JSON.parse(row[7] || '{}') || {}; } catch { schedule = {}; }
+        return {
+          id: Number(row[0]) || row[0],
+          name: row[1] || '',
+          bio: row[2] || '',
+          rating: Number(row[3]) || 4.8,
+          thaiCertified: String(row[4] || 'FALSE').toUpperCase() === 'TRUE',
+          rmtCertified: String(row[5] || 'FALSE').toUpperCase() === 'TRUE',
+          branches: String(row[6] || '').split(',').map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0),
+          schedule,
+          active: String(row[8] || 'TRUE').toUpperCase() !== 'FALSE',
+        };
+      });
+  });
 }
 
 async function saveTherapists(sheets, therapists) {
   const validated = validateTherapists(therapists);
-  const aliases = await readTherapistAliases(sheets, process.env.GOOGLE_SPREADSHEET_ID);
+  const aliases = await getTherapistAliases(sheets);
   for (const alias of aliases) {
     const destination = validated.find((therapist) => String(therapist.id) === String(alias.targetId));
     if (!destination || destination.name !== alias.targetName) {
@@ -2511,25 +2663,129 @@ async function saveTherapists(sheets, therapists) {
       throw new Error('A merged historical therapist name cannot be reactivated. Use the existing destination therapist.');
     }
   }
-  await ensureTherapistsSheet(sheets);
+  return saveAppointmentConfigOrSheets(sheets, 'therapists', validated, async () => {
+    await ensureTherapistsSheet(sheets);
+    const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
+    const rows = validated.map((therapist) => [
+      therapist.id, therapist.name, therapist.bio, therapist.rating,
+      therapist.thaiCertified ? 'TRUE' : 'FALSE', therapist.rmtCertified ? 'TRUE' : 'FALSE',
+      therapist.branches.join(','), JSON.stringify(therapist.schedule || {}),
+      therapist.active ? 'TRUE' : 'FALSE', new Date().toISOString(),
+    ]);
+    await sheets.spreadsheets.values.clear({
+      spreadsheetId,
+      range: 'Therapists!A2:J',
+    });
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: `Therapists!A2:J${rows.length + 1}`,
+      valueInputOption: 'RAW',
+      requestBody: { values: rows },
+    });
+    return validated;
+  });
+}
+
+async function readAppointmentConfigFromSheets(sheets) {
   const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
-  const rows = validated.map((therapist) => [
-    therapist.id, therapist.name, therapist.bio, therapist.rating,
-    therapist.thaiCertified ? 'TRUE' : 'FALSE', therapist.rmtCertified ? 'TRUE' : 'FALSE',
-    therapist.branches.join(','), JSON.stringify(therapist.schedule || {}),
-    therapist.active ? 'TRUE' : 'FALSE', new Date().toISOString(),
-  ]);
-  await sheets.spreadsheets.values.clear({
+  const metadata = await sheets.spreadsheets.get({
     spreadsheetId,
-    range: 'Therapists!A2:J',
+    fields: 'sheets.properties',
   });
-  await sheets.spreadsheets.values.update({
+  const hasTherapistAliases = (metadata.data.sheets || [])
+    .some((sheet) => sheet.properties?.title === 'TherapistAliases');
+  const ranges = [
+    'BusinessProfile!A1:J2',
+    'Services!A2:K',
+    'Therapists!A2:J',
+    'StaffWorkSchedule!A:H',
+    'Unavailability!A:J',
+    ...(hasTherapistAliases ? ['TherapistAliases!A:E'] : []),
+  ];
+  const result = await sheets.spreadsheets.values.batchGet({
     spreadsheetId,
-    range: `Therapists!A2:J${rows.length + 1}`,
-    valueInputOption: 'RAW',
-    requestBody: { values: rows },
+    ranges,
+    majorDimension: 'ROWS',
   });
-  return validated;
+  const valueRanges = result.data.valueRanges || [];
+  if (valueRanges.length !== ranges.length) {
+    throw new Error('Google Sheets returned an incomplete appointment settings import. No settings were imported.');
+  }
+  const [profileRows, serviceRows, therapistRows, scheduleRows, unavailabilityRows, aliasRows = []] =
+    valueRanges.map((valueRange) => valueRange.values || []);
+  const profileValues = Object.fromEntries((profileRows[0] || []).map((field, index) => [
+    field, profileRows[1]?.[index],
+  ]));
+  const businessProfile = Object.fromEntries(BUSINESS_PROFILE_FIELDS.map((field) => [
+    field, profileValues[field] === undefined ? DEFAULT_BUSINESS_PROFILE[field] : profileValues[field],
+  ]));
+  const services = serviceRows.length
+    ? serviceRows.filter((row) => row[0] !== undefined && row[0] !== '').map((row) => ({
+      id: Number(row[0]) || row[0],
+      name: row[1] || '',
+      category: row[2] || '',
+      duration: Number(row[3]) || 0,
+      price: Number(row[4]) || 0,
+      deposit: Number(row[5]) || 0,
+      isRmt: String(row[6] || 'FALSE').toUpperCase() === 'TRUE',
+      taxRate: Number(row[7]) || 0,
+      description: row[8] || '',
+      active: String(row[9] || 'TRUE').toUpperCase() !== 'FALSE',
+    }))
+    : DEFAULT_SERVICES;
+  const therapists = therapistRows.length
+    ? therapistRows.filter((row) => row[0] !== undefined && row[0] !== '').map((row) => {
+      let schedule = {};
+      try { schedule = JSON.parse(row[7] || '{}') || {}; } catch { schedule = {}; }
+      return {
+        id: Number(row[0]) || row[0],
+        name: row[1] || '',
+        bio: row[2] || '',
+        rating: Number(row[3]) || 4.8,
+        thaiCertified: String(row[4] || 'FALSE').toUpperCase() === 'TRUE',
+        rmtCertified: String(row[5] || 'FALSE').toUpperCase() === 'TRUE',
+        branches: String(row[6] || '').split(',').map(Number).filter((value) => Number.isFinite(value) && value > 0),
+        schedule,
+        active: String(row[8] || 'TRUE').toUpperCase() !== 'FALSE',
+      };
+    })
+    : DEFAULT_THERAPISTS;
+  const scheduleStartIndex = scheduleRows[0]?.[0] === 'Therapist ID' ? 1 : 0;
+  const workSchedule = scheduleRows.slice(scheduleStartIndex).filter((row) => row[0]).map((row) => {
+    const therapistId = Number(row[0]);
+    const branchId = Number(row[2]);
+    const date = String(row[1] || '');
+    const isWorking = String(row[3] || '').toUpperCase() === 'TRUE';
+    const startTime = String(row[4] || '');
+    const endTime = String(row[5] || '');
+    if (!Number.isInteger(therapistId) || therapistId <= 0 || !Number.isInteger(branchId) || branchId <= 0 || !validDate(date) ||
+        (isWorking && (minutesOfDay(startTime) === null || minutesOfDay(endTime) === null || minutesOfDay(startTime) >= minutesOfDay(endTime)))) {
+      throw new Error('A saved therapist work schedule entry is invalid. Correct the StaffWorkSchedule sheet before continuing.');
+    }
+    return { therapistId, date, branchId, isWorking, startTime, endTime, updatedBy: String(row[6] || ''), updatedAt: String(row[7] || '') };
+  });
+  const unavailabilityStartIndex = unavailabilityRows[0]?.[0] === 'Block ID' ? 1 : 0;
+  const unavailability = unavailabilityRows.slice(unavailabilityStartIndex).filter((row) => row[0]).map((row) => ({
+    id: row[0] || '',
+    scope: row[1] || 'business',
+    branchName: row[2] || '',
+    therapistName: row[3] || '',
+    date: row[4] || '',
+    startTime: row[5] || '',
+    endTime: row[6] || '',
+    reason: row[7] || '',
+    createdBy: row[8] || '',
+    createdAt: row[9] || '',
+  }));
+  const therapistAliases = hasTherapistAliases ? parseTherapistAliases(aliasRows) : [];
+  return {
+    business_profile: validateBusinessProfile(businessProfile),
+    services: validateServices(services),
+    therapists: validateTherapists(therapists),
+    work_schedule: workSchedule,
+    unavailability,
+    therapist_aliases: therapistAliases,
+  };
 }
 
 async function deleteSheetRows(sheets, title, rowNumbers, spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID) {
@@ -4701,14 +4957,14 @@ export default async function handler(req, res) {
     const packageViews = ['packages', 'package-register', 'package-redeem', 'package-customer-search'];
     const historyViews = ['booking-history-preview', 'clear-booking-history'];
     const wixCalendarViews = ['wix-calendar-sync'];
-    const validGetViews = ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'business-name', 'square-config', 'google-reviews', 'branches', 'services', 'therapists', 'staff-work-schedule', 'available-therapists', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal', 'company-join', 'find-booking', 'availability', 'unavailability', 'campaign-log', 'campaign-audience-options', 'review-request-audience', 'therapist-accounts', 'wix-contacts', 'dashboard-users'];
+    const validGetViews = ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'business-name', 'square-config', 'google-reviews', 'branches', 'services', 'therapists', 'staff-work-schedule', 'available-therapists', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal', 'company-join', 'find-booking', 'availability', 'unavailability', 'appointment-config-status', 'campaign-log', 'campaign-audience-options', 'review-request-audience', 'therapist-accounts', 'wix-contacts', 'dashboard-users'];
     if (req.method === 'GET' && !validGetViews.includes(view) && !['therapist-name-merge', 'customer-search', 'wix-contacts-import', 'wix-bookings-import', ...packageViews, ...historyViews, ...wixCalendarViews].includes(view)) {
       return res.status(404).json({ message: 'Unknown booking view' });
     }
     const ownerOnlyRequest =
       ['therapist-name-merge', 'wix-contacts', 'wix-contacts-import', 'wix-bookings-import', ...packageViews, ...historyViews, ...wixCalendarViews].includes(view) ||
-      (req.method === 'GET' && ['patient-history', 'appointment-notes', 'business-profile', 'google-ads-report', 'loyalty-dashboard', 'google-reviews', 'unavailability', 'campaign-log', 'campaign-audience-options', 'review-request-audience', 'therapist-accounts', 'dashboard-users'].includes(view)) ||
-      ['business-profile', 'dashboard-user', 'dashboard-user-status', 'therapist-account-status', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-clear-ledger', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-link', 'unavailability-delete', 'review-request-send', 'branches-migrate'].includes(view) ||
+      (req.method === 'GET' && ['patient-history', 'appointment-notes', 'business-profile', 'appointment-config-status', 'google-ads-report', 'loyalty-dashboard', 'google-reviews', 'unavailability', 'campaign-log', 'campaign-audience-options', 'review-request-audience', 'therapist-accounts', 'dashboard-users'].includes(view)) ||
+      ['business-profile', 'appointment-config-migrate', 'dashboard-user', 'dashboard-user-status', 'therapist-account-status', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-clear-ledger', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-link', 'unavailability-delete', 'review-request-send', 'branches-migrate'].includes(view) ||
       (req.method === 'POST' && ['branches', 'services', 'therapists', 'unavailability'].includes(view));
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
     const dashboardSession = await getOwnerSession(req);
@@ -4865,7 +5121,7 @@ export default async function handler(req, res) {
         scopes: ['https://www.googleapis.com/auth/spreadsheets'],
       });
       const aliasSheets = google.sheets({ version: 'v4', auth: aliasAuth });
-      const savedAliases = await readTherapistAliases(aliasSheets, process.env.GOOGLE_SPREADSHEET_ID);
+      const savedAliases = await getTherapistAliases(aliasSheets);
       if (savedAliases.length) prepared = applySavedTherapistAliases(prepared, savedAliases, await getTherapists(aliasSheets));
       const savedTherapistNames = prepared.bookings.map((booking) => booking.therapist_name);
       if (req.body?.preview !== true && req.body?.confirmPaid !== true) {
@@ -4944,7 +5200,7 @@ export default async function handler(req, res) {
       const imported = await store.importContacts(prepared.contacts);
       return res.status(200).json({ ...prepared.summary, imported, existing: prepared.contacts.length - imported });
     }
-    if (['business-profile', 'branches', 'services', 'therapists', 'therapist-account-status', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-clear-ledger', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-signup', 'company-portal-bulk-signup', 'company-join-signup', 'company-portal-link', 'square-create-checkout', 'cancel-booking', 'reschedule-booking', 'unavailability', 'unavailability-delete', 'review-request-send', 'reassign-therapist'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
+    if (['business-profile', 'appointment-config-migrate', 'branches', 'services', 'therapists', 'therapist-account-status', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-clear-ledger', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-signup', 'company-portal-bulk-signup', 'company-join-signup', 'company-portal-link', 'square-create-checkout', 'cancel-booking', 'reschedule-booking', 'unavailability', 'unavailability-delete', 'review-request-send', 'reassign-therapist'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
       return res.status(403).json({ message: 'Profile update origin is not allowed' });
     }
 
@@ -4967,7 +5223,7 @@ export default async function handler(req, res) {
       const bigquery = getBigQueryClient();
       const [bookingResult, therapists, mappings] = await Promise.all([
         bqFetchBookingRows(bigquery), getTherapists(sheets),
-        readTherapistAliases(sheets, process.env.GOOGLE_SPREADSHEET_ID),
+        getTherapistAliases(sheets),
       ]);
       const rows = (bookingResult.data.values || []).filter((row) => row[0] && row[0] !== 'Booking ID');
       if (req.method === 'GET') {
@@ -4991,7 +5247,7 @@ export default async function handler(req, res) {
         });
       }
       if (req.body?.confirm !== true) return res.status(400).json({ message: 'Preview and confirm the historical therapist merge before applying it.' });
-      await saveTherapistAlias(sheets, process.env.GOOGLE_SPREADSHEET_ID, plan, dashboardSession.email);
+      await saveAppointmentTherapistAlias(sheets, plan, dashboardSession.email);
       const result = await renameTherapistBookingBatch(plan, {
         calendar: calendarApi, primaryCalendarId: PRIMARY_CALENDAR_ID,
         updateBooking: (row, fields) => bqUpdateBookingFields(bigquery, row[0], fields, null, row),
@@ -5026,6 +5282,26 @@ export default async function handler(req, res) {
       const nextCursor = page.data.nextPageToken ? { index, pageToken: page.data.nextPageToken }
         : index + 1 < calendarIds.length ? { index: index + 1 } : null;
       if (nextCursor) return res.status(200).json({ ...result, calendarUpdated, calendarCursor: nextCursor, done: false });
+      const migratedAppointmentConfig = await readAppointmentConfigStatus(getBigQueryClient());
+      if (migratedAppointmentConfig) {
+        const [blocks, therapists] = await Promise.all([getUnavailabilityBlocks(sheets), getTherapists(sheets)]);
+        const nextBlocks = blocks.map((block) => block.scope === 'therapist' &&
+          block.therapistName.trim().toLowerCase() === plan.sourceName.toLowerCase()
+          ? { ...block, therapistName: plan.target.name } : block);
+        const nextTherapists = therapists.map((therapist) =>
+          therapist.name.trim().toLowerCase() === plan.sourceName.toLowerCase() &&
+          String(therapist.id) !== String(plan.target.id)
+            ? { ...therapist, active: false } : therapist,
+        );
+        if (nextBlocks.some((block, index) => block.therapistName !== blocks[index].therapistName)) {
+          await writeAppointmentConfig(getBigQueryClient(), 'unavailability', nextBlocks);
+        }
+        const inactiveCount = therapists.filter((therapist, index) =>
+          therapist.active !== nextTherapists[index].active,
+        ).length;
+        if (inactiveCount) await saveTherapists(sheets, nextTherapists);
+        return res.status(200).json({ ...result, calendarUpdated, staffRecords: inactiveCount, done: true });
+      }
       const metadata = await sheets.spreadsheets.get({ spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, fields: 'sheets.properties' });
       const titles = new Set((metadata.data.sheets || []).map((item) => item.properties?.title));
       const updates = [];
@@ -5283,6 +5559,32 @@ export default async function handler(req, res) {
         !branchIds || branchIds.has(String(branch.id)),
       );
       return res.status(200).json({ branches, source });
+    }
+
+    if (req.method === 'GET' && view === 'appointment-config-status') {
+      res.setHeader('Cache-Control', 'no-store');
+      const migrated = await readAppointmentConfigStatus(getBigQueryClient());
+      return res.status(200).json({ source: migrated ? 'bigquery' : 'sheets' });
+    }
+
+    if (req.method === 'POST' && view === 'appointment-config-migrate') {
+      const bigquery = getBigQueryClient();
+      if (await readAppointmentConfigStatus(bigquery)) {
+        return res.status(409).json({ message: 'Appointment configuration has already been imported into BigQuery.' });
+      }
+      const values = await readAppointmentConfigFromSheets(sheets);
+      await writeAppointmentConfigMigration(bigquery, values);
+      return res.status(200).json({
+        source: 'bigquery',
+        importedCounts: {
+          businessProfile: 1,
+          services: values.services.length,
+          therapists: values.therapists.length,
+          workSchedule: values.work_schedule.length,
+          unavailability: values.unavailability.length,
+          therapistAliases: values.therapist_aliases.length,
+        },
+      });
     }
 
     if (req.method === 'POST' && view === 'branches-migrate') {
@@ -5635,7 +5937,6 @@ export default async function handler(req, res) {
       if (scope === 'therapist' && !therapistName) {
         return res.status(400).json({ message: 'Choose which therapist this block applies to' });
       }
-      await ensureUnavailabilitySheet(sheets);
       const block = {
         id: crypto.randomUUID(),
         scope,
@@ -5648,27 +5949,38 @@ export default async function handler(req, res) {
         createdBy: 'owner',
         createdAt: new Date().toISOString(),
       };
-      await sheets.spreadsheets.values.append({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'Unavailability!A:J',
-        valueInputOption: 'RAW',
-        requestBody: { values: [[
-          block.id, block.scope, block.branchName, block.therapistName, block.date, block.startTime, block.endTime, block.reason, block.createdBy, block.createdAt,
-        ]] },
-      });
+      const blocks = await getUnavailabilityBlocks(sheets);
+      if (!await saveUnavailabilityBlocksIfMigrated([...blocks, block])) {
+        await ensureUnavailabilitySheet(sheets);
+        await sheets.spreadsheets.values.append({
+          spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+          range: 'Unavailability!A:J',
+          valueInputOption: 'RAW',
+          requestBody: { values: [[
+            block.id, block.scope, block.branchName, block.therapistName, block.date, block.startTime, block.endTime, block.reason, block.createdBy, block.createdAt,
+          ]] },
+        });
+      }
       return res.status(201).json({ block });
     }
 
     if (req.method === 'POST' && view === 'unavailability-delete') {
       const id = String(req.body?.id || '').trim();
       if (!id) return res.status(400).json({ message: 'A block ID is required' });
-      const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
-      const result = await sheets.spreadsheets.values.get({ spreadsheetId, range: 'Unavailability!A:J' });
-      const rows = result.data.values || [];
-      const startIndex = rows[0]?.[0] === 'Block ID' ? 1 : 0;
-      const rowIndex = rows.findIndex((row, index) => index >= startIndex && row[0] === id);
-      if (rowIndex < 0) return res.status(404).json({ message: 'Block was not found' });
-      await deleteSheetRows(sheets, 'Unavailability', [rowIndex + 1]);
+      const blocks = await getUnavailabilityBlocks(sheets);
+      const blockIndex = blocks.findIndex((block) => block.id === id);
+      if (blockIndex < 0) return res.status(404).json({ message: 'Block was not found' });
+      const nextBlocks = blocks.filter((block) => block.id !== id);
+      if (!await saveUnavailabilityBlocksIfMigrated(nextBlocks)) {
+        const result = await sheets.spreadsheets.values.get({
+          spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID, range: 'Unavailability!A:J',
+        });
+        const rows = result.data.values || [];
+        const startIndex = rows[0]?.[0] === 'Block ID' ? 1 : 0;
+        const rowIndex = rows.findIndex((row, index) => index >= startIndex && row[0] === id);
+        if (rowIndex < 0) return res.status(404).json({ message: 'Block was not found' });
+        await deleteSheetRows(sheets, 'Unavailability', [rowIndex + 1]);
+      }
       return res.status(200).json({ deleted: true, id });
     }
 
@@ -5697,7 +6009,6 @@ export default async function handler(req, res) {
         .find((item) => item.id === session.therapistId && item.status === 'approved');
       const account = sheetAccount || getTherapistAccounts().find((item) => item.id === session.therapistId);
       if (!account) return res.status(401).json({ message: 'Therapist account is not available' });
-      await ensureUnavailabilitySheet(sheets);
       const block = {
         id: crypto.randomUUID(),
         scope: 'therapist',
@@ -5710,14 +6021,18 @@ export default async function handler(req, res) {
         createdBy: account.name,
         createdAt: new Date().toISOString(),
       };
-      await sheets.spreadsheets.values.append({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'Unavailability!A:J',
-        valueInputOption: 'RAW',
-        requestBody: { values: [[
-          block.id, block.scope, block.branchName, block.therapistName, block.date, block.startTime, block.endTime, block.reason, block.createdBy, block.createdAt,
-        ]] },
-      });
+      const blocks = await getUnavailabilityBlocks(sheets);
+      if (!await saveUnavailabilityBlocksIfMigrated([...blocks, block])) {
+        await ensureUnavailabilitySheet(sheets);
+        await sheets.spreadsheets.values.append({
+          spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+          range: 'Unavailability!A:J',
+          valueInputOption: 'RAW',
+          requestBody: { values: [[
+            block.id, block.scope, block.branchName, block.therapistName, block.date, block.startTime, block.endTime, block.reason, block.createdBy, block.createdAt,
+          ]] },
+        });
+      }
       return res.status(201).json({ block });
     }
 
@@ -5738,13 +6053,21 @@ export default async function handler(req, res) {
         .find((item) => item.id === session.therapistId && item.status === 'approved');
       const account = sheetAccount || getTherapistAccounts().find((item) => item.id === session.therapistId);
       if (!account) return res.status(401).json({ message: 'Therapist account is not available' });
-      const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
-      const result = await sheets.spreadsheets.values.get({ spreadsheetId, range: 'Unavailability!A:J' });
-      const rows = result.data.values || [];
-      const startIndex = rows[0]?.[0] === 'Block ID' ? 1 : 0;
-      const rowIndex = rows.findIndex((row, index) => index >= startIndex && row[0] === id && row[3] === account.name);
-      if (rowIndex < 0) return res.status(404).json({ message: 'Block was not found for your account' });
-      await deleteSheetRows(sheets, 'Unavailability', [rowIndex + 1]);
+      const blocks = await getUnavailabilityBlocks(sheets);
+      const block = blocks.find((item) => item.id === id && item.therapistName === account.name);
+      if (!block) return res.status(404).json({ message: 'Block was not found for your account' });
+      const nextBlocks = blocks.filter((item) => item.id !== id);
+      if (!await saveUnavailabilityBlocksIfMigrated(nextBlocks)) {
+        const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
+        const result = await sheets.spreadsheets.values.get({ spreadsheetId, range: 'Unavailability!A:J' });
+        const rows = result.data.values || [];
+        const startIndex = rows[0]?.[0] === 'Block ID' ? 1 : 0;
+        const rowIndex = rows.findIndex((row, index) =>
+          index >= startIndex && row[0] === id && row[3] === account.name,
+        );
+        if (rowIndex < 0) return res.status(404).json({ message: 'Block was not found for your account' });
+        await deleteSheetRows(sheets, 'Unavailability', [rowIndex + 1]);
+      }
       return res.status(200).json({ deleted: true, id });
     }
 
@@ -7529,16 +7852,7 @@ export default async function handler(req, res) {
 
     if (req.method === 'GET') {
       if (req.query?.view === 'business-profile') {
-        await ensureBusinessProfileSheet(sheets);
-        const result = await sheets.spreadsheets.values.get({
-          spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-          range: 'BusinessProfile!A1:J2',
-        });
-        const row = result.data.values?.[1] || [];
-        const profile = Object.fromEntries(BUSINESS_PROFILE_FIELDS.map((field, index) => [
-          field,
-          row[index] === undefined ? DEFAULT_BUSINESS_PROFILE[field] : row[index],
-        ]));
+        const profile = await getBusinessProfile(sheets);
         return res.status(200).json({ profile });
       }
 
@@ -9143,12 +9457,15 @@ export default async function handler(req, res) {
 
     if (req.method === 'POST' && req.query?.view === 'business-profile') {
       const profile = validateBusinessProfile(req.body?.profile);
-      await ensureBusinessProfileSheet(sheets);
-      await sheets.spreadsheets.values.update({
-        spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'BusinessProfile!A2:J2',
-        valueInputOption: 'RAW',
-        requestBody: { values: [BUSINESS_PROFILE_FIELDS.map((field) => profile[field])] },
+      await saveAppointmentConfigOrSheets(sheets, 'business_profile', profile, async () => {
+        await ensureBusinessProfileSheet(sheets);
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+          range: 'BusinessProfile!A2:J2',
+          valueInputOption: 'RAW',
+          requestBody: { values: [BUSINESS_PROFILE_FIELDS.map((field) => profile[field])] },
+        });
+        return profile;
       });
       return res.status(200).json({ profile });
     }

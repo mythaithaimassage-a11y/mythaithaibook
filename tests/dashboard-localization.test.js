@@ -91,6 +91,16 @@ test('branch migration button is shown only until BigQuery becomes the source of
   assert.doesNotMatch(afterImport, /One-time import to BigQuery/);
 });
 
+test('appointment settings migration button disappears after BigQuery takes over', () => {
+  const beforeImport = render('branches', 'en', { appointmentConfigSource: 'sheets' });
+  assert.match(beforeImport, /Appointment settings storage/);
+  assert.match(beforeImport, /One-time import appointment settings/);
+  assert.match(beforeImport, /services, therapists, therapist work schedules, unavailability blocks, and saved therapist identity mappings/);
+  const afterImport = render('branches', 'en', { appointmentConfigSource: 'bigquery' });
+  assert.match(afterImport, /BigQuery source of truth/);
+  assert.doesNotMatch(afterImport, /One-time import appointment settings/);
+});
+
 test('business profile configures appointment gaps and the calendar offers therapist columns', () => {
   assert.match(source, /Therapist gap after appointments \(minutes\)/);
   assert.match(source, /min=\{field\.min\}[\s\S]*max=\{field\.max\}[\s\S]*step=\{field\.step\}/);
