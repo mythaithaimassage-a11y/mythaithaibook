@@ -38,6 +38,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
     [2, 'Couple Massage', 'Thai', 60, 180, 10, 'FALSE', 0.13, '', 'TRUE'],
     [3, 'RMT Massage', 'RMT', 60, 120, 10, 'TRUE', 0, '', 'TRUE'],
     [4, 'Inactive Massage', 'Thai', 60, 100, 10, 'FALSE', 0.13, '', 'FALSE'],
+    [5, 'Hot Stone Add-on', 'Add-on', 15, 20, 0, 'FALSE', 0.13, '', 'TRUE'],
   ];
   const therapistRows = [
     [1, 'Test Therapist', '', 5, 'TRUE', 'FALSE', '1', '{}', 'TRUE'],
@@ -762,6 +763,21 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   assert.match(patches.at(-1).requestBody.description, /Customer: Updated client[\s\S]*Private integration metadata[\s\S]*Email: updated@example.com/);
   assert.equal(patches.at(-1).transport.headers['If-Match'], '"original"');
   assert.equal((await request('edit-booking', stale)).code, 409);
+  const addonEditRecord = {
+    ...editable, booking_id: 'manual-hot-stone-reprice', date: '2026-11-02', time: '10:00 AM',
+    service_name: 'Massage', duration_minutes: 60, total: 113, paid_amount: 0, calendar_event_id: '',
+  };
+  records.push(addonEditRecord);
+  const addonEdit = await request('edit-booking', {
+    ...editBody(), bookingId: addonEditRecord.booking_id,
+    expectedVersion: bookingEditVersion(BOOKING_TABLE_FIELDS.map((field) => addonEditRecord[field.name])),
+    date: addonEditRecord.date, time: addonEditRecord.time, total: '113.00', paidAmount: '0.00',
+    hotStoneAddOn: true,
+  });
+  assert.equal(addonEdit.code, 200, JSON.stringify(addonEdit.data));
+  assert.equal(addonEditRecord.service_name, 'Massage + Hot Stone Add-on');
+  assert.equal(addonEditRecord.duration_minutes, 75);
+  assert.equal(addonEditRecord.total, 135.6, 'Service and Hot Stone prices are recalculated from the catalogue');
   for (const invalid of [{ serviceId: '404' }, { serviceId: '4' }, { time: '09:45 AM' }, { therapistNames: ['Inactive Therapist'] },
     { therapistNames: ['Off Duty'] }, { serviceId: '3', therapistNames: ['Test Therapist'] }, { serviceId: '2', therapistNames: ['Test Therapist', 'Test Therapist'] },
     { paidAmount: '114' }, { total: '-1' }, { date: '2026-02-30' }, { bookingNote: null }]) {

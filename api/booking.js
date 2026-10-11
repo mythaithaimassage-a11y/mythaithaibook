@@ -4,7 +4,7 @@ import crypto from 'node:crypto';
 import { createWixContactStore, prepareWixContacts } from '../lib/wix-contacts.js';
 import { applyWixCataloguePrices, applyWixTherapistMappings, importWixBookings, prepareWixBookings } from '../lib/wix-bookings.js';
 import { BOOKING_TABLE_FIELDS, LATER_BOOKING_COLUMNS } from '../lib/booking-schema.js';
-import { bookingTaxTreatment, preTaxSubtotal, taxOn } from '../lib/booking-tax.js';
+import { bookingTaxTreatment, HST_RATE, isCashPayment, preTaxSubtotal, taxOn } from '../lib/booking-tax.js';
 import { validateBookingNote } from '../lib/booking-note.js';
 import { applyBookingDiscount, bookingDiscount, bookingEditVersion, normalizeBookingTime, staffBooking, validateBookingEdit, zonedBookingInstant } from '../lib/booking-edit.js';
 import { createPackageStore, historicalPackageVisit, readPackageUsage, packageReceiptDetails } from '../lib/packages.js';
@@ -4698,7 +4698,7 @@ export default async function handler(req, res) {
     }
 
     const view = String(req.query?.view || '');
-    const packageViews = ['packages', 'package-register', 'package-redeem'];
+    const packageViews = ['packages', 'package-register', 'package-redeem', 'package-customer-search'];
     const historyViews = ['booking-history-preview', 'clear-booking-history'];
     const wixCalendarViews = ['wix-calendar-sync'];
     const validGetViews = ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'business-name', 'square-config', 'google-reviews', 'branches', 'services', 'therapists', 'staff-work-schedule', 'available-therapists', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal', 'company-join', 'find-booking', 'availability', 'unavailability', 'campaign-log', 'campaign-audience-options', 'review-request-audience', 'therapist-accounts', 'wix-contacts', 'dashboard-users'];
@@ -4812,7 +4812,8 @@ export default async function handler(req, res) {
       return res.status(200).json(await syncWixCalendar(excludedIds, req.body?.startDate, req.body?.endDate));
     }
     if (packageViews.includes(view)) {
-      if ((view === 'packages' && req.method !== 'GET') || (view !== 'packages' && req.method !== 'POST')) return res.status(405).json({ message: 'Method Not Allowed' });
+      const packageGetView = ['packages', 'package-customer-search'].includes(view);
+      if ((packageGetView && req.method !== 'GET') || (!packageGetView && req.method !== 'POST')) return res.status(405).json({ message: 'Method Not Allowed' });
       const store = createPackageStore(getBigQueryClient(), {
         projectId: BIGQUERY_PROJECT_ID, datasetId: BIGQUERY_DATASET_ID,
         tableId: process.env.BIGQUERY_PACKAGES_TABLE || 'session_packages',
@@ -4820,9 +4821,38 @@ export default async function handler(req, res) {
         forbiddenTables: [BIGQUERY_PATIENT_HISTORY_TABLE, BIGQUERY_PATIENT_HISTORY_MIGRATIONS_TABLE, BIGQUERY_SQUARE_PAYMENTS_TABLE, BIGQUERY_CAMPAIGN_LOG_TABLE, BIGQUERY_CAMPAIGN_RECIPIENTS_TABLE, process.env.BIGQUERY_WIX_CONTACTS_TABLE || 'wix_contacts', ...Object.values(LOYALTY_TABLE_NAMES)],
       });
       if (view === 'packages') return res.status(200).json(await store.list({ search: req.query?.search || '', offset: Number(req.query?.offset || 0) }));
+      if (view === 'package-customer-search') {
+        const bigquery = getBigQueryClient();
+        const [bookingCustomers, packageCustomers] = await Promise.all([
+          searchBookingCustomers(bigquery, {
+            projectId: BIGQUERY_PROJECT_ID, datasetId: BIGQUERY_DATASET_ID, tableId: BIGQUERY_BOOKINGS_TABLE,
+            wixContactsTableId: process.env.BIGQUERY_WIX_CONTACTS_TABLE || 'wix_contacts',
+            branchNames: null, search: req.query?.search,
+          }),
+          store.searchCustomers(req.query?.search),
+        ]);
+        const customers = [...bookingCustomers.customers, ...packageCustomers];
+        const unique = new Map();
+        customers.forEach((customer) => {
+          const key = customer.email.toLowerCase() || customer.phone.replace(/\D/g, '');
+          if (!key) return;
+          const existing = unique.get(key);
+          if (!existing) unique.set(key, customer);
+          else unique.set(key, {
+            name: existing.name || customer.name,
+            email: existing.email || customer.email,
+            phone: existing.phone || customer.phone,
+          });
+        });
+        return res.status(200).json({ customers: [...unique.values()].slice(0, 8) });
+      }
       if (view === 'package-register') return res.status(200).json(await store.register(req.body));
+      const sessionNumber = req.body?.sessionNumber === undefined ? undefined : Number(req.body.sessionNumber);
+      if (sessionNumber !== undefined && (!Number.isInteger(sessionNumber) || sessionNumber < 1 || sessionNumber > 4)) {
+        return res.status(400).json({ message: 'Choose a package session from 1 to 4.' });
+      }
       return res.status(200).json(await store.redeem({
-        packageId: req.body?.packageId, bookingId: req.body?.bookingId,
+        packageId: req.body?.packageId, bookingId: req.body?.bookingId, sessionNumber,
         isCompleted: (booking) => isAppointmentCompleteByTime(booking.date, booking.time, booking.duration_minutes),
       }));
     }
@@ -7891,7 +7921,21 @@ export default async function handler(req, res) {
       if (!branch) return res.status(409).json({ message: 'Match this booking to a configured branch before editing.' });
       const service = services.find((item) => String(item.id) === String(req.body.serviceId)) ||
         (req.body.serviceId === '__existing__' ? { name: row[5], duration: Number(row[12]), active: true } : null);
-      const serviceChanged = service?.name !== row[5];
+      const hotStoneService = services.find((item) => /hot stone add-?on/i.test(item.name || ''));
+      if (req.body?.hotStoneAddOn !== undefined && typeof req.body.hotStoneAddOn !== 'boolean') {
+        return res.status(400).json({ message: 'Choose whether to include the Hot Stone add-on.' });
+      }
+      const hotStoneAddOn = req.body?.hotStoneAddOn === undefined
+        ? Boolean(hotStoneService && row[5].includes(hotStoneService.name))
+        : req.body.hotStoneAddOn === true;
+      if (hotStoneAddOn && (!hotStoneService || hotStoneService.active === false || /package/i.test(service?.name || ''))) {
+        return res.status(400).json({ message: 'Choose an available Hot Stone add-on for a non-package service.' });
+      }
+      const serviceName = service
+        ? req.body.serviceId === '__existing__' ? row[5]
+          : `${service.name}${hotStoneAddOn && hotStoneService ? ` + ${hotStoneService.name}` : ''}`
+        : '';
+      const serviceChanged = serviceName !== row[5];
       const therapistNames = Array.isArray(req.body.therapistNames) ? req.body.therapistNames : [];
       if (!service || (serviceChanged && service.active === false) || !Number.isFinite(service.duration) || service.duration <= 0) {
         return res.status(400).json({ message: 'Choose an active service with a valid duration.' });
@@ -7910,7 +7954,9 @@ export default async function handler(req, res) {
       if (locked && serviceChanged) {
         return res.status(409).json({ message: 'Issued receipts, prepaid packages and membership records lock customer, service, schedule and payment details. You can still edit the shared note and therapist.' });
       }
-      const durationMinutes = serviceChanged ? service.duration : Number(row[12]) || service.duration;
+      const durationMinutes = serviceChanged
+        ? service.duration + (hotStoneAddOn && hotStoneService ? Number(hotStoneService.duration) || 0 : 0)
+        : Number(row[12]) || service.duration;
       const startDateTime = parseBookingDateTime(edited.date, edited.time);
       const endDateTime = addMinutes(startDateTime, durationMinutes);
       const startInstant = zonedBookingInstant(startDateTime, CALENDAR_TIME_ZONE);
@@ -7978,8 +8024,19 @@ export default async function handler(req, res) {
           return res.status(409).json({ message: 'Resolve linked loyalty redemptions before applying a manual booking discount.' });
         }
       }
+      const pricedEdited = { ...edited };
+      if (serviceChanged) {
+        const subtotal = Number(service.price) + (hotStoneAddOn && hotStoneService ? Number(hotStoneService.price) : 0);
+        const taxRate = isCashPayment(edited.paymentOption) ? 0 : Number(service.taxRate ?? HST_RATE);
+        const catalogueTotal = Math.round(subtotal * (1 + taxRate) * 100) / 100;
+        const oldTotal = Number(row[11]) || 0;
+        const oldPaid = Number(row[10]) || 0;
+        pricedEdited.total = catalogueTotal;
+        pricedEdited.paidAmount = oldTotal > 0 && oldPaid + 0.005 >= oldTotal
+          ? catalogueTotal : Math.min(oldPaid, catalogueTotal);
+      }
       const fields = applyBookingDiscount(row, {
-        ...edited, serviceName: service.name, therapistName, durationMinutes,
+        ...pricedEdited, serviceName, therapistName, durationMinutes,
         statusNotes: `${row[25] || ''}${row[25] ? '\n' : ''}Booking edited by ${dashboardSession.email} at ${new Date().toISOString()}.`,
       }, req.body, dashboardSession.email);
       const updatedRow = [...row];
@@ -8001,7 +8058,7 @@ export default async function handler(req, res) {
         }
         try {
           patchedEvent = (await calendarApi.events.patch({ calendarId, eventId, requestBody: {
-            summary: `${service.name} - ${edited.customerName}`, description: nextDescription,
+            summary: `${serviceName} - ${edited.customerName}`, description: nextDescription,
             ...(schedulingChanged ? { start: { dateTime: startDateTime, timeZone: CALENDAR_TIME_ZONE }, end: { dateTime: endDateTime, timeZone: CALENDAR_TIME_ZONE } } : {}),
           } }, { headers: originalEvent.etag ? { 'If-Match': originalEvent.etag } : {} })).data;
         } catch (error) {
@@ -8061,7 +8118,7 @@ export default async function handler(req, res) {
             intro: 'The details of your appointment have been updated.',
             details: [
               { label: 'Booking reference', value: bookingId },
-              { label: 'Service', value: service.name },
+              { label: 'Service', value: serviceName },
               { label: 'Therapist', value: therapistName },
               { label: 'Date', value: edited.date },
               { label: 'Time', value: edited.time },

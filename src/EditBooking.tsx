@@ -11,7 +11,7 @@ export type EditableBooking = {
   paymentOption: string; total: number; paidAmount: number; editVersion: string;
   receiptNumber?: string; paymentLocked?: boolean;
   manualBookingDiscount?: number; originalBookingTotal?: number;
-  durationMinutes?: number;
+  durationMinutes?: number; hotStoneAddOn?: boolean;
 };
 type Service = { id: number; name: string; price: number; duration: number; taxRate: number; active?: boolean; isRmt?: boolean };
 type Therapist = { id: number; name: string; active?: boolean; rmtCertified?: boolean };
@@ -25,6 +25,9 @@ type Props = {
 
 export default function EditBooking({ booking, services, therapists, times, branch, branchId, isScheduled, onClose, onSaved }: Props) {
   const { translate: tr, formatTime } = useTranslation();
+  const hotStoneAddOnService = services.find((item) => /hot stone add-?on/i.test(item.name)) || null;
+  const bookedBaseService = services.find((item) => booking.serviceName === item.name ||
+    booking.serviceName.startsWith(`${item.name} + `));
   const [form, setForm] = useState(() => ({
     customerName: booking.customerName, email: booking.email, phone: booking.phone,
     bookingNote: booking.bookingNote || '', date: booking.date, time: booking.time,
@@ -32,7 +35,8 @@ export default function EditBooking({ booking, services, therapists, times, bran
     paidAmount: String(booking.paidAmount),
     manualDiscount: String(booking.manualBookingDiscount || 0),
     paymentOption: booking.paymentOption || '',
-    serviceId: String(services.find((service) => service.name === booking.serviceName)?.id || '__existing__'),
+    serviceId: String(bookedBaseService?.id || '__existing__'),
+    hotStoneAddOn: Boolean(hotStoneAddOnService && booking.serviceName.includes(hotStoneAddOnService.name)),
   }));
   const exactTherapist = therapists.find((therapist) => booking.therapistName === therapist.name);
   const assigned = exactTherapist ? [exactTherapist] : therapists.filter((therapist) =>
@@ -47,17 +51,21 @@ export default function EditBooking({ booking, services, therapists, times, bran
   const submitting = useRef(false);
   const locked = Boolean(booking.receiptNumber || booking.paymentLocked);
   const service = services.find((item) => String(item.id) === form.serviceId);
-  const availableTimes = branch && form.date ? branchAppointmentTimes(branch, form.date, service?.duration ?? booking.durationMinutes ?? 60) : times;
+  const durationMinutes = (service?.duration ?? booking.durationMinutes ?? 60) +
+    (form.hotStoneAddOn && hotStoneAddOnService ? Number(hotStoneAddOnService.duration) || 0 : 0);
+  const availableTimes = branch && form.date ? branchAppointmentTimes(branch, form.date, durationMinutes) : times;
   const availability = useTherapistAvailability({
     branchId, date: form.date, time: form.time,
-    durationMinutes: service?.duration ?? booking.durationMinutes ?? 60, isRmt: Boolean(service?.isRmt),
+    durationMinutes, isRmt: Boolean(service?.isRmt),
     excludeBookingId: booking.id,
   });
-  const preservingSchedule = form.date === booking.date && service?.name === booking.serviceName;
+  const serviceName = service?.name && form.serviceId !== '__existing__'
+    ? `${service.name}${form.hotStoneAddOn && hotStoneAddOnService ? ` + ${hotStoneAddOnService.name}` : ''}`
+    : booking.serviceName;
+  const preservingSchedule = form.date === booking.date && serviceName === booking.serviceName;
   const timeChoices = [...new Set([...(locked || preservingSchedule || form.serviceId === '__existing__' && form.date === booking.date ? [booking.time] : []), ...availableTimes])];
   const validTime = timeChoices.includes(form.time) ? form.time : '';
   const couple = /couple/i.test(service?.name || booking.serviceName) && (assigned.length > 0 || form.serviceId !== '__existing__');
-  const serviceName = service?.name || booking.serviceName;
   const schedulingChanged = form.date !== booking.date || form.time !== booking.time || serviceName !== booking.serviceName ||
     (couple ? [therapist1, therapist2] : [therapist1]).join(', ') !== booking.therapistName;
   const eligible = therapists.filter((item) => item.active !== false && isScheduled(item, form.date) &&
@@ -71,22 +79,43 @@ export default function EditBooking({ booking, services, therapists, times, bran
   const remaining = Math.round((subtotal - Number(form.manualDiscount || 0)) * 100) / 100;
   const discountedTotal = Number(form.manualDiscount) > 0 ? Math.round((remaining + taxOn(remaining, serviceName, form.paymentOption)) * 100) / 100 : Number(form.total);
   const round = (value: number) => Math.round(value * 100) / 100;
+  const catalogueTotal = (serviceId: string, hotStoneAddOn: boolean, paymentOption: string) => {
+    const selectedService = services.find((item) => String(item.id) === serviceId);
+    if (!selectedService) return null;
+    const beforeTax = selectedService.price + (hotStoneAddOn && hotStoneAddOnService ? hotStoneAddOnService.price : 0);
+    const rate = isCashPayment(paymentOption) ? 0 : Number(selectedService.taxRate ?? HST_RATE);
+    return round(beforeTax * (1 + rate));
+  };
   const update = (key: keyof typeof form, value: string) => {
     setForm((current) => {
       const next = { ...current, [key]: value };
-      // Cash is charged without HST, so switching to or from cash re-prices a taxable appointment.
-      const name = services.find((item) => String(item.id) === next.serviceId)?.name || booking.serviceName;
-      if (key === 'paymentOption' && isCashPayment(value) !== isCashPayment(current.paymentOption) &&
-          bookingTaxTreatment(name, 'Card').taxable && Number.isFinite(Number(current.total))) {
-        const oldTotal = Number(current.total), paid = Number(current.paidAmount) || 0;
-        const newTotal = round(isCashPayment(value) ? oldTotal / (1 + HST_RATE) : oldTotal * (1 + HST_RATE));
-        next.total = newTotal.toFixed(2);
-        next.paidAmount = (oldTotal > 0 && paid + 0.005 >= oldTotal ? newTotal : Math.min(paid, newTotal)).toFixed(2);
+      if (key === 'serviceId') next.hotStoneAddOn = false;
+      if (key === 'serviceId' || key === 'paymentOption') {
+        const newTotal = catalogueTotal(next.serviceId, next.hotStoneAddOn, next.paymentOption);
+        if (newTotal !== null) {
+          const oldTotal = Number(current.total), paid = Number(current.paidAmount) || 0;
+          next.total = newTotal.toFixed(2);
+          next.paidAmount = (oldTotal > 0 && paid + 0.005 >= oldTotal ? newTotal : Math.min(paid, newTotal)).toFixed(2);
+        }
       }
       return next;
     });
     if (['manualDiscount', 'total', 'serviceId', 'paymentOption'].includes(key)) setConfirmed(false);
     if (['date', 'time', 'serviceId'].includes(key)) setNotifyClient(false);
+  };
+  const toggleHotStoneAddOn = (checked: boolean) => {
+    setForm((current) => {
+      const next = { ...current, hotStoneAddOn: checked };
+      const newTotal = catalogueTotal(next.serviceId, checked, next.paymentOption);
+      if (newTotal !== null) {
+        const oldTotal = Number(current.total), paid = Number(current.paidAmount) || 0;
+        next.total = newTotal.toFixed(2);
+        next.paidAmount = (oldTotal > 0 && paid + 0.005 >= oldTotal ? newTotal : Math.min(paid, newTotal)).toFixed(2);
+      }
+      return next;
+    });
+    setConfirmed(false);
+    setNotifyClient(false);
   };
   useEffect(() => {
     dialog.current?.showModal();
@@ -124,7 +153,8 @@ export default function EditBooking({ booking, services, therapists, times, bran
           <label className="text-xs font-semibold">{tr('Client name')}<input required maxLength={150} disabled={locked} value={form.customerName} onChange={(event) => update('customerName', event.target.value)} className={inputClass} /></label>
           <label className="text-xs font-semibold">{tr('Email')}<input type="email" maxLength={254} disabled={locked} value={form.email} onChange={(event) => update('email', event.target.value)} className={inputClass} /></label>
           <label className="text-xs font-semibold">{tr('Phone')}<input type="tel" maxLength={40} disabled={locked} value={form.phone} onChange={(event) => update('phone', event.target.value)} className={inputClass} /></label>
-          <label className="text-xs font-semibold">{tr('Service')}<select required disabled={locked} value={form.serviceId} onChange={(event) => update('serviceId', event.target.value)} className={inputClass}><option value="">{tr('Choose service')}</option>{!services.some((item) => item.name === booking.serviceName) && <option value="__existing__">{tr(booking.serviceName)}</option>}{services.filter((item) => item.active !== false || item.name === booking.serviceName).map((item) => <option key={item.id} value={item.id}>{tr(item.name)}</option>)}</select></label>
+          <label className="text-xs font-semibold">{tr('Service')}<select required disabled={locked} value={form.serviceId} onChange={(event) => update('serviceId', event.target.value)} className={inputClass}><option value="">{tr('Choose service')}</option>{!bookedBaseService && <option value="__existing__">{tr(booking.serviceName)}</option>}{services.filter((item) => (item.active !== false || item.name === bookedBaseService?.name) && (!/hot stone add-?on/i.test(item.name) || item.name === bookedBaseService?.name)).map((item) => <option key={item.id} value={item.id}>{tr(item.name)}</option>)}</select></label>
+          {hotStoneAddOnService && service && !/package/i.test(service.name) && <label className="flex items-center gap-2 text-xs font-semibold sm:col-span-2"><input type="checkbox" disabled={locked} checked={form.hotStoneAddOn} onChange={(event) => toggleHotStoneAddOn(event.target.checked)} />{tr('Add Hot Stone add-on')} · ${hotStoneAddOnService.price}</label>}
           <label className="text-xs font-semibold">{tr('Date')}<input type="date" required disabled={locked} value={form.date} onChange={(event) => update('date', event.target.value)} className={inputClass} /></label>
           <label className="text-xs font-semibold">{tr('Time')}<select required disabled={locked} value={validTime} onChange={(event) => update('time', event.target.value)} className={inputClass}><option value="">{tr('Choose time')}</option>{timeChoices.map((time) => <option key={time} value={time}>{formatTime(time)}</option>)}</select></label>
           <label className="text-xs font-semibold">{tr('Therapist')}<select required value={therapist1} onChange={(event) => { setTherapist1(event.target.value); setNotifyClient(false); }} className={inputClass}><option value="">{tr('Choose therapist')}</option>{!choices.some((item) => item.name === therapist1) && therapist1 && <option value={therapist1}>{therapist1}</option>}{choices.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}</select></label>

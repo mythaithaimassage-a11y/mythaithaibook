@@ -27,7 +27,7 @@ test('reviewed Wix import produces paid records and actual receipt endpoint issu
     { id: 1, name: 'Traditional Thai (90 min)', duration: 90, price: 100, taxRate: 0.13 },
     { id: 2, name: 'Registered Massage Therapy (90 min)', duration: 90, price: 120, taxRate: 0 },
   ];
-  const profileHeaders = ['businessName', 'legalName', 'tagline', 'email', 'phone', 'website', 'address', 'taxRegistrationNumber', 'photoUrl'];
+  const profileHeaders = ['businessName', 'legalName', 'tagline', 'email', 'phone', 'website', 'address', 'taxRegistrationNumber', 'photoUrl', 'therapistBufferMinutes'];
   let businessPhotoUrl = '';
   t.mock.method(google, 'sheets', () => ({
     spreadsheets: {
@@ -38,9 +38,9 @@ test('reviewed Wix import produces paid records and actual receipt endpoint issu
           if (range === 'Services!A2:K') return { data: { values: services.map((service) => [
             service.id, service.name, 'Massage', service.duration, service.price, 0, 'FALSE', service.taxRate, '', 'TRUE',
           ]) } };
-          if (range === 'BusinessProfile!A1:I1') return { data: { values: [profileHeaders] } };
-          if (range === 'BusinessProfile!A1:I2') return { data: { values: [profileHeaders, [
-            'Test Clinic', '', '', 'test@example.com', '4165550100', 'https://test.example', 'Ontario', '', businessPhotoUrl,
+          if (range === 'BusinessProfile!A1:J1') return { data: { values: [profileHeaders] } };
+          if (range === 'BusinessProfile!A1:J2') return { data: { values: [profileHeaders, [
+            'Test Clinic', '', '', 'test@example.com', '4165550100', 'https://test.example', 'Ontario', '', businessPhotoUrl, '15',
           ]] } };
           throw new Error(`Unexpected spreadsheet read: ${range}`);
         },
@@ -62,7 +62,7 @@ test('reviewed Wix import produces paid records and actual receipt endpoint issu
     'hours', 'receipt_no', 'contact_email', 'access_token', 'join_token',
   ];
   const packageSchema = [
-    ['package_id', 'STRING'], ['email', 'STRING'], ['customer_name', 'STRING'], ['package_name', 'STRING'],
+    ['package_id', 'STRING'], ['email', 'STRING'], ['customer_name', 'STRING'], ['customer_phone', 'STRING'], ['package_name', 'STRING'],
     ['purchase_reference', 'STRING'], ['purchase_date', 'STRING'], ['duration_minutes', 'INT64'],
     ['initial_remaining', 'INT64'], ['remaining_sessions', 'INT64'], ['subtotal', 'FLOAT64'],
     ['tax_rate', 'FLOAT64'], ['usages_json', 'STRING'], ['revision', 'INT64'], ['created_at', 'STRING'],
@@ -292,11 +292,11 @@ test('reviewed Wix import produces paid records and actual receipt endpoint issu
   assert.equal(issued.data.receipt.total, 152.55);
   assert.equal(issued.data.receipt.packageUsage.remainingSessions, 3);
   assert.equal(issued.data.receipt.packageUsage.newPayment, 0);
-  assert.match(issued.data.receipt.packageUsage.description, /1 session deducted; 3 of 4 sessions remain/);
+  assert.match(issued.data.receipt.packageUsage.description, /session 1 of 4 deducted; 3 sessions remain/);
   assert.equal(emails.length, 4);
   const mime = Buffer.from(emails[3].requestBody.raw, 'base64url').toString();
   const textBody = mime.match(/Content-Type: text\/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n([\s\S]*?)\r\n--/)[1];
-  assert.match(Buffer.from(textBody.replace(/\s/g, ''), 'base64').toString(), /1 session deducted; 3 of 4 sessions remain/);
+  assert.match(Buffer.from(textBody.replace(/\s/g, ''), 'base64').toString(), /session 1 of 4 deducted; 3 sessions remain/);
   const htmlBody = mime.match(/Content-Type: text\/html; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n([\s\S]*?)\r\n--/)[1];
   assert.match(Buffer.from(htmlBody.replace(/\s/g, ''), 'base64').toString(), /Package usage:/);
   assert.equal((await request('delete-booking', { bookingId: packageBooking.booking_id })).code, 409);

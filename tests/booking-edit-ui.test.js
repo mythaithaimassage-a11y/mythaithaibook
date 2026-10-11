@@ -38,6 +38,51 @@ test('editor translates its fields while preserving contacts, notes and canonica
   assert.match(render('en', { services: [] }), /value="__existing__" selected="">Massage/);
 });
 
+test('changing service and the Hot Stone add-on recalculates the catalogue total', () => {
+  const states = [], refs = [];
+  let stateIndex = 0, refIndex = 0;
+  const jsx = (type, props) => ({ type, props });
+  const shallowLoad = createTsLoader({
+    react: {
+      useState(initial) {
+        const index = stateIndex++;
+        if (!(index in states)) states[index] = typeof initial === 'function' ? initial() : initial;
+        return [states[index], (value) => { states[index] = typeof value === 'function' ? value(states[index]) : value; }];
+      },
+      useRef(value) { const index = refIndex++; return refs[index] ||= { current: value }; },
+      useEffect() {},
+    },
+    'react/jsx-runtime': { jsx, jsxs: jsx },
+    './localization': { useTranslation: () => ({ translate: (text) => text, formatTime: (text) => text }) },
+  });
+  const Editor = shallowLoad(editorPath).default;
+  const services = [
+    ...props.services,
+    { id: 2, name: 'Deep Tissue Massage', duration: 60, price: 120, taxRate: .13 },
+    { id: 3, name: 'Hot Stone Add-on', duration: 15, price: 20, taxRate: .13 },
+  ];
+  const nodes = (tree) => {
+    if (!tree || typeof tree !== 'object') return [];
+    if (Array.isArray(tree)) return tree.flatMap(nodes);
+    return [tree, ...nodes(tree.props?.children)];
+  };
+  const shallow = () => {
+    stateIndex = 0; refIndex = 0;
+    return Editor({ ...props, services });
+  };
+  let tree = shallow();
+  const serviceSelect = nodes(tree).find((node) => node.type === 'select' && node.props.value === '1');
+  serviceSelect.props.onChange({ target: { value: '2' } });
+  tree = shallow();
+  const total = () => nodes(tree).find((node) => node.type === 'input' && node.props.value === '135.60' || node.type === 'input' && node.props.value === '158.20');
+  assert.equal(total().props.value, '135.60', 'Selecting a service applies its current catalogue price and tax');
+  const hotStone = nodes(tree).find((node) => node.type === 'input' && node.props.type === 'checkbox');
+  assert.ok(hotStone, 'The Hot Stone add-on is a checkbox');
+  hotStone.props.onChange({ target: { checked: true } });
+  tree = shallow();
+  assert.equal(total().props.value, '158.20', 'Selecting Hot Stone adds its catalogue price before tax');
+});
+
 test('editor offers branch-specific times and preserves existing schedules after business hours change', () => {
   const businessHours = defaultBusinessHours();
   businessHours.tue = { open: '08:00', close: '22:00', closed: false };

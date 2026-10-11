@@ -5,7 +5,7 @@ import { applyWixCataloguePrices, prepareWixBookings } from '../lib/wix-bookings
 import { WIX_120_SERVICE, wixImportServices } from '../lib/wix-pricing.js';
 
 const registration = {
-  email: ' CLIENT@example.com ', customerName: 'Test Client', packageName: 'Package: 60 min x 4 Sessions',
+  email: ' CLIENT@example.com ', customerName: 'Test Client', customerPhone: '+1 (416) 555-0101', packageName: 'Package: 60 min x 4 Sessions',
   purchaseReference: 'purchase-001', purchaseDate: '2025-01-01',
   durationMinutes: 60, remainingSessions: 4, subtotal: 360, taxRate: 0.13, confirmed: true,
 };
@@ -58,6 +58,7 @@ test('historical package visit uses one quarter of the package price without inv
 test('registration validates owner confirmation, price, duration, tax, remaining count, and unique purchase identity', () => {
   const record = pkg();
   assert.equal(record.email, 'client@example.com');
+  assert.equal(record.customer_phone, '+1 (416) 555-0101');
   assert.equal(record.remaining_sessions, 4);
   assert.equal(record.initial_remaining, 4);
   assert.equal(record.usages_json, '[]');
@@ -65,9 +66,35 @@ test('registration validates owner confirmation, price, duration, tax, remaining
   assert.notEqual(record.package_id, validatePackageRegistration({ ...registration, purchaseReference: 'purchase-002' }).package_id);
   for (const change of [
     { confirmed: false }, { email: 'bad' }, { subtotal: -1 }, { taxRate: 0.05 }, { taxRate: 0 },
+    { customerPhone: 'not a phone' },
     { remainingSessions: 5 }, { remainingSessions: -1 }, { remainingSessions: 1.5 },
     { durationMinutes: 0 }, { purchaseDate: '2025-02-30' }, { purchaseReference: '' },
   ]) assert.throws(() => validatePackageRegistration({ ...registration, ...change }), { statusCode: 400 });
+});
+
+test('legacy package tables gain only the nullable customer phone column during customer search', async () => {
+  const packageRecord = pkg();
+  const legacySchema = Object.entries(packageRecord).filter(([name]) => name !== 'customer_phone').map(([name, value]) => ({
+    name, type: typeof value === 'number' ? ['subtotal', 'tax_rate'].includes(name) ? 'FLOAT64' : 'INT64' : 'STRING',
+  }));
+  let schema = legacySchema;
+  let queryOptions;
+  const bigquery = {
+    dataset: () => ({
+      table: () => ({
+        exists: async () => [true],
+        getMetadata: async () => [{ schema: { fields: schema } }],
+        setMetadata: async ({ schema: updated }) => { schema = updated.fields; },
+      }),
+    }),
+    query: async (options) => { queryOptions = options; return [[{ name: 'Test Client', email: 'client@example.com', phone: packageRecord.customer_phone }]]; },
+  };
+  const customers = await createPackageStore(bigquery, { projectId: 'test-project', datasetId: 'booking_system', bookingsTableId: 'bookings' })
+    .searchCustomers('4165550101');
+  assert.equal(schema.length, legacySchema.length + 1);
+  assert.deepEqual(schema.at(-1), { name: 'customer_phone', type: 'STRING', mode: 'NULLABLE' });
+  assert.equal(queryOptions.params.phone_search, '4165550101');
+  assert.deepEqual(customers, [{ name: 'Test Client', email: 'client@example.com', phone: packageRecord.customer_phone }]);
 });
 
 test('four distinct completed bookings deduct 4→3→2→1→0; retry does not deduct and fifth use fails', () => {
@@ -92,11 +119,38 @@ test('four distinct completed bookings deduct 4→3→2→1→0; retry does not 
     assert.equal(receipt.allocatedSubtotal, 90);
     assert.equal(receipt.allocatedTax, 11.7);
     assert.equal(receipt.newPayment, 0);
-    assert.match(receipt.description, /1 session deducted/);
+    assert.match(receipt.description, new RegExp(`session ${index + 1} of 4 deducted`));
   }
   assert.equal(JSON.parse(packageRecord.usages_json).length, 4);
   assert.throws(() => preparePackageRedemption(packageRecord, booking('WIX-fifth'), { completed: true }), /no sessions remaining/);
   assert.equal(packageReceiptDetails(records[0].intake_notes).remainingSessions, 3, 'Earlier receipt keeps balance-at-visit snapshot');
+});
+
+test('completed package visits can check in a specific unused session and keep the ledger balance synchronized', () => {
+  const packageRecord = pkg();
+  const thirdSession = preparePackageRedemption(packageRecord, booking('WIX-session-3'), { completed: true, sessionNumber: 3 });
+  assert.equal(thirdSession.usage.sessionNumber, 3);
+  assert.equal(thirdSession.remaining, 3);
+  assert.equal(packageReceiptDetails(thirdSession.notes).sessionNumber, 3);
+  packageRecord.remaining_sessions = thirdSession.remaining;
+  packageRecord.usages_json = thirdSession.usages;
+
+  const firstSession = preparePackageRedemption(packageRecord, booking('WIX-session-1'), { completed: true, sessionNumber: 1 });
+  assert.equal(firstSession.usage.sessionNumber, 1);
+  assert.equal(firstSession.remaining, 2);
+  packageRecord.remaining_sessions = firstSession.remaining;
+  packageRecord.usages_json = firstSession.usages;
+  assert.throws(() => preparePackageRedemption(packageRecord, booking('WIX-duplicate-session'), {
+    completed: true, sessionNumber: 3,
+  }), /unused session/);
+
+  const partial = validatePackageRegistration({ ...registration, remainingSessions: 2 });
+  assert.throws(() => preparePackageRedemption(partial, booking('WIX-already-consumed'), {
+    completed: true, sessionNumber: 2,
+  }), /unused session/);
+  assert.equal(preparePackageRedemption(partial, booking('WIX-session-3'), {
+    completed: true, sessionNumber: 3,
+  }).remaining, 1);
 });
 
 test('verified partial balance deducts only what remains; fractional cents conserve complete package value', () => {
@@ -148,8 +202,9 @@ test('store commits package decrement and booking link in one transaction with r
     },
   };
   const config = { projectId: 'test-project', datasetId: 'booking_system', bookingsTableId: 'bookings' };
-  const result = await createPackageStore(bigquery, config).redeem({ packageId: packageRecord.package_id, bookingId: record.booking_id, isCompleted: () => true });
+  const result = await createPackageStore(bigquery, config).redeem({ packageId: packageRecord.package_id, bookingId: record.booking_id, sessionNumber: 3, isCompleted: () => true });
   assert.equal(result.usage.remainingSessions, 3);
+  assert.equal(result.usage.sessionNumber, 3);
   const script = calls.find(({ query }) => query.startsWith('BEGIN TRANSACTION'));
   assert.match(script.query, /revision = @revision/);
   assert.match(script.query, /COALESCE\(intake_notes, ''\) = @old_notes/);
