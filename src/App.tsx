@@ -2547,20 +2547,32 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
     durationMinutes: requestedDurationMinutes,
     isRmt: Boolean(bookingData.service?.isRmt),
   });
+  const eligibleTherapists = useMemo(
+    () => therapists.filter((therapist) => therapist.active !== false &&
+      isTherapistScheduledAtBranch(therapist, bookingData.branch?.id, bookingData.date) &&
+      (!bookingData.service?.isRmt || therapist.rmtCertified)),
+    [therapists, bookingData.branch, bookingData.date, bookingData.service]
+  );
+  const availableTherapistIdsByTime = useMemo(
+    () => Object.fromEntries(appointmentTimes.map((time) => [
+      time,
+      (slotAvailability.therapistIdsByTime[time] || [])
+        .filter((id) => eligibleTherapists.some((therapist) => String(therapist.id) === id)),
+    ])),
+    [appointmentTimes, slotAvailability.therapistIdsByTime, eligibleTherapists]
+  );
   const selectableAppointmentTimes = appointmentTimes.filter((time) =>
-    (slotAvailability.therapistIdsByTime[time]?.length || 0) >= (isCoupleService ? 2 : 1));
-  const selectedTherapistIds = slotAvailability.therapistIdsByTime[bookingData.time] || [];
+    (availableTherapistIdsByTime[time]?.length || 0) >= (isCoupleService ? 2 : 1));
+  const selectedTherapistIds = availableTherapistIdsByTime[bookingData.time] || [];
   const therapistAvailability = {
     loading: slotAvailability.loading,
     error: slotAvailability.error,
     therapistIds: new Set(selectedTherapistIds),
   };
   const branchTherapists = useMemo(
-    () => therapists.filter((therapist) => therapist.active !== false &&
-      isTherapistScheduledAtBranch(therapist, bookingData.branch?.id, bookingData.date) &&
-      (!bookingData.service?.isRmt || therapist.rmtCertified) &&
+    () => eligibleTherapists.filter((therapist) =>
       therapistAvailability.therapistIds.has(String(therapist.id))),
-    [therapists, bookingData.branch, bookingData.date, bookingData.service, selectedTherapistIds]
+    [eligibleTherapists, selectedTherapistIds]
   );
 
   useEffect(() => {
@@ -3109,9 +3121,10 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
               </div>
               {appointmentTimes.length === 0 && <p role="alert" className="mt-3 text-sm text-amber-800">No appointment times fit the business hours for this branch, date and service.</p>}
               {!slotAvailability.loading && !slotAvailability.error && appointmentTimes.length > 0 && selectableAppointmentTimes.length === 0 && (
-                <p role="status" className="mt-3 text-sm text-amber-800">
+                <p role="status" className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                  <strong className="block">No available slots</strong>
                   {isCoupleService
-                    ? 'Not enough therapists are available together for this date and service. Choose another date or service.'
+                    ? 'No two therapists are available together for this date and service. Choose another date or service.'
                     : 'No therapist is available for this date and service. Choose another date or service.'}
                 </p>
               )}
