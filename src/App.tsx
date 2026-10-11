@@ -5066,13 +5066,45 @@ function AdminPortal({
     }),
     [therapists, effectiveSelectedBranchId, selectedBranchName],
   );
-  const totalRevenue = useMemo(
-    () => dashboardBookings.reduce((sum, booking) => sum + (Number(booking.total) || 0), 0),
-    [dashboardBookings],
+  const todayDate = new Date().toISOString().slice(0, 10);
+  const bookingsToday = useMemo(
+    () => dashboardBookings.filter((booking) => booking.date === todayDate),
+    [dashboardBookings, todayDate],
   );
-  const hstCollected = useMemo(
-    () => dashboardBookings.reduce((sum, booking) => sum + ((Number(booking.total) || 0) - ((Number(booking.total) || 0) / 1.13)), 0),
-    [dashboardBookings],
+  const upcomingBookings = useMemo(
+    () => dashboardBookings.filter((booking) => booking.date > todayDate && booking.status !== 'Cancelled'),
+    [dashboardBookings, todayDate],
+  );
+  const todayRevenue = useMemo(
+    () => bookingsToday.reduce((sum, booking) => sum + (Number(booking.total) || 0), 0),
+    [bookingsToday],
+  );
+  const todayHstCollected = useMemo(
+    () => bookingsToday.reduce((sum, booking) => {
+      const total = Number(booking.total) || 0;
+      return sum + (bookingTaxTreatment(booking.serviceName, booking.paymentOption).taxable ? total - total / 1.13 : 0);
+    }, 0),
+    [bookingsToday],
+  );
+  const calendarBranchDetails = calendarBranch === 'all'
+    ? null
+    : branches.find((branch) => String(branch.id) === calendarBranch);
+  const calendarTherapistName = calendarTherapist === 'all'
+    ? ''
+    : therapists.find((therapist) => String(therapist.id) === calendarTherapist)?.name || '';
+  const calendarDateBookings = useMemo(
+    () => dashboardBookings.filter((booking) => booking.date === calendarDate
+      && (!calendarBranchDetails || booking.branchName === calendarBranchDetails.name || booking.branchName === calendarBranchDetails.address)
+      && (!calendarTherapistName || booking.therapistName === calendarTherapistName)),
+    [dashboardBookings, calendarDate, calendarBranchDetails, calendarTherapistName],
+  );
+  const calendarTherapistsBooked = useMemo(
+    () => new Set(calendarDateBookings.map((booking) => booking.therapistName).filter(Boolean)).size,
+    [calendarDateBookings],
+  );
+  const unassignedCalendarBookings = useMemo(
+    () => calendarDateBookings.filter((booking) => !booking.therapistName).length,
+    [calendarDateBookings],
   );
 
   const loadBookingsFromBackend = async () => {
@@ -6103,43 +6135,41 @@ function AdminPortal({
         </div>
       </section>
 
-      {/* Admin KPI Stat Cards */}
-      <div className={`grid grid-cols-2 gap-4 ${isBranchReceptionist ? 'md:grid-cols-2' : 'md:grid-cols-4'}`}>
-        {!isBranchReceptionist && <>
-        <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
-          <div className="flex items-center justify-between"><div className="text-xs font-semibold text-slate-500">{t.revenueToday}</div><span className="rounded-xl bg-emerald-50 p-2 text-emerald-800"><TrendingUp className="h-4 w-4" /></span></div>
-          <div className="mt-3 text-2xl font-bold tracking-tight text-emerald-900">${totalRevenue.toFixed(2)}</div>
-          <div className="mt-1 text-[11px] text-slate-400">{selectedBranchName || tr("All branches")}</div>
-        </div>
-        <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
-          <div className="flex items-center justify-between"><div className="text-xs font-semibold text-slate-500">{t.appointmentsToday}</div><span className="rounded-xl bg-blue-50 p-2 text-blue-800"><CalendarIcon className="h-4 w-4" /></span></div>
-          <div className="mt-3 text-2xl font-bold tracking-tight text-slate-900">{dashboardBookings.length}</div>
-          <div className="mt-1 text-[11px] text-slate-400">{selectedBranchName || tr("All branches")}</div>
-        </div>
-        <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
-          <div className="flex items-center justify-between"><div className="text-xs font-semibold text-slate-500">{t.activeStaff}</div><span className="rounded-xl bg-amber-50 p-2 text-amber-800"><Users className="h-4 w-4" /></span></div>
-          <div className="mt-3 text-2xl font-bold tracking-tight text-slate-900">{dashboardTherapists.length}</div>
-          <div className="mt-1 text-[11px] text-slate-400">{selectedBranchName || tr("All branches")}</div>
-        </div>
-        <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
-          <div className="flex items-center justify-between"><div className="text-xs font-semibold text-slate-500">{t.hstCollected}</div><span className="rounded-xl bg-violet-50 p-2 text-violet-800"><DollarSign className="h-4 w-4" /></span></div>
-          <div className="mt-3 text-2xl font-bold tracking-tight text-slate-900">${hstCollected.toFixed(2)}</div>
-          <div className="mt-1 text-[11px] text-slate-400">{selectedBranchName || tr("All branches")} {tr("· Estimated Ontario HST")}</div>
-        </div>
-        </>}
-        {isBranchReceptionist && <>
-          <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm">
-            <div className="flex items-center justify-between"><div className="text-xs font-semibold text-slate-500">{t.appointmentsToday}</div><span className="rounded-xl bg-blue-50 p-2 text-blue-800"><CalendarIcon className="h-4 w-4" /></span></div>
-            <div className="mt-3 text-2xl font-bold tracking-tight text-slate-900">{dashboardBookings.length}</div>
-            <div className="mt-1 text-[11px] text-slate-400">{selectedBranchName || tr("Assigned branches")}</div>
+      {(() => {
+        const branchDetail = selectedBranchName || (isBranchReceptionist ? tr("Assigned branches") : tr("All branches"));
+        const stats = activeTab === 'reports'
+          ? [
+              { label: t.revenueToday, value: `$${todayRevenue.toFixed(2)}`, detail: branchDetail, Icon: TrendingUp, style: 'bg-emerald-50 text-emerald-800', valueStyle: 'text-emerald-900' },
+              { label: t.appointmentsToday, value: bookingsToday.length, detail: branchDetail, Icon: CalendarIcon, style: 'bg-blue-50 text-blue-800' },
+              { label: t.activeStaff, value: dashboardTherapists.length, detail: branchDetail, Icon: Users, style: 'bg-amber-50 text-amber-800' },
+              { label: t.hstCollected, value: `$${todayHstCollected.toFixed(2)}`, detail: `${branchDetail} ${tr("· Estimated Ontario HST")}`, Icon: DollarSign, style: 'bg-violet-50 text-violet-800' },
+            ]
+          : activeTab === 'calendar'
+            ? [
+                { label: tr("Appointments on selected date"), value: calendarDateBookings.length, detail: new Date(`${calendarDate}T12:00:00`).toLocaleDateString(locale, { month: 'short', day: 'numeric', year: 'numeric' }), Icon: CalendarIcon, style: 'bg-blue-50 text-blue-800' },
+                { label: tr("Therapists booked"), value: calendarTherapistsBooked, detail: calendarBranchDetails?.name || branchDetail, Icon: Users, style: 'bg-amber-50 text-amber-800' },
+                { label: tr("Unassigned appointments"), value: unassignedCalendarBookings, detail: calendarBranchDetails?.name || branchDetail, Icon: AlertCircle, style: 'bg-violet-50 text-violet-800' },
+              ]
+            : activeTab === 'schedule'
+              ? [
+                  { label: t.appointmentsToday, value: bookingsToday.length, detail: branchDetail, Icon: CalendarIcon, style: 'bg-blue-50 text-blue-800' },
+                  { label: tr("Upcoming bookings"), value: upcomingBookings.length, detail: branchDetail, Icon: Clock, style: 'bg-violet-50 text-violet-800' },
+                  { label: t.activeStaff, value: dashboardTherapists.length, detail: branchDetail, Icon: Users, style: 'bg-amber-50 text-amber-800' },
+                ]
+              : [];
+        if (!stats.length) return null;
+        return (
+          <div className={`grid grid-cols-2 gap-4 ${stats.length === 4 ? 'md:grid-cols-4' : 'md:grid-cols-3'}`}>
+            {stats.map(({ label, value, detail, Icon, style, valueStyle = 'text-slate-900' }) => (
+              <div key={label} className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
+                <div className="flex items-center justify-between"><div className="text-xs font-semibold text-slate-500">{label}</div><span className={`rounded-xl p-2 ${style}`}><Icon className="h-4 w-4" /></span></div>
+                <div className={`mt-3 text-2xl font-bold tracking-tight ${valueStyle}`}>{value}</div>
+                <div className="mt-1 text-[11px] text-slate-400">{detail}</div>
+              </div>
+            ))}
           </div>
-          <div className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm">
-            <div className="flex items-center justify-between"><div className="text-xs font-semibold text-slate-500">{tr("Active staff")}</div><span className="rounded-xl bg-amber-50 p-2 text-amber-800"><Users className="h-4 w-4" /></span></div>
-            <div className="mt-3 text-2xl font-bold tracking-tight text-slate-900">{dashboardTherapists.length}</div>
-            <div className="mt-1 text-[11px] text-slate-400">{selectedBranchName || tr("Assigned branches")}</div>
-          </div>
-        </>}
-      </div>
+        );
+      })()}
 
       {activeTab === 'wix-contacts' && <WixContacts />}
       {activeTab === 'wix-bookings' && <WixBookings onViewBookings={() => setActiveTab('schedule')} />}

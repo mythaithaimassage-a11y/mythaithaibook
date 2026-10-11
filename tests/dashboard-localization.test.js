@@ -80,6 +80,42 @@ test('owner mobile shortcuts and grouped menu retain every unique section and id
   assert.match(thai, /เมนูทั้งหมด/);
 });
 
+test('dashboard KPIs are scoped to sales, bookings and calendar context', () => {
+  const today = new Date().toISOString().slice(0, 10);
+  const tomorrow = new Date(`${today}T12:00:00`);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowDate = tomorrow.toISOString().slice(0, 10);
+  const bookings = [
+    { ...booking, date: today, total: 113, status: 'Confirmed' },
+    { ...booking, id: 'MTT-RMT-TODAY', date: today, serviceName: 'Registered Massage Therapy (RMT 60 min)', total: 120, status: 'Confirmed' },
+    { ...booking, id: 'MTT-CASH-TODAY', date: today, paymentOption: 'Cash', total: 22, status: 'Confirmed' },
+    { ...booking, id: 'MTT-TOMORROW', date: tomorrowDate, total: 120, status: 'Confirmed' },
+    { ...booking, id: 'MTT-UNASSIGNED', date: tomorrowDate, therapistName: '', total: 95, status: 'Confirmed' },
+    { ...booking, id: 'MTT-CANCELLED', date: tomorrowDate, status: 'Cancelled' },
+  ];
+  const propsWithBookings = { bookings };
+
+  const home = render('schedule', 'en', {}, propsWithBookings);
+  assert.match(home, /Bookings Today/);
+  assert.match(home, /Upcoming bookings/);
+  assert.match(home, /Bookings Today<\/div>[\s\S]*?text-2xl font-bold tracking-tight text-slate-900">3<\/div>/);
+  assert.match(home, /Upcoming bookings<\/div>[\s\S]*?text-2xl font-bold tracking-tight text-slate-900">2<\/div>/);
+  assert.doesNotMatch(home, /Revenue Today|HST Tax Collected/);
+
+  const reports = render('reports', 'en', {}, propsWithBookings);
+  assert.match(reports, /Revenue Today/);
+  assert.match(reports, /HST Tax Collected/);
+  assert.match(reports, /Revenue Today<\/div>[\s\S]*?text-2xl font-bold tracking-tight text-emerald-900">\$255\.00<\/div>/);
+  assert.match(reports, /HST Tax Collected<\/div>[\s\S]*?text-2xl font-bold tracking-tight text-slate-900">\$13\.00<\/div>/);
+  assert.doesNotMatch(reports, /Upcoming bookings/);
+
+  const calendar = render('calendar', 'en', { calendarDate: tomorrowDate }, propsWithBookings);
+  assert.match(calendar, /Appointments on selected date/);
+  assert.match(calendar, /Therapists booked/);
+  assert.match(calendar, /Unassigned appointments/);
+  assert.doesNotMatch(calendar, /Revenue Today|HST Tax Collected/);
+});
+
 test('mobile booking cards retain all nine fields, booking data and existing actions', () => {
   const html = render('schedule', 'en');
   const table = html.match(/<table role="table"[\s\S]*?<\/table>/)?.[0];
