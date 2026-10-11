@@ -141,6 +141,21 @@ test('today availability shortcut displays the Work Schedule shift graphic for t
   assert.doesNotMatch(html, /Other therapist/);
 });
 
+test('owners, managers and receptionists can correct completed appointment therapist assignments', () => {
+  const selectedCalendarEvent = {
+    id: 'completed-event',
+    booking: { ...booking, status: 'Completed', therapistName: 'Tanya', receiptNumber: 'RECEIPT-1' },
+    localTime: booking.time,
+  };
+  for (const role of ['owner', 'branch_manager', 'branch_receptionist']) {
+    const html = render('calendar', 'en', { selectedCalendarEvent }, {
+      dashboardUser: { role, branchIds: ['1'] },
+    });
+    assert.match(html, /Change therapist/);
+    assert.match(html, /Completed appointments can be corrected without checking past therapist availability/);
+  }
+});
+
 test('Wix calendar sync appears below the calendar and appointment list', () => {
   const html = render('calendar', 'en');
   const calendarContentIndex = html.indexOf('No appointments match this date');

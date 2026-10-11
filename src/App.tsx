@@ -4270,6 +4270,7 @@ function AdminPortal({
   const [therapistReassignTo, setTherapistReassignTo] = useState('');
   const [isReassigningTherapist, setIsReassigningTherapist] = useState(false);
   const [notifyClientOnReassign, setNotifyClientOnReassign] = useState(false);
+  const canManageTherapistAssignments = ['owner', 'branch_manager', 'branch_receptionist'].includes(dashboardUser?.role);
   const reassignBooking = selectedCalendarEvent?.booking;
   const reassignBranchId = branches.find((branch) => branch.name === reassignBooking?.branchName || branch.address === reassignBooking?.branchName)?.id;
   const reassignService = services.find((service) => service.name === reassignBooking?.serviceName);
@@ -8257,6 +8258,7 @@ function AdminPortal({
                     {(() => {
                       const currentTherapist = booking.therapistName || selectedCalendarEvent.therapistName || '';
                       const isCancelled = String(booking.status || '') === 'Cancelled';
+                      const isCompleted = String(booking.status || '') === 'Completed';
                       const options = therapists
                         .filter((therapist) => therapist.active !== false)
                         .filter((therapist) => reassignAvailability.therapistIds.has(String(therapist.id)))
@@ -8269,7 +8271,7 @@ function AdminPortal({
                               <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{tr("Therapist")}</p>
                               <p className="mt-1 inline-flex items-center gap-1.5 break-words text-sm font-semibold text-slate-800"><UserRound className="h-3.5 w-3.5 shrink-0 text-slate-400" />{currentTherapist || tr("Unassigned")}</p>
                             </div>
-                            {dashboardUser.role === 'owner' && !isCancelled && !issuedReceipt && (
+                            {canManageTherapistAssignments && !isCancelled && (
                               <div className="flex flex-wrap items-center gap-2">
                                 <select
                                   value={therapistReassignTo}
@@ -8293,16 +8295,18 @@ function AdminPortal({
                               </div>
                             )}
                           </div>
-                          {dashboardUser.role === 'owner' && !isCancelled && !issuedReceipt && therapistReassignTo && (
+                          {canManageTherapistAssignments && !isCancelled && therapistReassignTo && (
                             <label className="mt-3 flex items-start gap-2 text-xs text-slate-700">
                               <input type="checkbox" checked={notifyClientOnReassign} disabled={isReassigningTherapist} onChange={(event) => setNotifyClientOnReassign(event.target.checked)} />
                               <span>{tr('Email client about this therapist change (optional)')}</span>
                             </label>
                           )}
-                          {dashboardUser.role === 'owner' && !isCancelled && !issuedReceipt && reassignAvailability.loading && <p role="status" className="mt-2 text-[11px] text-slate-500">{tr('Checking therapist availability…')}</p>}
-                          {dashboardUser.role === 'owner' && !isCancelled && !issuedReceipt && reassignAvailability.error && <p role="alert" className="mt-2 text-[11px] text-red-700">{tr(reassignAvailability.error)}</p>}
-                          {!isCancelled && !issuedReceipt && (
-                            <p className="mt-2 text-[11px] leading-4 text-slate-500">{tr("Only therapists who are free at this date and time can be assigned. The calendar event is updated to match.")}</p>
+                          {canManageTherapistAssignments && !isCancelled && reassignAvailability.loading && <p role="status" className="mt-2 text-[11px] text-slate-500">{tr('Checking therapist availability…')}</p>}
+                          {canManageTherapistAssignments && !isCancelled && reassignAvailability.error && <p role="alert" className="mt-2 text-[11px] text-red-700">{tr(reassignAvailability.error)}</p>}
+                          {!isCancelled && (
+                            <p className="mt-2 text-[11px] leading-4 text-slate-500">{tr(isCompleted
+                              ? "Completed appointments can be corrected without checking past therapist availability."
+                              : "Only therapists who are free at this date and time can be assigned. The calendar event is updated to match.")}</p>
                           )}
                         </div>
                       );

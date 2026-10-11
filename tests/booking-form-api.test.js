@@ -564,6 +564,59 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   assert.equal(histories.length, historyCount);
   t.mock.method(google, 'gmail', () => ({ users: { messages: { send: async (message) => { emails.push(message); return { data: { id: 'receipt' } }; } } } }));
   const editable = records.find((record) => record.booking_id === phoneBooking.data.bookingId);
+  const completedForCorrection = {
+    ...editable,
+    booking_id: 'completed-therapist-correction',
+    date: '2026-10-10',
+    time: '11:00 AM',
+    status: 'Completed',
+    therapist_name: 'Test Therapist',
+    calendar_event_id: 'completed-event',
+    receipt_number: 'COMPLETED-RECEIPT',
+  };
+  records.push(completedForCorrection);
+  const correctionAvailability = await request('available-therapists', null, {
+    method: 'GET',
+    query: {
+      date: completedForCorrection.date, branchId: '1', time: completedForCorrection.time,
+      durationMinutes: '60', isRmt: 'false', excludeBookingId: completedForCorrection.booking_id,
+    },
+  });
+  assert.equal(correctionAvailability.code, 200, JSON.stringify(correctionAvailability.data));
+  assert.deepEqual(correctionAvailability.data.therapistIds, [1, 2],
+    'Completed appointments allow branch-assigned therapists even when past availability is not verifiable');
+  const reassignCompleted = async (staffCookie, therapistName) => {
+    cookie = staffCookie;
+    return request('reassign-therapist', {
+      bookingId: completedForCorrection.booking_id, therapistName,
+    });
+  };
+  assert.equal((await reassignCompleted(managerCookie, 'Second Therapist')).code, 200,
+    'Managers can correct completed appointment assignments');
+  assert.equal(completedForCorrection.therapist_name, 'Second Therapist');
+  assert.equal((await reassignCompleted(receptionistCookie, 'Test Therapist')).code, 200,
+    'Receptionists can correct completed appointment assignments');
+  assert.equal((await reassignCompleted(ownerCookie, 'Second Therapist')).code, 200,
+    'Owners can correct completed appointment assignments even when a receipt was issued');
+  cookie = '';
+  assert.equal((await request('reassign-therapist', {
+    bookingId: completedForCorrection.booking_id, therapistName: 'Test Therapist',
+  })).code, 401, 'Therapist corrections require a dashboard sign-in');
+  const upcomingCorrection = { ...completedForCorrection, booking_id: 'upcoming-therapist-correction',
+    date: '2026-11-01', status: 'Confirmed', therapist_name: 'Test Therapist',
+    receipt_number: '', calendar_event_id: '' };
+  records.push(upcomingCorrection);
+  busyEvents = [{
+    id: 'busy-second-therapist',
+    description: 'Therapist: Second Therapist',
+    start: { dateTime: '2026-11-01T11:00:00-04:00' },
+    end: { dateTime: '2026-11-01T12:00:00-04:00' },
+  }];
+  cookie = managerCookie;
+  assert.equal((await request('reassign-therapist', {
+    bookingId: upcomingCorrection.booking_id, therapistName: 'Second Therapist',
+  })).code, 409, 'Upcoming appointments continue to enforce therapist availability');
+  busyEvents = [];
   const version = () => bookingEditVersion(BOOKING_TABLE_FIELDS.map((field) => editable[field.name]));
   const editBody = () => ({
     bookingId: editable.booking_id, expectedVersion: version(), customerName: 'Updated client',

@@ -629,6 +629,7 @@ export const dashboardThai: Record<string, string> = {
   'Unassigned': 'ยังไม่มอบหมาย',
   'Reassign this appointment to another therapist': 'เปลี่ยนผู้ให้บริการสำหรับนัดหมายนี้',
   'Change therapist…': 'เปลี่ยนผู้ให้บริการ…',
+  'Completed appointments can be corrected without checking past therapist availability.': 'สามารถแก้ไขผู้ให้บริการของนัดหมายที่เสร็จสิ้นแล้วได้ โดยไม่ต้องตรวจสอบเวลาว่างย้อนหลัง',
   'Assign': 'มอบหมาย',
   'Only therapists who are free at this date and time can be assigned. The calendar event is updated to match.': 'มอบหมายได้เฉพาะผู้ให้บริการที่ว่างในวันและเวลานี้ กิจกรรมปฏิทินจะอัปเดตให้ตรงกัน',
   'Amount paid': 'ยอดชำระแล้ว',

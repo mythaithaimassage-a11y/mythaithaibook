@@ -4564,7 +4564,7 @@ export default async function handler(req, res) {
     const ownerOnlyRequest =
       ['therapist-name-merge', 'wix-contacts', 'wix-contacts-import', 'wix-bookings-import', ...packageViews, ...historyViews, ...wixCalendarViews].includes(view) ||
       (req.method === 'GET' && ['patient-history', 'appointment-notes', 'business-profile', 'google-ads-report', 'loyalty-dashboard', 'google-reviews', 'unavailability', 'campaign-log', 'campaign-audience-options', 'review-request-audience', 'therapist-accounts', 'dashboard-users'].includes(view)) ||
-      ['business-profile', 'dashboard-user', 'dashboard-user-status', 'therapist-account-status', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-clear-ledger', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-link', 'unavailability-delete', 'review-request-send', 'reassign-therapist'].includes(view) ||
+      ['business-profile', 'dashboard-user', 'dashboard-user-status', 'therapist-account-status', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-clear-ledger', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-link', 'unavailability-delete', 'review-request-send'].includes(view) ||
       (req.method === 'POST' && ['branches', 'services', 'therapists', 'unavailability'].includes(view));
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
     const dashboardSession = await getOwnerSession(req);
@@ -4582,6 +4582,10 @@ export default async function handler(req, res) {
     }
     if (ownerOnlyRequest && dashboardSession?.role !== 'owner') {
       return res.status(dashboardSession ? 403 : 401).json({ message: dashboardSession ? 'Owner role required' : 'Dashboard sign-in required' });
+    }
+    if (view === 'reassign-therapist' &&
+        !['owner', 'branch_manager', 'branch_receptionist'].includes(dashboardSession?.role)) {
+      return res.status(dashboardSession ? 403 : 401).json({ message: 'A branch manager, receptionist or owner sign-in is required.' });
     }
     if (['', 'calendar'].includes(view) && req.method === 'GET' && !dashboardSession) {
       return res.status(401).json({ message: 'Dashboard sign-in required' });
@@ -5277,6 +5281,7 @@ export default async function handler(req, res) {
       const startIndex = rows[0]?.[0] === 'Booking ID' ? 1 : 0;
       const excludeBookingId = String(req.query?.excludeBookingId || '').trim();
       let excludedEventId = '';
+      let correctingCompletedAppointment = false;
       if (excludeBookingId) {
         if (excludeBookingId.length > 100) return res.status(400).json({ message: 'A valid booking reference is required.' });
         if (!dashboardSession) return res.status(403).json({ message: 'Dashboard sign-in is required to exclude an existing booking.' });
@@ -5288,7 +5293,17 @@ export default async function handler(req, res) {
         if (excludedBooking[4] !== branch.name && excludedBooking[4] !== branch.address) {
           return res.status(403).json({ message: 'This booking is outside the selected branch.' });
         }
+        correctingCompletedAppointment = excludedBooking[24] === 'Completed' ||
+          isAppointmentCompleteByTime(excludedBooking[7], excludedBooking[8], excludedBooking[12]);
         if (excludedBooking[7] === date) excludedEventId = String(excludedBooking[16] || '');
+      }
+      if (correctingCompletedAppointment) {
+        const therapistIds = therapists
+          .filter((therapist) => therapist.active !== false &&
+            isTherapistScheduledAtBranch(therapist, branchId, date) &&
+            (!isRmt || therapist.rmtCertified))
+          .map((therapist) => therapist.id);
+        return res.status(200).json({ therapistIds });
       }
       const start = startMinutes;
       const end = start + durationMinutes;
@@ -8664,6 +8679,8 @@ export default async function handler(req, res) {
       const endDateTime = addMinutes(startDateTime, durationMinutes);
       const startInstant = `${startDateTime}-04:00`;
       const endInstant = `${endDateTime}-04:00`;
+      const isCompletedAppointment = row[24] === 'Completed' ||
+        isAppointmentCompleteByTime(date, time, durationMinutes);
       // "Any Available" is a placeholder rather than a real person, so it is never
       // treated as busy and never checked against time off.
       const assignedNames = therapistName.split(',').map((name) => name.trim()).filter(Boolean);
@@ -8671,55 +8688,63 @@ export default async function handler(req, res) {
       const calendarId = row[15] || PRIMARY_CALENDAR_ID;
       const calendarEventId = row[16] || '';
 
+      const branches = await getBranches(sheets);
+      const branch = branches.find((item) => item.name === row[4] || item.address === row[4]);
+      if (!branch) return res.status(409).json({ message: 'The booking branch could not be verified, so its therapist cannot be changed.' });
+      if (dashboardSession.role !== 'owner' && !dashboardSession.branchIds.includes(String(branch.id))) {
+        return res.status(403).json({ message: 'This booking is outside your assigned branch access.' });
+      }
+
       if (realNames.length) {
-        const [branches, services, therapists, overrides] = await Promise.all([
-          getBranches(sheets), getServices(sheets), getTherapists(sheets), getStaffWorkScheduleRows(sheets),
+        const [services, therapists, overrides] = await Promise.all([
+          getServices(sheets), getTherapists(sheets), getStaffWorkScheduleRows(sheets),
         ]);
-        const branch = branches.find((item) => item.name === row[4] || item.address === row[4]);
         const service = services.find((item) => item.name === row[5]);
         const startTime = time24FromMinutes(appointmentTimeMinutes(normalizeBookingTime(time)));
-        if (!branch || !service || realNames.some((name) => {
+        if (!service || realNames.some((name) => {
           const therapist = therapists.find((item) => item.name === name && item.active !== false &&
             isTherapistScheduledAtBranch(item, branch.id, date) && (!service.isRmt || item.rmtCertified));
-          return !therapist || !shiftCoversAppointment(
+          return !therapist || (!isCompletedAppointment && !shiftCoversAppointment(
             therapistShiftForDate(therapist, branch.id, date, overrides), date, startTime, durationMinutes,
-          );
+          ));
         })) {
           return res.status(409).json({ message: 'The selected therapist is not scheduled or qualified for this appointment.' });
         }
-        const unavailabilityBlocks = await getUnavailabilityBlocks(sheets);
-        const blockedName = realNames.find((name) => unavailabilityBlocks.some((block) =>
-          block.scope === 'therapist' &&
-          block.therapistName === name &&
-          blockOverlapsWindow(block, date, startInstant, endInstant),
-        ));
-        if (blockedName) {
-          return res.status(409).json({ message: `${blockedName} has time off during this appointment. Choose another therapist.` });
-        }
-        try {
-          const dayEvents = await calendarApi.events.list({
-            calendarId,
-            timeMin: `${date}T00:00:00Z`,
-            timeMax: `${date}T23:59:59Z`,
-            singleEvents: true,
-          });
-          // The booking's own event must be ignored or the therapist would always
-          // look busy against the appointment being reassigned.
-          const busyNames = new Set((dayEvents.data.items || [])
-            .filter((event) => event.id !== calendarEventId)
-            .filter((event) => {
-              const eventStart = event.start?.dateTime || event.start?.date || '';
-              const eventEnd = event.end?.dateTime || event.end?.date || '';
-              return eventStart && eventEnd && hasTimeOverlap(startInstant, endInstant, eventStart, eventEnd);
-            })
-            .flatMap((event) => getTherapistFromDescription(event.description).split(',').map((name) => name.trim()).filter(Boolean)));
-          const busyName = realNames.find((name) => busyNames.has(name));
-          if (busyName) {
-            return res.status(409).json({ message: `${busyName} already has another appointment at this time. Choose another therapist.` });
+        if (!isCompletedAppointment) {
+          const unavailabilityBlocks = await getUnavailabilityBlocks(sheets);
+          const blockedName = realNames.find((name) => unavailabilityBlocks.some((block) =>
+            block.scope === 'therapist' &&
+            block.therapistName === name &&
+            blockOverlapsWindow(block, date, startInstant, endInstant),
+          ));
+          if (blockedName) {
+            return res.status(409).json({ message: `${blockedName} has time off during this appointment. Choose another therapist.` });
           }
-        } catch (error) {
-          console.error('Reassign therapist availability lookup error:', error.message || error);
-          return res.status(502).json({ message: 'Therapist availability could not be checked right now. Please try again.' });
+          try {
+            const dayEvents = await calendarApi.events.list({
+              calendarId,
+              timeMin: `${date}T00:00:00Z`,
+              timeMax: `${date}T23:59:59Z`,
+              singleEvents: true,
+            });
+            // The booking's own event must be ignored or the therapist would always
+            // look busy against the appointment being reassigned.
+            const busyNames = new Set((dayEvents.data.items || [])
+              .filter((event) => event.id !== calendarEventId)
+              .filter((event) => {
+                const eventStart = event.start?.dateTime || event.start?.date || '';
+                const eventEnd = event.end?.dateTime || event.end?.date || '';
+                return eventStart && eventEnd && hasTimeOverlap(startInstant, endInstant, eventStart, eventEnd);
+              })
+              .flatMap((event) => getTherapistFromDescription(event.description).split(',').map((name) => name.trim()).filter(Boolean)));
+            const busyName = realNames.find((name) => busyNames.has(name));
+            if (busyName) {
+              return res.status(409).json({ message: `${busyName} already has another appointment at this time. Choose another therapist.` });
+            }
+          } catch (error) {
+            console.error('Reassign therapist availability lookup error:', error.message || error);
+            return res.status(502).json({ message: 'Therapist availability could not be checked right now. Please try again.' });
+          }
         }
       }
 
