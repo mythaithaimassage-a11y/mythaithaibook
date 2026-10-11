@@ -73,7 +73,7 @@ const SQUARE_WEBHOOK_NOTIFICATION_URL = process.env.SQUARE_WEBHOOK_NOTIFICATION_
 const SQUARE_API_VERSION = '2024-08-21';
 const GOOGLE_PLACES_API_KEY = process.env.GOOGLE_PLACES_API_KEY || '';
 const GOOGLE_PLACE_ID = process.env.GOOGLE_PLACE_ID || '';
-const BUSINESS_PROFILE_FIELDS = ['businessName', 'legalName', 'tagline', 'email', 'phone', 'website', 'address', 'taxRegistrationNumber', 'photoUrl'];
+const BUSINESS_PROFILE_FIELDS = ['businessName', 'legalName', 'tagline', 'email', 'phone', 'website', 'address', 'taxRegistrationNumber', 'photoUrl', 'therapistBufferMinutes'];
 const LEGACY_BUSINESS_PROFILE_FIELDS = ['businessName', 'tagline', 'email', 'phone', 'website', 'address'];
 const DEFAULT_BUSINESS_PROFILE = {
   businessName: 'MY THAI THAI',
@@ -85,6 +85,7 @@ const DEFAULT_BUSINESS_PROFILE = {
   address: 'Ontario, Canada',
   taxRegistrationNumber: '',
   photoUrl: '',
+  therapistBufferMinutes: '15',
 };
 const BRANCH_FIELDS = ['ID', 'Name', 'Address', 'City', 'Phone', 'Active', 'Updated At', 'Collects Deposit', 'Allow Clinic Payment', 'Allow Deposit Payment', 'Allow Full Payment', 'Business Hours'];
 const DEFAULT_BRANCHES = [
@@ -1625,6 +1626,23 @@ function getTherapistFromDescription(description = '') {
   return description.match(/^Therapist:\s*(.+)$/m)?.[1]?.trim() || '';
 }
 
+function therapistAssignmentNames(value, roster = []) {
+  let remaining = String(value || '').trim();
+  if (!remaining) return [];
+  const names = [...new Set(roster.map((name) => String(name || '').trim()).filter(Boolean))]
+    .sort((left, right) => right.length - left.length);
+  const assigned = [];
+  while (remaining) {
+    const exactName = names.find((name) => name === remaining);
+    if (exactName) return [...assigned, exactName];
+    const match = names.find((name) => remaining.startsWith(`${name}, `));
+    if (!match) return [...assigned, ...remaining.split(',').map((name) => name.trim()).filter(Boolean)];
+    assigned.push(match);
+    remaining = remaining.slice(match.length + 2).trim();
+  }
+  return assigned;
+}
+
 function parseBookingFieldsFromDescription(description = '') {
   const field = (label) => description.match(new RegExp(`^${label}:\\s*(.+)$`, 'm'))?.[1]?.trim() || '';
   const paid = field('Paid').replace(/^\$/, '');
@@ -1681,6 +1699,15 @@ function shiftDate(dateString, days) {
 function hasTimeOverlap(startA, endA, startB, endB) {
   return new Date(startA).getTime() < new Date(endB).getTime() &&
     new Date(endA).getTime() > new Date(startB).getTime();
+}
+
+function hasTimeOverlapWithTherapistBuffer(startA, endA, startB, endB, bufferMinutes) {
+  const bufferMs = bufferMinutes * 60000;
+  const firstStart = new Date(startA).getTime();
+  const firstEnd = new Date(endA).getTime();
+  const secondStart = new Date(startB).getTime();
+  const secondEnd = new Date(endB).getTime();
+  return firstStart < secondEnd + bufferMs && firstEnd + bufferMs > secondStart;
 }
 
 async function findExistingPatientHistory(bigquery, sheets, payload) {
@@ -1890,46 +1917,33 @@ async function ensureBusinessProfileSheet(sheets) {
   }
   const header = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range: 'BusinessProfile!A1:I1',
+    range: 'BusinessProfile!A1:J1',
   });
   const headerRow = header.data.values?.[0] || [];
-  if (BUSINESS_PROFILE_FIELDS.some((field, index) => headerRow[index] !== field)) {
-    const isPreviousProfile = BUSINESS_PROFILE_FIELDS.slice(0, -1)
-      .every((field, index) => headerRow[index] === field);
-    const isLegacyProfile = LEGACY_BUSINESS_PROFILE_FIELDS.every(
-      (field, index) => headerRow[index] === field,
-    );
-    let migratedProfile;
-    if (isPreviousProfile) {
-      const previousValues = await sheets.spreadsheets.values.get({
-        spreadsheetId,
-        range: 'BusinessProfile!A2:H2',
-      });
-      const previousRow = previousValues.data.values?.[0] || [];
-      migratedProfile = BUSINESS_PROFILE_FIELDS.map((field, index) => (
-        index < BUSINESS_PROFILE_FIELDS.length - 1
-          ? previousRow[index] ?? DEFAULT_BUSINESS_PROFILE[field] ?? ''
-          : DEFAULT_BUSINESS_PROFILE[field]
-      ));
-    } else if (isLegacyProfile) {
-      const legacyValues = await sheets.spreadsheets.values.get({
-        spreadsheetId,
-        range: 'BusinessProfile!A2:F2',
-      });
-      const legacyRow = legacyValues.data.values?.[0] || [];
-      const legacyProfile = Object.fromEntries(LEGACY_BUSINESS_PROFILE_FIELDS.map((field, index) => [field, legacyRow[index] || '']));
-      migratedProfile = BUSINESS_PROFILE_FIELDS.map((field) => legacyProfile[field] || DEFAULT_BUSINESS_PROFILE[field] || '');
-    }
+  if (BUSINESS_PROFILE_FIELDS.some((field, index) => headerRow[index] !== field) || headerRow.length !== BUSINESS_PROFILE_FIELDS.length) {
+    const previousValues = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: 'BusinessProfile!A2:J2',
+    });
+    const previousRow = previousValues.data.values?.[0] || [];
+    const previousProfile = Object.fromEntries(headerRow.map((field, index) => [field, previousRow[index]]));
+    const hasKnownProfileHeader = [...LEGACY_BUSINESS_PROFILE_FIELDS, ...BUSINESS_PROFILE_FIELDS]
+      .some((field) => Object.hasOwn(previousProfile, field));
+    const migratedProfile = BUSINESS_PROFILE_FIELDS.map((field) => (
+      previousProfile[field] === undefined
+        ? DEFAULT_BUSINESS_PROFILE[field] ?? ''
+        : previousProfile[field]
+    ));
     await sheets.spreadsheets.values.update({
       spreadsheetId,
-      range: 'BusinessProfile!A1:I1',
+      range: 'BusinessProfile!A1:J1',
       valueInputOption: 'RAW',
       requestBody: { values: [BUSINESS_PROFILE_FIELDS] },
     });
-    if (migratedProfile) {
+    if (hasKnownProfileHeader || previousRow.some((value) => value !== undefined && value !== '')) {
       await sheets.spreadsheets.values.update({
         spreadsheetId,
-        range: 'BusinessProfile!A2:I2',
+        range: 'BusinessProfile!A2:J2',
         valueInputOption: 'RAW',
         requestBody: { values: [migratedProfile] },
       });
@@ -1941,13 +1955,21 @@ async function getBusinessProfile(sheets) {
   await ensureBusinessProfileSheet(sheets);
   const result = await sheets.spreadsheets.values.get({
     spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-    range: 'BusinessProfile!A1:I2',
+    range: 'BusinessProfile!A1:J2',
   });
   const row = result.data.values?.[1] || [];
   return Object.fromEntries(BUSINESS_PROFILE_FIELDS.map((field, index) => [
     field,
     row[index] === undefined ? DEFAULT_BUSINESS_PROFILE[field] : row[index],
   ]));
+}
+
+function therapistBufferMinutes(profile) {
+  const minutes = Number(profile?.therapistBufferMinutes ?? DEFAULT_BUSINESS_PROFILE.therapistBufferMinutes);
+  if (!Number.isInteger(minutes) || minutes < 0 || minutes > 120 || minutes % 15 !== 0) {
+    throw new Error('Configured therapist appointment gap must be from 0 to 120 minutes in 15-minute increments.');
+  }
+  return minutes;
 }
 
 // --- Therapist / business unavailability blocks ----------------------------
@@ -2022,8 +2044,8 @@ async function getUnavailabilityBlocks(sheets) {
 function blockOverlapsWindow(block, date, startInstant, endInstant) {
   if (block.date !== date) return false;
   if (!/^\d{2}:\d{2}$/.test(block.startTime) || !/^\d{2}:\d{2}$/.test(block.endTime)) return false;
-  const blockStart = `${block.date}T${block.startTime}:00-04:00`;
-  const blockEnd = `${block.date}T${block.endTime}:00-04:00`;
+  const blockStart = zonedBookingInstant(`${block.date}T${block.startTime}:00`, CALENDAR_TIME_ZONE);
+  const blockEnd = zonedBookingInstant(`${block.date}T${block.endTime}:00`, CALENDAR_TIME_ZONE);
   return hasTimeOverlap(startInstant, endInstant, blockStart, blockEnd);
 }
 
@@ -4119,11 +4141,17 @@ function validateBusinessProfile(input) {
     throw new Error('Business name is required and must be 100 characters or fewer');
   }
   for (const field of BUSINESS_PROFILE_FIELDS.slice(1)) {
+    if (field === 'therapistBufferMinutes') continue;
     const maxLength = field === 'photoUrl' ? 2048 : 250;
     if (profile[field].length > maxLength) {
       throw new Error(`${field} must be ${maxLength} characters or fewer`);
     }
   }
+  const therapistBufferMinutes = Number(profile.therapistBufferMinutes);
+  if (!Number.isInteger(therapistBufferMinutes) || therapistBufferMinutes < 0 || therapistBufferMinutes > 120 || therapistBufferMinutes % 15 !== 0) {
+    throw new Error('Therapist appointment gap must be from 0 to 120 minutes in 15-minute increments.');
+  }
+  profile.therapistBufferMinutes = String(therapistBufferMinutes);
   if (profile.email && !/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(profile.email)) {
     throw new Error('Enter a valid business email address');
   }
@@ -5419,13 +5447,15 @@ export default async function handler(req, res) {
           !Number.isInteger(durationMinutes) || durationMinutes <= 0 || durationMinutes > 600) {
         return res.status(400).json({ message: 'Choose a valid appointment date, branch and duration.' });
       }
-      const [branches, therapists, overrides, blocks, result] = await Promise.all([
+      const [branches, therapists, overrides, blocks, result, profile] = await Promise.all([
         getBranches(sheets),
         getTherapists(sheets),
         getStaffWorkScheduleRows(sheets),
         getUnavailabilityBlocks(sheets),
         bqFetchBookingRows(getBigQueryClient()),
+        getBusinessProfile(sheets),
       ]);
+      const appointmentGapMinutes = therapistBufferMinutes(profile);
       const branch = branches.find((item) => Number(item.id) === branchId && item.active !== false);
       if (!branch) return res.status(404).json({ message: 'Branch was not found or is inactive.' });
       const rows = result.data.values || [];
@@ -5483,15 +5513,21 @@ export default async function handler(req, res) {
         return Number.isInteger(hour) && Number.isInteger(minute) ? hour * 60 + minute : null;
       };
       const calendarBusyWindows = calendarEvents.filter((event) => event.status !== 'cancelled').map((event) => ({
-        names: getTherapistFromDescription(event.description).split(',').map((name) => name.trim()).filter(Boolean),
+        names: therapistAssignmentNames(getTherapistFromDescription(event.description), therapists.map((therapist) => therapist.name)),
         start: localMinutes(event.start?.dateTime),
         end: localMinutes(event.end?.dateTime),
         allDay: Boolean(event.start?.date),
       }));
       const therapistIdsByTime = Object.fromEntries(timeWindows.map(({ time, start }) => {
         const end = start + durationMinutes;
-        const windowStart = `${date}T${String(Math.floor(start / 60)).padStart(2, '0')}:${String(start % 60).padStart(2, '0')}:00-04:00`;
-        const windowEnd = `${date}T${String(Math.floor(end / 60)).padStart(2, '0')}:${String(end % 60).padStart(2, '0')}:00-04:00`;
+        const windowStart = zonedBookingInstant(
+          `${date}T${String(Math.floor(start / 60)).padStart(2, '0')}:${String(start % 60).padStart(2, '0')}:00`,
+          CALENDAR_TIME_ZONE,
+        );
+        const windowEnd = zonedBookingInstant(
+          `${date}T${String(Math.floor(end / 60)).padStart(2, '0')}:${String(end % 60).padStart(2, '0')}:00`,
+          CALENDAR_TIME_ZONE,
+        );
         const unavailability = blocks.filter((block) => blockOverlapsWindow(block, date, windowStart, windowEnd) &&
           ((block.scope === 'business' && (!block.branchName || block.branchName === branch.name)) || block.scope === 'therapist'));
         const busyNames = new Set(unavailability.filter((block) => block.scope === 'therapist').map((block) => block.therapistName));
@@ -5499,12 +5535,13 @@ export default async function handler(req, res) {
           if (row[0] === excludeBookingId || row[7] !== date || ['Cancelled', 'No Show'].includes(String(row[24] || ''))) return;
           const bookingStart = appointmentTimeMinutes(normalizeBookingTime(row[8] || ''));
           const bookingEnd = bookingStart + (Number(row[12]) || 60);
-          if (intervalsOverlap(start, end, bookingStart, bookingEnd)) {
-            String(row[6] || '').split(',').map((name) => name.trim()).filter(Boolean).forEach((name) => busyNames.add(name));
+          if (intervalsOverlap(start, end + appointmentGapMinutes, bookingStart, bookingEnd + appointmentGapMinutes)) {
+            therapistAssignmentNames(row[6], therapists.map((therapist) => therapist.name)).forEach((name) => busyNames.add(name));
           }
         });
         calendarBusyWindows.forEach(({ names, start: eventStart, end: eventEnd, allDay }) => {
-          if (allDay || eventStart === null || eventEnd === null || intervalsOverlap(start, end, eventStart, eventEnd)) {
+          if (allDay || eventStart === null || eventEnd === null ||
+              intervalsOverlap(start, end + appointmentGapMinutes, eventStart, eventEnd + appointmentGapMinutes)) {
             names.forEach((name) => busyNames.add(name));
           }
         });
@@ -7315,7 +7352,8 @@ export default async function handler(req, res) {
         .sort((first, second) => second.createdAt.localeCompare(first.createdAt));
       const therapistBookings = bookings.filter((row) => {
         const assignedTherapists = String(row[6] || '').trim();
-        return assignedTherapists === account.name || assignedTherapists.split(',').map((name) => name.trim()).includes(account.name);
+        return assignedTherapists === account.name ||
+          therapistAssignmentNames(assignedTherapists, [...roster.map((therapist) => therapist.name), account.name]).includes(account.name);
       });
       const upcoming = therapistBookings.filter((row) => row[7] >= new Date().toISOString().slice(0, 10))
         .sort((first, second) => `${first[7]} ${first[8]}`.localeCompare(`${second[7]} ${second[8]}`))
@@ -7464,7 +7502,7 @@ export default async function handler(req, res) {
         await ensureBusinessProfileSheet(sheets);
         const result = await sheets.spreadsheets.values.get({
           spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-          range: 'BusinessProfile!A1:I2',
+          range: 'BusinessProfile!A1:J2',
         });
         const row = result.data.values?.[1] || [];
         const profile = Object.fromEntries(BUSINESS_PROFILE_FIELDS.map((field, index) => [
@@ -7903,6 +7941,7 @@ export default async function handler(req, res) {
               (block.scope === 'therapist' && therapistNames.includes(block.therapistName)));
         });
         if (blocked) return res.status(409).json({ message: 'This time is unavailable. Choose another date, time or therapist.' });
+        const appointmentGapMinutes = therapistBufferMinutes(await getBusinessProfile(sheets));
         const dayEvents = [];
         for (const checkedCalendarId of new Set([calendarId, PRIMARY_CALENDAR_ID, ...(result.data.values || []).map((candidate) => candidate[15]).filter(Boolean)])) {
           let pageToken;
@@ -7916,17 +7955,21 @@ export default async function handler(req, res) {
           } while (pageToken);
         }
         const conflict = dayEvents.some((event) => event.status !== 'cancelled' &&
-          hasTimeOverlap(startInstant, endInstant, event.start?.dateTime || event.start?.date, event.end?.dateTime || event.end?.date) &&
+          hasTimeOverlapWithTherapistBuffer(startInstant, endInstant,
+            event.start?.dateTime || event.start?.date, event.end?.dateTime || event.end?.date, appointmentGapMinutes) &&
           therapistNames.some((name) => {
             const assigned = getTherapistFromDescription(event.description);
-            return assigned === name || assigned.split(',').map((item) => item.trim()).includes(name);
+            return therapistAssignmentNames(assigned, therapists.map((therapist) => therapist.name)).includes(name);
           }));
         const databaseConflict = (result.data.values || []).some((candidate) => candidate[0] !== bookingId && candidate[7] === edited.date &&
-          !['Cancelled', 'No Show'].includes(candidate[24]) && therapistNames.some((name) => candidate[6] === name ||
-            String(candidate[6] || '').split(',').map((item) => item.trim()).includes(name)) &&
-          hasTimeOverlap(startInstant, endInstant, zonedBookingInstant(parseBookingDateTime(candidate[7], candidate[8]), CALENDAR_TIME_ZONE),
-            zonedBookingInstant(addMinutes(parseBookingDateTime(candidate[7], candidate[8]), Number(candidate[12]) || 60), CALENDAR_TIME_ZONE)));
-        if (conflict || databaseConflict) return res.status(409).json({ message: 'The selected therapist already has an appointment at this time.' });
+          !['Cancelled', 'No Show'].includes(candidate[24]) && therapistNames.some((name) =>
+            therapistAssignmentNames(candidate[6], therapists.map((therapist) => therapist.name)).includes(name)) &&
+          hasTimeOverlapWithTherapistBuffer(startInstant, endInstant,
+            zonedBookingInstant(parseBookingDateTime(candidate[7], candidate[8]), CALENDAR_TIME_ZONE),
+            zonedBookingInstant(addMinutes(parseBookingDateTime(candidate[7], candidate[8]), Number(candidate[12]) || 60), CALENDAR_TIME_ZONE),
+            appointmentGapMinutes));
+        if (conflict) return res.status(409).json({ message: 'The selected therapist already has a Calendar appointment at or near this time.' });
+        if (databaseConflict) return res.status(409).json({ message: 'The selected therapist already has a booking at or near this time.' });
       }
       if (!locked && (Number(req.body.manualDiscount) > 0 || bookingDiscount(row)?.manualDiscount > 0)) {
         await ensureLoyaltyTables();
@@ -8756,6 +8799,52 @@ export default async function handler(req, res) {
       const calendarEventId = row[16] || '';
       const originalDate = row[7] || '';
       const originalTime = row[8] || '';
+      const rescheduleTherapistRoster = row[6] && row[6] !== 'Any Available' ? await getTherapists(sheets) : [];
+      const rescheduleTherapistNames = rescheduleTherapistRoster.map((therapist) => therapist.name);
+      const therapistNames = therapistAssignmentNames(row[6], rescheduleTherapistNames)
+        .filter((name) => name && name !== 'Any Available');
+      if (therapistNames.length) {
+        const gapMinutes = therapistBufferMinutes(await getBusinessProfile(sheets));
+        const candidateStart = appointmentTimeMinutes(normalizedTime);
+        const candidateEnd = candidateStart + durationMinutes;
+        const hasBookingConflict = rows.slice(startIndex).some((candidate) => {
+          if (String(candidate[0] || '') === bookingId || candidate[7] !== newDate ||
+              ['Cancelled', 'No Show'].includes(String(candidate[24] || ''))) return false;
+          const assignedNames = therapistAssignmentNames(candidate[6], rescheduleTherapistNames);
+          if (!therapistNames.some((name) => assignedNames.includes(name))) return false;
+          const existingStart = appointmentTimeMinutes(normalizeBookingTime(candidate[8] || ''));
+          const existingEnd = existingStart + (Number(candidate[12]) || 60);
+          return intervalsOverlap(candidateStart, candidateEnd + gapMinutes, existingStart, existingEnd + gapMinutes);
+        });
+        if (hasBookingConflict) {
+          return res.status(409).json({ message: 'The therapist already has another booking at that time or during the required appointment gap.' });
+        }
+        try {
+          const dayEvents = await calendarApi.events.list({
+            calendarId,
+            timeMin: `${newDate}T00:00:00Z`,
+            timeMax: `${newDate}T23:59:59Z`,
+            singleEvents: true,
+          });
+          const candidateStartInstant = zonedBookingInstant(newStartDateTime, CALENDAR_TIME_ZONE);
+          const candidateEndInstant = zonedBookingInstant(newEndDateTime, CALENDAR_TIME_ZONE);
+          const calendarConflict = (dayEvents.data.items || []).some((event) => {
+            if (event.id === calendarEventId || event.status === 'cancelled') return false;
+            const assignedNames = therapistAssignmentNames(getTherapistFromDescription(event.description), rescheduleTherapistNames);
+            const eventStart = event.start?.dateTime || event.start?.date || '';
+            const eventEnd = event.end?.dateTime || event.end?.date || '';
+            return therapistNames.some((name) => assignedNames.includes(name)) &&
+              eventStart && eventEnd &&
+              hasTimeOverlapWithTherapistBuffer(candidateStartInstant, candidateEndInstant, eventStart, eventEnd, gapMinutes);
+          });
+          if (calendarConflict) {
+            return res.status(409).json({ message: 'The therapist already has another Calendar event at that time or during the required appointment gap.' });
+          }
+        } catch (error) {
+          console.error('Reschedule therapist availability lookup error:', error.message || error);
+          return res.status(502).json({ message: 'Therapist availability could not be checked right now. Please try again.' });
+        }
+      }
       if (calendarEventId) {
         try {
           await calendarApi.events.patch({
@@ -8839,13 +8928,15 @@ export default async function handler(req, res) {
       }
       const durationMinutes = Number(row[12]) || 60;
       const endDateTime = addMinutes(startDateTime, durationMinutes);
-      const startInstant = `${startDateTime}-04:00`;
-      const endInstant = `${endDateTime}-04:00`;
+      const startInstant = zonedBookingInstant(startDateTime, CALENDAR_TIME_ZONE);
+      const endInstant = zonedBookingInstant(endDateTime, CALENDAR_TIME_ZONE);
+      const appointmentGapMinutes = therapistBufferMinutes(await getBusinessProfile(sheets));
       const isCompletedAppointment = row[24] === 'Completed' ||
         isAppointmentCompleteByTime(date, time, durationMinutes);
       // "Any Available" is a placeholder rather than a real person, so it is never
       // treated as busy and never checked against time off.
-      const assignedNames = therapistName.split(',').map((name) => name.trim()).filter(Boolean);
+      const assignmentRoster = therapistName === 'Any Available' ? [] : await getTherapists(sheets);
+      const assignedNames = therapistAssignmentNames(therapistName, assignmentRoster.map((therapist) => therapist.name));
       const realNames = assignedNames.filter((name) => name !== 'Any Available');
       const calendarId = row[15] || PRIMARY_CALENDAR_ID;
       const calendarEventId = row[16] || '';
@@ -8858,9 +8949,10 @@ export default async function handler(req, res) {
       }
 
       if (realNames.length) {
-        const [services, therapists, overrides] = await Promise.all([
-          getServices(sheets), getTherapists(sheets), getStaffWorkScheduleRows(sheets),
+        const [services, overrides] = await Promise.all([
+          getServices(sheets), getStaffWorkScheduleRows(sheets),
         ]);
+        const therapists = assignmentRoster;
         const service = services.find((item) => item.name === row[5]);
         const startTime = time24FromMinutes(appointmentTimeMinutes(normalizeBookingTime(time)));
         if (!service || realNames.some((name) => {
@@ -8873,6 +8965,23 @@ export default async function handler(req, res) {
           return res.status(409).json({ message: 'The selected therapist is not scheduled or qualified for this appointment.' });
         }
         if (!isCompletedAppointment) {
+          const databaseConflict = rows.slice(startIndex).some((candidate) => {
+            if (String(candidate[0] || '') === bookingId || candidate[7] !== date ||
+                ['Cancelled', 'No Show'].includes(String(candidate[24] || ''))) return false;
+            const candidateNames = therapistAssignmentNames(candidate[6], therapists.map((therapist) => therapist.name));
+            if (!realNames.some((name) => candidateNames.includes(name))) return false;
+            const candidateStart = parseBookingDateTime(candidate[7], candidate[8]);
+            return hasTimeOverlapWithTherapistBuffer(
+              startInstant,
+              endInstant,
+              zonedBookingInstant(candidateStart, CALENDAR_TIME_ZONE),
+              zonedBookingInstant(addMinutes(candidateStart, Number(candidate[12]) || 60), CALENDAR_TIME_ZONE),
+              appointmentGapMinutes,
+            );
+          });
+          if (databaseConflict) {
+            return res.status(409).json({ message: 'The selected therapist already has another appointment at or near this time. Choose another therapist.' });
+          }
           const unavailabilityBlocks = await getUnavailabilityBlocks(sheets);
           const blockedName = realNames.find((name) => unavailabilityBlocks.some((block) =>
             block.scope === 'therapist' &&
@@ -8896,9 +9005,12 @@ export default async function handler(req, res) {
               .filter((event) => {
                 const eventStart = event.start?.dateTime || event.start?.date || '';
                 const eventEnd = event.end?.dateTime || event.end?.date || '';
-                return eventStart && eventEnd && hasTimeOverlap(startInstant, endInstant, eventStart, eventEnd);
+                return eventStart && eventEnd &&
+                  hasTimeOverlapWithTherapistBuffer(startInstant, endInstant, eventStart, eventEnd, appointmentGapMinutes);
               })
-              .flatMap((event) => getTherapistFromDescription(event.description).split(',').map((name) => name.trim()).filter(Boolean)));
+              .flatMap((event) => therapistAssignmentNames(
+                getTherapistFromDescription(event.description), therapists.map((therapist) => therapist.name),
+              )));
             const busyName = realNames.find((name) => busyNames.has(name));
             if (busyName) {
               return res.status(409).json({ message: `${busyName} already has another appointment at this time. Choose another therapist.` });
@@ -8977,7 +9089,7 @@ export default async function handler(req, res) {
       await ensureBusinessProfileSheet(sheets);
       await sheets.spreadsheets.values.update({
         spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-        range: 'BusinessProfile!A2:I2',
+        range: 'BusinessProfile!A2:J2',
         valueInputOption: 'RAW',
         requestBody: { values: [BUSINESS_PROFILE_FIELDS.map((field) => profile[field])] },
       });
@@ -9188,8 +9300,9 @@ export default async function handler(req, res) {
     const startDateTime = parseBookingDateTime(payload.date, payload.time);
     const durationMinutes = Number(payload.durationMinutes) || 60;
     const endDateTime = addMinutes(startDateTime, durationMinutes);
-    const startInstant = `${startDateTime}-04:00`;
-    const endInstant = `${endDateTime}-04:00`;
+    const startInstant = zonedBookingInstant(startDateTime, CALENDAR_TIME_ZONE);
+    const endInstant = zonedBookingInstant(endDateTime, CALENDAR_TIME_ZONE);
+    const appointmentGapMinutes = therapistBufferMinutes(await getBusinessProfile(sheets));
 
     const unavailabilityBlocks = await getUnavailabilityBlocks(sheets);
     const overlappingBlocks = unavailabilityBlocks.filter((block) => blockOverlapsWindow(block, payload.date, startInstant, endInstant));
@@ -9211,15 +9324,33 @@ export default async function handler(req, res) {
       timeMax: `${payload.date}T23:59:59Z`,
       singleEvents: true,
     });
+    const bookingRows = (await bqFetchBookingRows(getBigQueryClient())).data.values || [];
+    const bookingStartIndex = bookingRows[0]?.[0] === 'Booking ID' ? 1 : 0;
     const busyTherapists = new Set([
       ...blockedTherapistNames,
+      ...bookingRows.slice(bookingStartIndex).filter((row) => {
+        if (row[7] !== payload.date || ['Cancelled', 'No Show'].includes(String(row[24] || ''))) return false;
+        try {
+          const existingStart = appointmentTimeMinutes(normalizeBookingTime(row[8] || ''));
+          const existingEnd = existingStart + (Number(row[12]) || 60);
+          return intervalsOverlap(
+            appointmentTimeMinutes(payload.time),
+            appointmentTimeMinutes(payload.time) + durationMinutes + appointmentGapMinutes,
+            existingStart,
+            existingEnd + appointmentGapMinutes,
+          );
+        } catch {
+          return false;
+        }
+      }).flatMap((row) => therapistAssignmentNames(row[6], payload.therapistCandidates || [])),
       ...(dayEvents.data.items || [])
         .filter((event) => {
           const eventStart = event.start?.dateTime || event.start?.date || '';
           const eventEnd = event.end?.dateTime || event.end?.date || '';
-          return eventStart && eventEnd && hasTimeOverlap(startInstant, endInstant, eventStart, eventEnd);
+          return eventStart && eventEnd &&
+            hasTimeOverlapWithTherapistBuffer(startInstant, endInstant, eventStart, eventEnd, appointmentGapMinutes);
         })
-        .flatMap((event) => getTherapistFromDescription(event.description).split(',').map((name) => name.trim()).filter(Boolean)),
+        .flatMap((event) => therapistAssignmentNames(getTherapistFromDescription(event.description), payload.therapistCandidates || [])),
     ]);
     const candidates = Array.isArray(payload.therapistCandidates) ? payload.therapistCandidates : [];
     const availableCandidates = candidates.filter((name) => !busyTherapists.has(name));

@@ -77,7 +77,12 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
           if (range === 'StaffWorkSchedule!A:H') return { data: { values: scheduleRows } };
           if (range === 'Services!A2:K') return { data: { values: serviceRows } };
           if (range === 'Therapists!A2:J') return { data: { values: therapistRows } };
-          if (range === 'BusinessProfile!A1:I1' || range === 'BusinessProfile!A1:I2') return { data: { values: [['businessName', 'legalName', 'tagline', 'email', 'phone', 'website', 'address', 'taxRegistrationNumber', 'photoUrl'], ['Test Clinic']] } };
+          if (range === 'BusinessProfile!A1:J1') return { data: { values: [['businessName', 'legalName', 'tagline', 'email', 'phone', 'website', 'address', 'taxRegistrationNumber', 'photoUrl', 'therapistBufferMinutes']] } };
+          if (range === 'BusinessProfile!A2:J2') return { data: { values: [['Test Clinic', '', '', '', '', '', '', '', '', '15']] } };
+          if (range === 'BusinessProfile!A1:J2') return { data: { values: [
+            ['businessName', 'legalName', 'tagline', 'email', 'phone', 'website', 'address', 'taxRegistrationNumber', 'photoUrl', 'therapistBufferMinutes'],
+            ['Test Clinic', '', '', '', '', '', '', '', '', '15'],
+          ] } };
           throw new Error(`Unexpected sheets read: ${range}`);
         },
         update: async ({ range, requestBody }) => {
@@ -256,8 +261,8 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   assert.equal((await request('reschedule-booking', { bookingId: 'MTT-test', email: base.email, date: base.date, time: '09:30 AM' })).code, 404);
   assert.equal(events.length, 0);
   assert.equal((await request('', { ...base, skipPatientHistory: false, patientHistory: {} })).code, 400);
-  for (const [option, amount] of [['clinic', 0], ['deposit', 10], ['full', 113]]) {
-    const result = await request('', { ...base, id: `MTT-${option}`, paymentOption: option, paidAmount: '999' });
+  for (const [option, amount, time] of [['clinic', 0, '10:00 AM'], ['deposit', 10, '11:15 AM'], ['full', 113, '12:30 PM']]) {
+    const result = await request('', { ...base, id: `MTT-${option}`, time, paymentOption: option, paidAmount: '999' });
     assert.equal(result.code, 200, JSON.stringify(result.data));
     assert.equal(result.data.patientHistorySkipped, true);
     assert.equal(result.data.patientHistorySaved, false);
@@ -384,7 +389,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   branchRows[0][7] = 'TRUE';
   assert.equal((await request('', base)).code, 400, 'Customers cannot bypass a disabled clinic choice');
   failHistoryWrite = false;
-  const complete = await request('', { ...base, id: 'MTT-complete', paymentOption: 'deposit', skipPatientHistory: false, patientHistory: history, subtotalAmount: '5', taxRate: 0 });
+  const complete = await request('', { ...base, id: 'MTT-complete', time: '01:45 PM', paymentOption: 'deposit', skipPatientHistory: false, patientHistory: history, subtotalAmount: '5', taxRate: 0 });
   assert.equal(complete.code, 200, JSON.stringify(complete.data));
   assert.equal(complete.data.patientHistorySkipped, false);
   assert.equal(complete.data.patientHistorySaved, true);
@@ -434,6 +439,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   const reused = await request('', {
     ...base,
     id: 'MTT-reused',
+    time: '03:00 PM',
     paymentOption: 'deposit',
     skipPatientHistory: false,
     patientHistory: { reuseExisting: true },
@@ -501,6 +507,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   assert.equal((await request('dashboard-users', null, { method: 'GET' })).code, 403);
 
   const receptionistCookie = cookie;
+  records.length = 0;
   const manual = {
     customerName: '  Walk-in Client  ', contact: '+1 (437) 898-7424',
     branchId: '1', serviceId: '1', therapistId: '1', date: '2026-11-01', time: '10:00 AM',
@@ -546,7 +553,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
     business_hours: JSON.stringify(defaultBusinessHours()),
   });
   assert.equal((await request('manual-booking', { ...manual, branchId: '2' })).code, 403);
-  busyEvents = [{ start: { dateTime: '2026-11-01T10:00:00-04:00' }, end: { dateTime: '2026-11-01T11:00:00-04:00' }, description: 'Therapist: Test Therapist' }];
+  busyEvents = [{ start: { dateTime: '2026-11-01T10:00:00-05:00' }, end: { dateTime: '2026-11-01T11:00:00-05:00' }, description: 'Therapist: Test Therapist' }];
   const busyBooking = await request('manual-booking', manual);
   assert.equal(busyBooking.code, 409, JSON.stringify(busyBooking.data));
   busyEvents = [];
@@ -574,7 +581,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   assert.doesNotMatch(events.at(-1).requestBody.description, /Internal team reference/);
   assert.equal(histories.length, historyCount);
   assert.equal(emails.length, emailCount, 'Phone-only bookings do not attempt email delivery');
-  const emailBooking = await request('manual-booking', { ...manual, contact: 'Client@Example.com', email: 'client@example.com', phone: manual.contact, serviceId: '2', therapistId2: '2' });
+  const emailBooking = await request('manual-booking', { ...manual, contact: 'Client@Example.com', email: 'client@example.com', phone: manual.contact, serviceId: '2', therapistId2: '2', time: '11:15 AM' });
   assert.equal(emailBooking.code, 200, JSON.stringify(emailBooking.data));
   assert.equal(emailBooking.data.emailSkipped, false);
   assert.equal(emailBooking.data.emailSent, true);
@@ -620,11 +627,11 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   assert.equal(histories.length, historyCount);
   assert.equal(events.length, eventCount + 2);
   cookie = managerCookie;
-  assert.equal((await request('manual-booking', { ...manual, time: '11:00 AM' })).code, 200, 'Managers can book their assigned branch');
+  assert.equal((await request('manual-booking', { ...manual, time: '12:30 PM' })).code, 200, 'Managers can book their assigned branch');
   cookie = ownerCookie;
   t.mock.method(google, 'gmail', () => ({ users: { messages: { send: async () => { throw new Error('Synthetic confirmation delivery failure'); } } } }));
   const recordsBeforeEmailFailure = records.length;
-  const savedWithoutEmail = await request('manual-booking', { ...manual, contact: 'owner-client@example.com', time: '12:00 PM' });
+  const savedWithoutEmail = await request('manual-booking', { ...manual, contact: 'owner-client@example.com', time: '01:45 PM' });
   assert.equal(savedWithoutEmail.code, 200, JSON.stringify(savedWithoutEmail.data));
   assert.equal(savedWithoutEmail.data.emailSent, false);
   assert.equal(savedWithoutEmail.data.emailSkipped, false);
@@ -722,7 +729,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
     ...editBody(),
     bookingId: notificationRecord.booking_id,
     expectedVersion: bookingEditVersion(BOOKING_TABLE_FIELDS.map((field) => notificationRecord[field.name])),
-    time: '02:00 PM',
+    time: '03:00 PM',
     notifyClient: true,
   });
   assert.equal(notificationEdit.code, 200, JSON.stringify(notificationEdit.data));
@@ -735,13 +742,13 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
     ...editBody(),
     bookingId: failedNotificationRecord.booking_id,
     expectedVersion: bookingEditVersion(BOOKING_TABLE_FIELDS.map((field) => failedNotificationRecord[field.name])),
-    time: '03:00 PM',
+    time: '05:45 PM',
     notifyClient: true,
   });
-  assert.equal(failedNotification.code, 200);
+  assert.equal(failedNotification.code, 200, JSON.stringify(failedNotification.data));
   assert.equal(failedNotification.data.emailSent, false);
   assert.match(failedNotification.data.emailError, /Synthetic notification email failure/);
-  assert.equal(failedNotificationRecord.time, '03:00 PM', 'Email failure does not roll back the saved booking');
+  assert.equal(failedNotificationRecord.time, '05:45 PM', 'Email failure does not roll back the saved booking');
   t.mock.method(google, 'gmail', () => ({ users: { messages: { send: async (email) => { emails.push(email); return { data: { id: 'retry-email' } }; } } } }));
   const savedEdit = await request('edit-booking', stale);
   assert.equal(savedEdit.code, 200, JSON.stringify(savedEdit.data));
@@ -933,19 +940,45 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   scheduleRows.push([1, '2026-11-01', 1, 'TRUE', '08:00', '22:00', 'owner@example.com', 'test']);
   const morningAvailability = await request('available-therapists', null, {
     method: 'GET',
-    query: { date: '2026-11-01', branchId: '1', time: '09:00 AM', durationMinutes: '60', isRmt: 'false' },
+    query: { date: '2026-11-01', branchId: '1', time: '08:00 AM', durationMinutes: '60', isRmt: 'false' },
   });
   assert.equal(morningAvailability.code, 200, JSON.stringify(morningAvailability.data));
   assert.deepEqual(morningAvailability.data.therapistIds, [1], 'Date-specific shifts filter exact appointment availability');
-  blockRows.push(['closed-window', 'business', 'Test Branch', '', '2026-11-01', '09:00', '10:00', 'Temporary closure']);
+  scheduleRows.push([2, '2026-11-01', 1, 'TRUE', '08:00', '22:00', 'owner@example.com', 'test']);
+  blockRows.push(['closed-window', 'business', 'Test Branch', '', '2026-11-01', '08:00', '09:00', 'Temporary closure']);
   const slotAvailability = await request('available-therapists', null, {
     method: 'GET',
-    query: { date: '2026-11-01', branchId: '1', times: JSON.stringify(['09:00 AM', '01:00 PM']), durationMinutes: '60', isRmt: 'false' },
+    query: { date: '2026-11-01', branchId: '1', times: JSON.stringify(['08:00 AM', '07:00 PM']), durationMinutes: '60', isRmt: 'false' },
   });
   assert.equal(slotAvailability.code, 200, JSON.stringify(slotAvailability.data));
-  assert.deepEqual(slotAvailability.data.therapistIdsByTime['09:00 AM'], [], 'Closed slots have no available therapists');
-  assert.ok(slotAvailability.data.therapistIdsByTime['01:00 PM'].includes(1), 'Availability is calculated separately for each slot');
+  assert.deepEqual(slotAvailability.data.therapistIdsByTime['08:00 AM'], [], 'Closed slots have no available therapists');
+  assert.ok(slotAvailability.data.therapistIdsByTime['07:00 PM'].includes(1), 'Availability is calculated separately for each slot');
   blockRows.pop();
+  therapistRows.push([5, 'Comma Name, RMT', '', 5, 'TRUE', 'TRUE', '1', '{}', 'TRUE']);
+  busyEvents = [{
+    id: 'comma-name-busy',
+    description: 'Therapist: Comma Name, RMT',
+    start: { dateTime: '2026-11-01T14:00:00-05:00' },
+    end: { dateTime: '2026-11-01T15:00:00-05:00' },
+  }];
+  const commaNameAvailability = await request('available-therapists', null, {
+    method: 'GET',
+    query: { date: '2026-11-01', branchId: '1', time: '02:15 PM', durationMinutes: '60', isRmt: 'true' },
+  });
+  assert.equal(commaNameAvailability.code, 200, JSON.stringify(commaNameAvailability.data));
+  assert.ok(!commaNameAvailability.data.therapistIds.includes(5),
+    'Calendar events must block RMT therapists whose names contain commas');
+  busyEvents = [];
+  therapistRows.pop();
+  const gapBoundaryAvailability = await request('available-therapists', null, {
+    method: 'GET',
+    query: { date: '2026-11-01', branchId: '1', times: JSON.stringify(['06:45 PM', '07:00 PM']), durationMinutes: '60', isRmt: 'false' },
+  });
+  assert.equal(gapBoundaryAvailability.code, 200, JSON.stringify(gapBoundaryAvailability.data));
+  assert.ok(!gapBoundaryAvailability.data.therapistIdsByTime['06:45 PM'].includes(1),
+    'The therapist finishing at 6:45 remains unavailable during the configured gap');
+  assert.ok(gapBoundaryAvailability.data.therapistIdsByTime['07:00 PM'].includes(1),
+    'A new appointment is allowed exactly 15 minutes after the previous appointment ends');
   const beforeHoursBookings = events.length;
   for (const change of [
     { time: '07:45 AM' }, { time: '09:15 PM' }, { date: '2026-11-02' },
@@ -955,18 +988,18 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
     assert.equal(result.code, 400, JSON.stringify(result.data));
   }
   assert.equal(events.length, beforeHoursBookings, 'Out-of-hours requests do not create Calendar events');
-  assert.equal((await request('manual-booking', { ...manual, time: '08:00 AM' })).code, 200,
+  assert.equal((await request('manual-booking', { ...manual, therapistId: '2', time: '08:00 AM' })).code, 200,
     'Earlier branch hours are available to quick appointments');
   assert.equal((await request('manual-booking', { ...manual, time: '09:00 PM' })).code, 200,
     'A one-hour appointment can start exactly one hour before a later closing');
-  const flexibleEdit = await request('edit-booking', { ...editBody(), date: base.date, time: '09:00 AM' });
+  const flexibleEdit = await request('edit-booking', { ...editBody(), date: base.date, time: '08:45 AM' });
   assert.equal(flexibleEdit.code, 200, JSON.stringify(flexibleEdit.data));
   for (const time of ['07:45 AM', '09:15 PM']) {
     assert.equal((await request('edit-booking', { ...editBody(), time })).code, 400);
     assert.equal((await request('reschedule-booking', { bookingId: editable.booking_id, email: editable.email, date: base.date, time })).code, 400);
   }
   assert.equal((await request('reschedule-booking', {
-    bookingId: editable.booking_id, email: editable.email, date: base.date, time: '08:00 PM',
+    bookingId: editable.booking_id, email: editable.email, date: base.date, time: '07:30 PM',
   })).code, 200);
   hours.sun.closed = true;
   branchRows[0][11] = JSON.stringify(hours);

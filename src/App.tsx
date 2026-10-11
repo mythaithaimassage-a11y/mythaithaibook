@@ -29,7 +29,7 @@ import { anatomicalBodyParts } from '../lib/body-map.js';
 import { portalEntry } from '../lib/portal-entry.js';
 import { bookingTaxTreatment } from '../lib/booking-tax.js';
 import { isTherapistScheduledAtBranch } from '../lib/work-schedule.js';
-import useTherapistAvailability, { useBookingSlotAvailability } from './useTherapistAvailability';
+import useTherapistAvailability, { useBookingSlotAvailability, useNextAvailableBookingSlot } from './useTherapistAvailability';
 import WorkSchedule from './WorkSchedule';
 import TodayWorkSchedule from './TodayWorkSchedule';
 
@@ -118,6 +118,7 @@ const DEFAULT_BUSINESS_PROFILE = {
   address: 'Ontario, Canada',
   taxRegistrationNumber: '',
   photoUrl: '',
+  therapistBufferMinutes: '15',
 };
 
 function useBusinessBranding() {
@@ -175,6 +176,22 @@ function BusinessPhoto({ businessName, photoUrl, className }) {
 function getTherapistCalendarColor(therapistName, therapists) {
   const index = therapists.findIndex((therapist) => therapist.name === therapistName);
   return THERAPIST_CALENDAR_COLORS[(index < 0 ? 0 : index) % THERAPIST_CALENDAR_COLORS.length];
+}
+
+function getAssignedTherapistNames(value, therapists) {
+  let remaining = String(value || '').trim();
+  const names = [...new Set(therapists.map((therapist) => String(therapist.name || '').trim()).filter(Boolean))]
+    .sort((left, right) => right.length - left.length);
+  const assigned = [];
+  while (remaining) {
+    const exactName = names.find((name) => name === remaining);
+    if (exactName) return [...assigned, exactName];
+    const match = names.find((name) => remaining.startsWith(`${name}, `));
+    if (!match) return [...assigned, ...remaining.split(',').map((name) => name.trim()).filter(Boolean)];
+    assigned.push(match);
+    remaining = remaining.slice(match.length + 2).trim();
+  }
+  return assigned;
 }
 
 const TRANSLATIONS = {
@@ -2402,6 +2419,7 @@ function AdminGate({ children }) {
 
 function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNewBooking, staffBooking = false }) {
   const [step, setStep] = useState(1);
+  const [nextSlotProceedPending, setNextSlotProceedPending] = useState(false);
   // Confirmation emails link to ?manage=1&ref=MTT-XXXXXX so customers land straight
   // on the cancel/reschedule form with their reference already filled in.
   const [manageDeepLink] = useState(() => {
@@ -2411,6 +2429,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
   });
   const [portalMode, setPortalMode] = useState(manageDeepLink.history ? 'history' : manageDeepLink.open ? 'manage' : 'book');
   const { businessName, photoUrl, error: brandingError } = useBusinessBranding();
+  const { translate: tr, locale } = useTranslation();
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [sheetsSyncStatus, setSheetsSyncStatus] = useState(null);
@@ -2563,6 +2582,16 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
   );
   const selectableAppointmentTimes = appointmentTimes.filter((time) =>
     (availableTherapistIdsByTime[time]?.length || 0) >= (isCoupleService ? 2 : 1));
+  const nextAvailableSlot = useNextAvailableBookingSlot({
+    branch: bookingData.branch,
+    date: bookingData.date,
+    durationMinutes: requestedDurationMinutes,
+    isRmt: Boolean(bookingData.service?.isRmt),
+    therapistCount: isCoupleService ? 2 : 1,
+    enabled: portalMode === 'book' && step === 2 && Boolean(bookingData.service) &&
+      !slotAvailability.loading && !slotAvailability.error && selectableAppointmentTimes.length === 0,
+    therapists,
+  });
   const selectedTherapistIds = availableTherapistIdsByTime[bookingData.time] || [];
   const therapistAvailability = {
     loading: slotAvailability.loading,
@@ -2661,6 +2690,11 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
 
   const paymentOptions = branchPaymentOptions(bookingData.branch);
   const validBookingTime = selectableAppointmentTimes.includes(bookingData.time);
+  useEffect(() => {
+    if (!nextSlotProceedPending || therapistAvailability.loading) return;
+    setNextSlotProceedPending(false);
+    if (!therapistAvailability.error && validBookingTime) setStep(3);
+  }, [nextSlotProceedPending, therapistAvailability.loading, therapistAvailability.error, validBookingTime]);
   useEffect(() => {
     if (!therapistAvailability.loading && !therapistAvailability.error && bookingData.time && !validBookingTime) {
       setBookingData((prev) => ({ ...prev, time: null }));
@@ -3122,11 +3156,49 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
               {appointmentTimes.length === 0 && <p role="alert" className="mt-3 text-sm text-amber-800">No appointment times fit the business hours for this branch, date and service.</p>}
               {!slotAvailability.loading && !slotAvailability.error && appointmentTimes.length > 0 && selectableAppointmentTimes.length === 0 && (
                 <p role="status" className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                  <strong className="block">No available slots</strong>
+                  <strong className="block">{tr('No available slots')}</strong>
                   {isCoupleService
-                    ? 'No two therapists are available together for this date and service. Choose another date or service.'
-                    : 'No therapist is available for this date and service. Choose another date or service.'}
+                    ? tr('No two therapists are available together for this date and service. Choose another date or service.')
+                    : tr('No therapist is available for this date and service. Choose another date or service.')}
                 </p>
+              )}
+              {!slotAvailability.loading && !slotAvailability.error && selectableAppointmentTimes.length === 0 && (
+                <div className="mt-3">
+                  {nextAvailableSlot.loading && <p role="status" className="text-sm text-stone-600">{tr('Searching the next 7 days for availability…')}</p>}
+                  {nextAvailableSlot.error && <p role="alert" className="text-sm text-red-800">{nextAvailableSlot.error}</p>}
+                  {!nextAvailableSlot.loading && !nextAvailableSlot.error && nextAvailableSlot.slot && (
+                    <div role="status" className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-3 text-sm text-emerald-900">
+                      <p className="mb-2">
+                        {tr('Next available slot: {date} at {time}', {
+                          date: new Intl.DateTimeFormat(locale, {
+                            weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC',
+                          }).format(new Date(`${nextAvailableSlot.slot.date}T12:00:00Z`)),
+                          time: nextAvailableSlot.slot.time,
+                        })}
+                      </p>
+                      <button
+                        type="button"
+                        disabled={nextSlotProceedPending}
+                        onClick={() => {
+                          setBookingData((prev) => ({
+                            ...prev,
+                            date: nextAvailableSlot.slot.date,
+                            time: nextAvailableSlot.slot.time,
+                            therapist: null,
+                            therapist2: null,
+                          }));
+                          setNextSlotProceedPending(true);
+                        }}
+                        className="rounded-lg bg-emerald-800 px-4 py-2 font-semibold text-white hover:bg-emerald-900 disabled:cursor-wait disabled:opacity-60"
+                      >
+                        {tr(nextSlotProceedPending ? 'Checking selected slot…' : 'Book next available slot')}
+                      </button>
+                    </div>
+                  )}
+                  {!nextAvailableSlot.loading && !nextAvailableSlot.error && !nextAvailableSlot.slot && (
+                    <p role="status" className="text-sm text-amber-800">{tr('No available slots were found in the next 7 days. Try another branch or service.')}</p>
+                  )}
+                </div>
               )}
             </div>
             <div>
@@ -5827,6 +5899,34 @@ function AdminPortal({
   const calendarFirstHour = Math.min(8, ...visibleHours);
   const calendarLastHour = Math.max(19, ...visibleHours);
   const calendarDisplayHours = Array.from({ length: calendarLastHour - calendarFirstHour + 1 }, (_, index) => index + calendarFirstHour);
+  const calendarColumnTherapists = therapists.filter((therapist) =>
+    therapist.active !== false &&
+    (calendarTherapist === 'all' || String(therapist.id) === calendarTherapist) &&
+    calendarBusinessBranches.some((branch) =>
+      isTherapistScheduledAtBranch(therapist, branch.id, calendarDate) &&
+      (dashboardUser.role === 'owner' || dashboardUser.branchIds.includes(String(branch.id))),
+    ),
+  );
+  const calendarHasUnassignedColumn = calendarTherapist === 'all';
+  const calendarGapMinutes = Math.max(0, Number(businessProfile.therapistBufferMinutes) || 0);
+  const calendarFirstMinute = Math.min(
+    8 * 60,
+    ...calendarHours.map((hours) => Number(hours.open.split(':')[0]) * 60 + Number(hours.open.split(':')[1])),
+  );
+  const calendarLastMinute = Math.max(
+    19 * 60,
+    ...calendarHours.map((hours) => Number(hours.close.split(':')[0]) * 60 + Number(hours.close.split(':')[1])),
+  );
+  const calendarDisplaySlots = Array.from(
+    { length: Math.ceil((calendarLastMinute - calendarFirstMinute) / 15) + 1 },
+    (_, index) => {
+      const minutes = Math.floor(calendarFirstMinute / 15) * 15 + index * 15;
+      return {
+        minutes,
+        label: `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`,
+      };
+    },
+  );
 
   const openQuickBooking = (time = '') => {
     setQuickBookingNotice('');
@@ -6410,7 +6510,7 @@ function AdminPortal({
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <label className="relative"><span className="sr-only">{tr("Search appointments")}</span><Search className="absolute left-3 top-2.5 h-4 w-4 text-blue-600" /><input type="search" value={calendarSearch} onChange={(event) => setCalendarSearch(event.target.value)} placeholder={tr("Search appointments")} className="h-9 w-48 rounded-full border border-blue-200 pl-9 pr-3 text-xs" /></label>
-              <label><span className="sr-only">{tr("Calendar view")}</span><select value={calendarViewMode} onChange={(event) => setCalendarViewMode(event.target.value)} className="h-9 rounded-full border border-blue-200 bg-white px-4 text-xs text-blue-700"><option value="daily">{tr("Daily")}</option><option value="agenda">{tr("Agenda")}</option></select></label>
+              <label><span className="sr-only">{tr("Calendar view")}</span><select value={calendarViewMode} onChange={(event) => setCalendarViewMode(event.target.value)} className="h-9 rounded-full border border-blue-200 bg-white px-4 text-xs text-blue-700"><option value="daily">{tr("Daily")}</option><option value="therapists">{tr("Therapist schedule")}</option><option value="agenda">{tr("Agenda")}</option></select></label>
               <button type="button" aria-label={tr("Calendar filters")} aria-expanded={calendarFiltersOpen} onClick={() => setCalendarFiltersOpen(!calendarFiltersOpen)} className="rounded-full border border-blue-200 p-2 text-blue-600"><Filter className="h-4 w-4" /></button>
               <details className="relative">
                 <summary aria-label={tr("Calendar settings")} className="cursor-pointer list-none rounded-full border border-blue-200 p-2 text-blue-600"><Settings className="h-4 w-4" /></summary>
@@ -6562,6 +6662,74 @@ function AdminPortal({
                   </div>
                 );
               })}
+            </div>
+          </div>}
+          {calendarViewMode === 'therapists' && <div className="overflow-hidden rounded-xl border border-stone-200 bg-white">
+            <div className="border-b border-stone-200 bg-stone-50 px-4 py-3">
+              <p className="font-bold text-stone-900">{new Date(`${calendarDate}T12:00:00`).toLocaleDateString(locale, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</p>
+              <p className="text-xs text-stone-500">{tr("Appointments grouped by therapist. The gap after each appointment is reserved automatically.")}</p>
+            </div>
+            <div className="max-h-[680px] overflow-auto">
+              <div className="min-w-max">
+                <div className="sticky top-0 z-10 grid bg-stone-50" style={{ gridTemplateColumns: `76px repeat(${calendarColumnTherapists.length + Number(calendarHasUnassignedColumn)}, minmax(180px, 1fr))` }}>
+                  <div className="border-b border-r border-stone-200 p-2 text-[11px] font-semibold text-stone-500">{tr("Time")}</div>
+                  {calendarColumnTherapists.map((therapist) => (
+                    <div key={therapist.id} className="border-b border-r border-stone-200 p-2 text-xs font-bold text-stone-800">{therapist.name}</div>
+                  ))}
+                  {calendarHasUnassignedColumn && <div className="border-b border-stone-200 p-2 text-xs font-bold text-stone-600">{tr("Any Available")}</div>}
+                </div>
+                {calendarDisplaySlots.map(({ label, minutes }) => (
+                  <div key={label} className="grid min-h-[56px] border-b border-stone-100" style={{ gridTemplateColumns: `76px repeat(${calendarColumnTherapists.length + Number(calendarHasUnassignedColumn)}, minmax(180px, 1fr))` }}>
+                    <div className="border-r border-stone-100 p-2 text-right text-[11px] text-stone-400">{formatTime(label)}</div>
+                    {calendarColumnTherapists.map((therapist) => {
+                      const therapistEvents = visibleCalendarEvents.filter((event) =>
+                        Number(event.localTime?.split(':')[0]) * 60 + Number(event.localTime?.split(':')[1]) === minutes &&
+                        getAssignedTherapistNames(event.therapistName, therapists).includes(therapist.name));
+                      const therapistBlock = calendarUnavailability.find((block) =>
+                        (block.scope === 'business'
+                          ? !block.branchName || calendarBusinessBranches.some((branch) => branch.name === block.branchName)
+                          : block.therapistName === therapist.name) &&
+                        Number(block.startTime?.split(':')[0]) * 60 + Number(block.startTime?.split(':')[1]) <= minutes &&
+                        Number(block.endTime?.split(':')[0]) * 60 + Number(block.endTime?.split(':')[1]) > minutes);
+                      const bufferEvent = calendarGapMinutes > 0 && visibleCalendarEvents.find((event) =>
+                        getAssignedTherapistNames(event.therapistName, therapists).includes(therapist.name) &&
+                        event.end?.dateTime &&
+                        (() => {
+                          const parts = new Intl.DateTimeFormat('en-CA', {
+                            timeZone: 'America/Toronto', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+                          }).formatToParts(new Date(event.end.dateTime));
+                          const eventEnd = Number(parts.find((part) => part.type === 'hour')?.value) * 60 +
+                            Number(parts.find((part) => part.type === 'minute')?.value);
+                          return minutes >= eventEnd && minutes < eventEnd + calendarGapMinutes;
+                        })());
+                      return (
+                        <div key={therapist.id} className="space-y-1 border-r border-stone-100 p-1.5">
+                          {therapistEvents.map((event) => (
+                            <button key={event.id} type="button" onClick={() => { setSelectedCalendarEvent(event); setIssuedReceipt(null); setReceiptError(''); setReceiptNotice(''); }} className={`block w-full rounded-lg border-l-4 px-2.5 py-2 text-left text-[11px] ${getTherapistCalendarColor(therapist.name, therapists).event}`}>
+                              <span className={`block font-bold ${getTherapistCalendarColor(therapist.name, therapists).text}`}>{event.summary}</span>
+                              <span className={getTherapistCalendarColor(therapist.name, therapists).text}>{formatTime(event.timeRange || event.localTime)}</span>
+                            </button>
+                          ))}
+                          {!therapistEvents.length && therapistBlock && <span className="block rounded-md bg-stone-100 px-2 py-1 text-[10px] text-stone-600">{tr("Unavailable")}</span>}
+                          {!therapistEvents.length && !therapistBlock && bufferEvent && <span className="block rounded-md border border-dashed border-amber-300 bg-amber-50 px-2 py-1 text-[10px] text-amber-800">{tr("Buffer · {value0} min", { value0: calendarGapMinutes })}</span>}
+                          {!therapistEvents.length && !therapistBlock && !bufferEvent && <span aria-hidden="true" className="block min-h-8" />}
+                        </div>
+                      );
+                    })}
+                    {calendarHasUnassignedColumn && (
+                      <div className="space-y-1 p-1.5">
+                        {visibleCalendarEvents.filter((event) =>
+                          Number(event.localTime?.split(':')[0]) * 60 + Number(event.localTime?.split(':')[1]) === minutes &&
+                          (!event.therapistName || event.therapistName === 'Any Available')).map((event) => (
+                          <button key={event.id} type="button" onClick={() => { setSelectedCalendarEvent(event); setIssuedReceipt(null); setReceiptError(''); setReceiptNotice(''); }} className="block w-full rounded-lg border-l-4 border-stone-400 bg-stone-100 px-2.5 py-2 text-left text-[11px] text-stone-700">
+                            <span className="block font-bold">{event.summary}</span><span>{formatTime(event.timeRange || event.localTime)}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
           </div>}
           <p className="text-xs text-stone-500">
@@ -8020,12 +8188,16 @@ function AdminPortal({
                     { key: 'address', label: 'Business location', type: 'text', placeholder: 'City, Province' },
                     { key: 'taxRegistrationNumber', label: 'GST/HST registration number', type: 'text', placeholder: 'Optional — enter only your registered number' },
                     { key: 'photoUrl', label: 'Business photo URL', type: 'url', placeholder: 'https://example.com/business-photo.jpg' },
+                    { key: 'therapistBufferMinutes', label: 'Therapist gap after appointments (minutes)', type: 'number', min: 0, max: 120, step: 15, required: true },
                   ].map((field) => (
                     <label key={field.key} className={`block ${field.key === 'businessName' || field.key === 'tagline' || field.key === 'photoUrl' ? 'sm:col-span-2' : ''}`}>
                       <span className="mb-1.5 block text-xs font-semibold text-slate-700">{tr(field.label)}{field.required && <span className="ml-1 text-rose-600">*</span>}</span>
                       <input
                         type={field.type}
                         required={field.required}
+                        min={field.min}
+                        max={field.max}
+                        step={field.step}
                         maxLength={field.key === 'businessName' ? 100 : field.key === 'photoUrl' ? 2048 : 250}
                         value={businessProfile[field.key] || ''}
                         onChange={(event) => {
@@ -8036,6 +8208,7 @@ function AdminPortal({
                         className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100"
                       />
                       {field.key === 'photoUrl' && <span className="mt-1.5 block text-xs leading-5 text-slate-500">{tr("Paste a publicly accessible image URL. Leave blank to use the business initials.")}</span>}
+                      {field.key === 'therapistBufferMinutes' && <span className="mt-1.5 block text-xs leading-5 text-slate-500">{tr("Time reserved after each therapist appointment before the next booking. Use 0 for no gap; changes apply immediately.")}</span>}
                     </label>
                   ))}
                 </div>

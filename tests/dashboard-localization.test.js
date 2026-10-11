@@ -91,6 +91,14 @@ test('branch migration button is shown only until BigQuery becomes the source of
   assert.doesNotMatch(afterImport, /One-time import to BigQuery/);
 });
 
+test('business profile configures appointment gaps and the calendar offers therapist columns', () => {
+  assert.match(source, /Therapist gap after appointments \(minutes\)/);
+  assert.match(source, /min=\{field\.min\}[\s\S]*max=\{field\.max\}[\s\S]*step=\{field\.step\}/);
+  assert.match(source, /calendarViewMode === 'therapists'/);
+  assert.match(source, /gridTemplateColumns: `76px repeat\(\$\{calendarColumnTherapists\.length/);
+  assert.match(source, /Buffer · \{value0\} min/);
+});
+
 test('dashboard KPIs are scoped to sales, bookings and calendar context', () => {
   const today = new Date().toISOString().slice(0, 10);
   const tomorrow = new Date(`${today}T12:00:00`);
