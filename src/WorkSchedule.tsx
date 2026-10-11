@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { CalendarDays, ChevronLeft, ChevronRight, Save } from 'lucide-react';
-import { defaultTherapistShift, type TherapistWorkShift } from '../lib/work-schedule.js';
+import { DEFAULT_THERAPIST_END, DEFAULT_THERAPIST_START, defaultTherapistShift, type TherapistWorkShift } from '../lib/work-schedule.js';
 import { useTranslation } from './localization';
 
 type Branch = { id: number; name: string };
@@ -8,7 +8,7 @@ type Therapist = {
   id: number | string; name: string; branches?: number[];
   schedule?: Record<string, number | null>;
 };
-type Props = { branches: Branch[]; therapists: Therapist[] };
+type Props = { branches: Branch[]; therapists: Therapist[]; initialBranchId?: string; initialDate?: string };
 
 function monthDates(month: string) {
   const [year, monthNumber] = month.split('-').map(Number);
@@ -28,12 +28,14 @@ function shiftKey(therapistId: number | string, date: string) {
   return `${therapistId}:${date}`;
 }
 
-export default function WorkSchedule({ branches, therapists }: Props) {
+export default function WorkSchedule({ branches, therapists, initialBranchId = '', initialDate = '' }: Props) {
   const { translate: tr } = useTranslation();
   const today = new Date();
   const [month, setMonth] = useState(`${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`);
-  const [branchId, setBranchId] = useState(String(branches[0]?.id || ''));
-  const [weekStart, setWeekStart] = useState(() => weekStartFor(`${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`));
+  const [branchId, setBranchId] = useState(() =>
+    branches.some((branch) => String(branch.id) === initialBranchId) ? initialBranchId : String(branches[0]?.id || ''),
+  );
+  const [weekStart, setWeekStart] = useState(() => weekStartFor(initialDate || `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`));
   const [overrides, setOverrides] = useState<Record<string, TherapistWorkShift>>({});
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -68,10 +70,16 @@ export default function WorkSchedule({ branches, therapists }: Props) {
   }, [branches, branchId]);
 
   useEffect(() => {
-    setWeekStart(weekStartFor(`${month}-01`));
+    if (initialBranchId && branches.some((branch) => String(branch.id) === initialBranchId)) {
+      setBranchId(initialBranchId);
+    }
+  }, [branches, initialBranchId]);
+
+  useEffect(() => {
+    setWeekStart(weekStartFor(initialDate.startsWith(`${month}-`) ? initialDate : `${month}-01`));
     setEditing(null);
     setNotice('');
-  }, [month]);
+  }, [month, initialDate]);
 
   useEffect(() => {
     if (!month || !branchId) return;
@@ -202,7 +210,12 @@ export default function WorkSchedule({ branches, therapists }: Props) {
       <section className="w-full max-w-md rounded-xl bg-white p-5 shadow-xl">
         <h3 id="work-schedule-editor-title" className="font-bold text-slate-900">{tr('Edit work hours')}</h3>
         <p className="mt-1 text-sm text-slate-600">{selectedTherapist.name} · {selectedDateLabel} · {branches.find((branch) => String(branch.id) === branchId)?.name}</p>
-        <label className="mt-4 flex items-center gap-2 text-sm font-semibold text-slate-700"><input type="checkbox" checked={editShift.isWorking} onChange={(event) => setEditShift({ ...editShift, isWorking: event.target.checked })} />{tr('Working this day')}</label>
+        <label className="mt-4 flex items-center gap-2 text-sm font-semibold text-slate-700"><input type="checkbox" checked={editShift.isWorking} onChange={(event) => setEditShift({
+          ...editShift,
+          isWorking: event.target.checked,
+          startTime: event.target.checked && !editShift.startTime ? DEFAULT_THERAPIST_START : editShift.startTime,
+          endTime: event.target.checked && !editShift.endTime ? DEFAULT_THERAPIST_END : editShift.endTime,
+        })} />{tr('Working this day')}</label>
         <div className="mt-3 grid grid-cols-2 gap-3">
           <label className="text-xs font-semibold text-slate-600">{tr('Starts')}<input type="time" disabled={!editShift.isWorking} value={editShift.startTime} onChange={(event) => setEditShift({ ...editShift, startTime: event.target.value })} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100" /></label>
           <label className="text-xs font-semibold text-slate-600">{tr('Ends')}<input type="time" disabled={!editShift.isWorking} value={editShift.endTime} onChange={(event) => setEditShift({ ...editShift, endTime: event.target.value })} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100" /></label>

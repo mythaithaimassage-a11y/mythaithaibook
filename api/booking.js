@@ -1980,6 +1980,32 @@ function workScheduleRowValues(entry) {
     entry.isWorking ? entry.startTime : '', entry.isWorking ? entry.endTime : '', entry.updatedBy, entry.updatedAt];
 }
 
+async function writeStaffWorkScheduleRows(sheets, currentRows, nextRows) {
+  const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
+  const scheduleSpreadsheet = await sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets.properties' });
+  const scheduleSheetId = (scheduleSpreadsheet.data.sheets || [])
+    .find((sheet) => sheet.properties?.title === 'StaffWorkSchedule')?.properties?.sheetId;
+  if (scheduleSheetId === undefined) throw new Error('StaffWorkSchedule sheet could not be found after initialization.');
+  const rowCount = Math.max(currentRows.length, nextRows.length);
+  if (!rowCount) return;
+  const rows = Array.from({ length: rowCount }, (_, index) => {
+    const values = nextRows[index] ? workScheduleRowValues(nextRows[index]) : Array(8).fill('');
+    return { values: values.map((value) => value === '' ? {} : typeof value === 'number'
+      ? { userEnteredValue: { numberValue: value } }
+      : { userEnteredValue: { stringValue: String(value) } }) };
+  });
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId,
+    requestBody: { requests: [{
+      updateCells: {
+        range: { sheetId: scheduleSheetId, startRowIndex: 1, startColumnIndex: 0, endRowIndex: rowCount + 1, endColumnIndex: 8 },
+        rows,
+        fields: 'userEnteredValue',
+      },
+    }] },
+  });
+}
+
 async function ensureBranchesSheet(sheets) {
   const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
   if (!spreadsheetId) throw new Error('GOOGLE_SPREADSHEET_ID is not configured');
@@ -5129,9 +5155,11 @@ export default async function handler(req, res) {
       }
       if (!['GET', 'POST'].includes(req.method)) return res.status(405).json({ message: 'Method Not Allowed' });
       if (req.method === 'POST' && !isSameOriginRequest(req)) return res.status(403).json({ message: 'Request origin is not allowed' });
-      const month = String(req.method === 'GET' ? req.query?.month || '' : req.body?.month || '');
+      const dayDate = String(req.method === 'POST' ? req.body?.date || '' : '');
+      const month = String(req.method === 'GET' ? req.query?.month || '' : req.body?.month || dayDate.slice(0, 7));
       const branchId = Number(req.method === 'GET' ? req.query?.branchId : req.body?.branchId);
-      if (!validMonth(month) || !Number.isInteger(branchId) || branchId <= 0) {
+      if (!validMonth(month) || !Number.isInteger(branchId) || branchId <= 0 ||
+          (dayDate && (!validDate(dayDate) || !dayDate.startsWith(`${month}-`)))) {
         return res.status(400).json({ message: 'Choose a valid month and branch.' });
       }
       if (dashboardSession.role !== 'owner' && !dashboardSession.branchIds.includes(String(branchId))) {
@@ -5152,6 +5180,36 @@ export default async function handler(req, res) {
       if (req.method === 'GET') {
         res.setHeader('Cache-Control', 'no-store');
         return res.status(200).json({ overrides: monthBranchRows });
+      }
+      if (dayDate) {
+        const raw = req.body?.override;
+        const therapistId = Number(req.body?.therapistId ?? raw?.therapistId);
+        if (!Number.isInteger(therapistId) || !therapists.some((item) => Number(item.id) === therapistId)) {
+          return res.status(400).json({ message: 'Choose an active therapist assigned to this branch.' });
+        }
+        let savedOverride = null;
+        if (raw !== null) {
+          const isWorking = raw?.isWorking;
+          const startTime = String(raw?.startTime || '');
+          const endTime = String(raw?.endTime || '');
+          if (Number(raw?.therapistId) !== therapistId || raw?.date !== dayDate || typeof isWorking !== 'boolean' ||
+              (isWorking && (minutesOfDay(startTime) === null || minutesOfDay(endTime) === null ||
+                minutesOfDay(startTime) >= minutesOfDay(endTime)))) {
+            return res.status(400).json({ message: 'The therapist and work hours must be valid for the selected date.' });
+          }
+          savedOverride = {
+            therapistId, date: dayDate, branchId, isWorking,
+            startTime: isWorking ? startTime : '',
+            endTime: isWorking ? endTime : '',
+            updatedBy: dashboardSession.email, updatedAt: new Date().toISOString(),
+          };
+        }
+        const nextRows = currentRows.filter((item) =>
+          !(item.date === dayDate && item.branchId === branchId && item.therapistId === therapistId),
+        );
+        if (savedOverride) nextRows.push(savedOverride);
+        await writeStaffWorkScheduleRows(sheets, currentRows, nextRows);
+        return res.status(200).json({ override: savedOverride });
       }
       const input = req.body?.overrides;
       if (!Array.isArray(input) || input.length > therapists.length * 31) {
@@ -5186,29 +5244,7 @@ export default async function handler(req, res) {
           therapists.some((therapist) => Number(therapist.id) === item.therapistId)),
       );
       const nextRows = [...retainedRows, ...validated];
-      const scheduleSpreadsheet = await sheets.spreadsheets.get({ spreadsheetId, fields: 'sheets.properties' });
-      const scheduleSheetId = (scheduleSpreadsheet.data.sheets || [])
-        .find((sheet) => sheet.properties?.title === 'StaffWorkSchedule')?.properties?.sheetId;
-      if (scheduleSheetId === undefined) throw new Error('StaffWorkSchedule sheet could not be found after initialization.');
-      const rowCount = Math.max(currentRows.length, nextRows.length);
-      if (rowCount) {
-        const rows = Array.from({ length: rowCount }, (_, index) => {
-          const values = nextRows[index] ? workScheduleRowValues(nextRows[index]) : Array(8).fill('');
-          return { values: values.map((value) => value === '' ? {} : typeof value === 'number'
-            ? { userEnteredValue: { numberValue: value } }
-            : { userEnteredValue: { stringValue: String(value) } }) };
-        });
-        await sheets.spreadsheets.batchUpdate({
-          spreadsheetId,
-          requestBody: { requests: [{
-            updateCells: {
-              range: { sheetId: scheduleSheetId, startRowIndex: 1, startColumnIndex: 0, endRowIndex: rowCount + 1, endColumnIndex: 8 },
-              rows,
-              fields: 'userEnteredValue',
-            },
-          }] },
-        });
-      }
+      await writeStaffWorkScheduleRows(sheets, currentRows, nextRows);
       return res.status(200).json({ overrides: validated });
     }
 

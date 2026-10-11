@@ -132,7 +132,7 @@ for (const [name, props, english, thai] of screens) {
 
 test('Thai catalogue covers literal translations, validation fallbacks and mapped headings', () => {
   const missing = new Set();
-  for (const [name] of screens) {
+  for (const [name] of [...screens, ['TodayWorkSchedule']]) {
     const source = ts.createSourceFile(`${name}.tsx`, readFileSync(new URL(`../src/${name}.tsx`, import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
     function walk(node) {
       if (ts.isCallExpression(node) && ['tr', 'message'].includes(node.expression.getText(source))) {

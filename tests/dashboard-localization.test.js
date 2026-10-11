@@ -110,11 +110,35 @@ test('dashboard KPIs are scoped to sales, bookings and calendar context', () => 
   assert.match(reports, /HST Tax Collected<\/div>[\s\S]*?text-2xl font-bold tracking-tight text-slate-900">\$13\.00<\/div>/);
   assert.doesNotMatch(reports, /Upcoming bookings/);
 
-  const calendar = render('calendar', 'en', { calendarDate: tomorrowDate }, propsWithBookings);
+  const calendar = render('calendar', 'en', { calendarDate: today }, propsWithBookings);
   assert.match(calendar, /Appointments on selected date/);
   assert.match(calendar, /Therapists booked/);
   assert.match(calendar, /Unassigned appointments/);
+  assert.match(calendar, /Set therapist availability today/);
   assert.doesNotMatch(calendar, /Revenue Today|HST Tax Collected/);
+});
+
+test('today availability shortcut displays the Work Schedule shift graphic for the selected branch', () => {
+  const todayTranslator = createTranslator('en');
+  const todayScheduleLoader = createTsLoader({
+    react: React,
+    './localization': { useTranslation: () => ({ translate: todayTranslator }) },
+  });
+  const { default: TodayWorkSchedule } = todayScheduleLoader(new URL('../src/TodayWorkSchedule.tsx', import.meta.url).pathname);
+  const html = renderToStaticMarkup(React.createElement(TodayWorkSchedule, {
+    branches: [{ id: 1, name: 'Central Branch' }],
+    therapists: [
+      { id: 1, name: 'Tanya', branches: [1], schedule: {} },
+      { id: 2, name: 'Other therapist', branches: [2], schedule: {} },
+    ],
+    initialBranchId: '1',
+    onOpenFullSchedule() {},
+  }));
+  assert.match(html, /Today(?:&#x27;|')s therapist availability/);
+  assert.match(html, /Tanya/);
+  assert.match(html, /10:00–20:00/);
+  assert.match(html, /Open full Work schedule/);
+  assert.doesNotMatch(html, /Other therapist/);
 });
 
 test('Wix calendar sync appears below the calendar and appointment list', () => {

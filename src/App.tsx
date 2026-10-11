@@ -31,6 +31,7 @@ import { bookingTaxTreatment } from '../lib/booking-tax.js';
 import { isTherapistScheduledAtBranch } from '../lib/work-schedule.js';
 import useTherapistAvailability from './useTherapistAvailability';
 import WorkSchedule from './WorkSchedule';
+import TodayWorkSchedule from './TodayWorkSchedule';
 
 const MOCK_BRANCHES = [
   { id: 1, name: "Mississauga Central", address: "4310 Sherwoodtowne Blvd", city: "Mississauga, ON", phone: "+1 437 898 7424" },
@@ -4405,6 +4406,9 @@ function AdminPortal({
   const [calendarDate, setCalendarDate] = useState(new Date().toISOString().split('T')[0]);
   const [calendarBranch, setCalendarBranch] = useState('all');
   const [calendarTherapist, setCalendarTherapist] = useState('all');
+  const [showTodayAvailability, setShowTodayAvailability] = useState(false);
+  const [workScheduleInitialBranchId, setWorkScheduleInitialBranchId] = useState('');
+  const [workScheduleInitialDate, setWorkScheduleInitialDate] = useState('');
   const [calendarEvents, setCalendarEvents] = useState([]);
   const [isLoadingCalendar, setIsLoadingCalendar] = useState(false);
   const [calendarLoadError, setCalendarLoadError] = useState('');
@@ -6400,9 +6404,22 @@ function AdminPortal({
               <button onClick={loadCalendar} disabled={isLoadingCalendar} className="h-9 px-3 bg-emerald-800 text-white rounded-lg text-xs font-bold disabled:opacity-50">
                 {isLoadingCalendar ? tr("Loading...") : tr("Refresh")}
               </button>
+              <button type="button" aria-expanded={showTodayAvailability} onClick={() => setShowTodayAvailability((visible) => !visible)} className="inline-flex h-9 items-center gap-2 rounded-lg border border-blue-200 bg-white px-3 text-xs font-semibold text-blue-700 hover:bg-blue-50">
+                <CalendarDays className="h-4 w-4" />{tr(showTodayAvailability ? "Hide today's availability" : "Set therapist availability today")}
+              </button>
               {!calendarFiltersOpen && (calendarBranch !== 'all' || calendarTherapist !== 'all') && <button type="button" onClick={() => setCalendarFiltersOpen(true)} className="h-9 rounded-lg border border-blue-200 px-3 text-xs text-blue-700">{tr("Filters:")}{branches.find((item) => String(item.id) === calendarBranch)?.name || tr("All branches")} · {therapists.find((item) => String(item.id) === calendarTherapist)?.name || tr("All therapists")}
               </button>}
           </div>
+          {showTodayAvailability && <TodayWorkSchedule
+            branches={dashboardBranches.filter((branch) => branch.active !== false)}
+            therapists={therapists.filter((therapist) => therapist.active !== false)}
+            initialBranchId={calendarBranch}
+            onOpenFullSchedule={(branchId, date) => {
+              setWorkScheduleInitialBranchId(branchId);
+              setWorkScheduleInitialDate(date);
+              setActiveTab('work-schedule');
+            }}
+          />}
           {quickBookingNotice && <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">{tr(quickBookingNotice)}</p>}
           {deleteBookingError && <div role="alert" className="p-3 bg-red-50 border border-red-200 text-red-800 rounded-xl text-xs">{tr(deleteBookingError)}</div>}
           {calendarLoadError && <div className="p-3 bg-red-50 border border-red-200 text-red-800 rounded-xl text-xs">{tr(calendarLoadError)}</div>}
@@ -6843,6 +6860,8 @@ function AdminPortal({
       {activeTab === 'work-schedule' && <WorkSchedule
         branches={dashboardBranches.filter((branch) => branch.active !== false)}
         therapists={therapists.filter((therapist) => therapist.active !== false)}
+        initialBranchId={workScheduleInitialBranchId}
+        initialDate={workScheduleInitialDate}
       />}
 
       {/* TAB CONTENT: AVAILABILITY */}

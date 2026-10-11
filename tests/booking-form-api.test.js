@@ -26,7 +26,11 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   let branchRows = [[1, 'Test Branch', 'Address', 'City', '555', 'TRUE', '', 'TRUE', 'TRUE', 'TRUE', 'TRUE']];
   let busyEvents = [];
   let blockRows = [['Block ID']];
-  let scheduleRows = [['Therapist ID', 'Date', 'Branch ID', 'Working', 'Start Time', 'End Time', 'Updated By', 'Updated At']];
+  let scheduleRows = [
+    ['Therapist ID', 'Date', 'Branch ID', 'Working', 'Start Time', 'End Time', 'Updated By', 'Updated At'],
+    [2, '2026-10-12', 1, 'TRUE', '10:00', '20:00', 'scheduler@example.com', '2026-10-01T00:00:00.000Z'],
+    [1, '2026-11-02', 1, 'TRUE', '10:00', '20:00', 'scheduler@example.com', '2026-10-01T00:00:00.000Z'],
+  ];
   const serviceRows = [
     [1, 'Massage', 'Thai', 60, 100, 10, 'FALSE', 0.13, '', 'TRUE'],
     [2, 'Couple Massage', 'Thai', 60, 180, 10, 'FALSE', 0.13, '', 'TRUE'],
@@ -44,9 +48,18 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   let legacyAccount = false;
   t.mock.method(google, 'sheets', () => ({
     spreadsheets: {
-      get: async () => ({ data: { sheets: ['Branches', 'Unavailability', 'Services', 'Therapists', 'BusinessProfile', 'StaffWorkSchedule', ...(aliasRows.length ? ['TherapistAliases'] : []), ...(legacyAccount ? ['TherapistAccounts'] : [])].map((title) => ({ properties: { title } })) } }),
+      get: async () => ({ data: { sheets: ['Branches', 'Unavailability', 'Services', 'Therapists', 'BusinessProfile', 'StaffWorkSchedule', ...(aliasRows.length ? ['TherapistAliases'] : []), ...(legacyAccount ? ['TherapistAccounts'] : [])].map((title, index) => ({ properties: { title, sheetId: index + 1 } })) } }),
       batchUpdate: async ({ requestBody }) => {
-        assert.equal(requestBody.requests[0].addSheet.properties.title, 'TherapistAliases');
+        const operation = requestBody.requests[0];
+        if (operation.addSheet) {
+          assert.equal(operation.addSheet.properties.title, 'TherapistAliases');
+          return;
+        }
+        assert.ok(operation.updateCells, 'Expected a work schedule row update');
+        const rows = operation.updateCells.rows.map(({ values }) => values.map((cell) =>
+          cell.userEnteredValue?.numberValue ?? cell.userEnteredValue?.stringValue ?? '',
+        ));
+        scheduleRows = [scheduleRows[0], ...rows];
       },
       values: {
         get: async ({ range }) => {
@@ -282,6 +295,32 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   const verified = await request('owner-verify', { challengeId: login.data.challengeId, code: ownerOtp });
   assert.equal(verified.code, 200);
   assert.equal((await request('owner-verify', { challengeId: login.data.challengeId, code: ownerOtp })).code, 401, 'OTP cannot be replayed');
+
+  const todayAvailability = {
+    date: '2026-10-11', branchId: 1, therapistId: 1,
+    override: { therapistId: 1, date: '2026-10-11', isWorking: true, startTime: '11:00', endTime: '18:00' },
+  };
+  const savedTodayAvailability = await request('staff-work-schedule', todayAvailability);
+  assert.equal(savedTodayAvailability.code, 200, JSON.stringify(savedTodayAvailability.data));
+  assert.equal(savedTodayAvailability.data.override.startTime, '11:00');
+  assert.ok(scheduleRows.some((row) => row[0] === 1 && row[1] === '2026-10-11'));
+  assert.ok(scheduleRows.some((row) => row[0] === 2 && row[1] === '2026-10-12'), 'Saving today must preserve other dates');
+  const invalidAvailabilityRows = structuredClone(scheduleRows);
+  assert.equal((await request('staff-work-schedule', {
+    ...todayAvailability, override: { ...todayAvailability.override, endTime: '09:00' },
+  })).code, 400);
+  assert.deepEqual(scheduleRows, invalidAvailabilityRows, 'Invalid hours must not change the saved schedule');
+  const dayOverrides = await request('staff-work-schedule', null, {
+    method: 'GET', query: { month: '2026-10', branchId: '1' },
+  });
+  assert.equal(dayOverrides.code, 200);
+  assert.ok(dayOverrides.data.overrides.some((entry) => entry.therapistId === 1 && entry.date === '2026-10-11'));
+  assert.equal((await request('staff-work-schedule', { date: '2026-10-11', branchId: 1, therapistId: 1, override: null })).code, 200);
+  assert.ok(!scheduleRows.some((row) => row[0] === 1 && row[1] === '2026-10-11'), 'Reset removes only that date’s override');
+  assert.ok(scheduleRows.some((row) => row[0] === 2 && row[1] === '2026-10-12'), 'Reset must preserve other dates');
+  assert.equal((await request('staff-work-schedule', {
+    ...todayAvailability, therapistId: 999,
+  })).code, 400);
 
   const branch = { id: 1, name: 'Test Branch', allowClinicPayment: true, allowDepositPayment: false, allowFullPayment: false };
   assert.equal((await request('branches', { branches: [branch] })).code, 200);
