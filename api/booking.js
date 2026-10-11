@@ -64,6 +64,7 @@ const OWNER_ADMIN_SESSION_SECRET = process.env.OWNER_ADMIN_SESSION_SECRET || '';
 const OWNER_INITIAL_SETUP_SECRET = process.env.OWNER_INITIAL_SETUP_SECRET || '';
 const DASHBOARD_USERS_TABLE = 'dashboard_users';
 const DASHBOARD_LOGIN_CHALLENGES_TABLE = 'dashboard_login_challenges';
+const BRANCH_CONFIG_TABLE = 'branch_config';
 const SQUARE_ACCESS_TOKEN = process.env.SQUARE_ACCESS_TOKEN || '';
 const SQUARE_LOCATION_ID = process.env.SQUARE_LOCATION_ID || '';
 const SQUARE_ENVIRONMENT = (process.env.SQUARE_ENVIRONMENT || 'production').toLowerCase() === 'sandbox' ? 'sandbox' : 'production';
@@ -224,6 +225,121 @@ function getBigQueryClient() {
 
 function bookingsTableRef() {
   return `\`${BIGQUERY_PROJECT_ID}.${BIGQUERY_DATASET_ID}.${BIGQUERY_BOOKINGS_TABLE}\``;
+}
+
+function branchConfigTableRef() {
+  return `\`${BIGQUERY_PROJECT_ID}.${BIGQUERY_DATASET_ID}.${BRANCH_CONFIG_TABLE}\``;
+}
+
+let ensureBranchConfigTablePromise = null;
+async function ensureBranchConfigTable(bigquery) {
+  if (!ensureBranchConfigTablePromise) {
+    ensureBranchConfigTablePromise = (async () => {
+      const dataset = bigquery.dataset(BIGQUERY_DATASET_ID);
+      const [datasetExists] = await dataset.exists();
+      if (!datasetExists) {
+        try {
+          await bigquery.createDataset(BIGQUERY_DATASET_ID, { location: process.env.BIGQUERY_LOCATION || 'US' });
+        } catch (error) {
+          const [existsNow] = await dataset.exists();
+          if (!existsNow) throw error;
+        }
+      }
+      const table = dataset.table(BRANCH_CONFIG_TABLE);
+      const [tableExists] = await table.exists();
+      if (!tableExists) {
+        try {
+          await dataset.createTable(BRANCH_CONFIG_TABLE, {
+            schema: [
+              { name: 'id', type: 'STRING', mode: 'REQUIRED' },
+              { name: 'name', type: 'STRING', mode: 'REQUIRED' },
+              { name: 'address', type: 'STRING', mode: 'NULLABLE' },
+              { name: 'city', type: 'STRING', mode: 'NULLABLE' },
+              { name: 'phone', type: 'STRING', mode: 'NULLABLE' },
+              { name: 'active', type: 'BOOL', mode: 'REQUIRED' },
+              { name: 'collects_deposit', type: 'BOOL', mode: 'REQUIRED' },
+              { name: 'allow_clinic_payment', type: 'BOOL', mode: 'REQUIRED' },
+              { name: 'allow_deposit_payment', type: 'BOOL', mode: 'REQUIRED' },
+              { name: 'allow_full_payment', type: 'BOOL', mode: 'REQUIRED' },
+              { name: 'business_hours', type: 'STRING', mode: 'REQUIRED' },
+            ],
+          });
+        } catch (error) {
+          const [existsNow] = await table.exists();
+          if (!existsNow) throw error;
+        }
+      }
+    })().catch((error) => {
+      ensureBranchConfigTablePromise = null;
+      throw error;
+    });
+  }
+  return ensureBranchConfigTablePromise;
+}
+
+async function writeBranchConfigToBigQuery(bigquery, branches) {
+  await ensureBranchConfigTable(bigquery);
+  if (!branches.length) throw new Error('At least one branch is required to update BigQuery branch settings.');
+  const params = {};
+  const values = branches.map((branch, index) => {
+    const prefix = `branch_${index}_`;
+    params[`${prefix}id`] = String(branch.id);
+    params[`${prefix}name`] = branch.name;
+    params[`${prefix}address`] = branch.address;
+    params[`${prefix}city`] = branch.city;
+    params[`${prefix}phone`] = branch.phone;
+    params[`${prefix}active`] = branch.active !== false;
+    params[`${prefix}collects_deposit`] = branch.collectsDeposit !== false;
+    params[`${prefix}allow_clinic_payment`] = branch.allowClinicPayment === true;
+    params[`${prefix}allow_deposit_payment`] = branch.allowDepositPayment === true;
+    params[`${prefix}allow_full_payment`] = branch.allowFullPayment === true;
+    params[`${prefix}business_hours`] = JSON.stringify(validateBusinessHours(branch.businessHours));
+    return `(@${prefix}id, @${prefix}name, @${prefix}address, @${prefix}city, @${prefix}phone, @${prefix}active, @${prefix}collects_deposit, @${prefix}allow_clinic_payment, @${prefix}allow_deposit_payment, @${prefix}allow_full_payment, @${prefix}business_hours)`;
+  });
+  await bigquery.query({
+    query: `BEGIN TRANSACTION;
+      DELETE FROM ${branchConfigTableRef()} WHERE TRUE;
+      INSERT INTO ${branchConfigTableRef()} (
+        id, name, address, city, phone, active, collects_deposit,
+        allow_clinic_payment, allow_deposit_payment, allow_full_payment, business_hours
+      ) VALUES ${values.join(', ')};
+      COMMIT TRANSACTION;`,
+    params,
+  });
+}
+
+async function readBranchConfigFromBigQuery(bigquery) {
+  await ensureBranchConfigTable(bigquery);
+  const [rows] = await bigquery.query({
+    query: `SELECT id, name, address, city, phone, active, collects_deposit, allow_clinic_payment, allow_deposit_payment, allow_full_payment, business_hours FROM ${branchConfigTableRef()} ORDER BY id`,
+  });
+  return rows.map((row) => ({
+    id: Number(row.id),
+    name: String(row.name || ''),
+    address: String(row.address || ''),
+    city: String(row.city || ''),
+    phone: String(row.phone || ''),
+    active: row.active === true,
+    collectsDeposit: row.collects_deposit === true,
+    allowClinicPayment: row.allow_clinic_payment === true,
+    allowDepositPayment: row.allow_deposit_payment === true,
+    allowFullPayment: row.allow_full_payment === true,
+    businessHours: validateBusinessHours(row.business_hours ? JSON.parse(row.business_hours) : undefined),
+  }));
+}
+
+async function getBranchConfiguration(sheets, bigquery = getBigQueryClient()) {
+  const bigQueryBranches = await readBranchConfigFromBigQuery(bigquery);
+  if (bigQueryBranches.length) return { branches: bigQueryBranches, source: 'bigquery' };
+  return { branches: await getBranchesFromSheets(sheets), source: 'sheets' };
+}
+
+async function getBranches(sheets) {
+  return (await getBranchConfiguration(sheets)).branches;
+}
+
+async function getBranchesForRescheduling(sheets, bigquery) {
+  return (await getBranchConfiguration(sheets, bigquery)).branches;
 }
 
 let ensureBookingsTablePromise = null;
@@ -2079,7 +2195,7 @@ function validateBranches(input) {
   });
 }
 
-async function getBranches(sheets) {
+async function getBranchesFromSheets(sheets) {
   await ensureBranchesSheet(sheets);
   const result = await sheets.spreadsheets.values.get({
     spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
@@ -4564,7 +4680,7 @@ export default async function handler(req, res) {
     const ownerOnlyRequest =
       ['therapist-name-merge', 'wix-contacts', 'wix-contacts-import', 'wix-bookings-import', ...packageViews, ...historyViews, ...wixCalendarViews].includes(view) ||
       (req.method === 'GET' && ['patient-history', 'appointment-notes', 'business-profile', 'google-ads-report', 'loyalty-dashboard', 'google-reviews', 'unavailability', 'campaign-log', 'campaign-audience-options', 'review-request-audience', 'therapist-accounts', 'dashboard-users'].includes(view)) ||
-      ['business-profile', 'dashboard-user', 'dashboard-user-status', 'therapist-account-status', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-clear-ledger', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-link', 'unavailability-delete', 'review-request-send'].includes(view) ||
+      ['business-profile', 'dashboard-user', 'dashboard-user-status', 'therapist-account-status', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-clear-ledger', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-link', 'unavailability-delete', 'review-request-send', 'branches-migrate'].includes(view) ||
       (req.method === 'POST' && ['branches', 'services', 'therapists', 'unavailability'].includes(view));
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
     const dashboardSession = await getOwnerSession(req);
@@ -5101,20 +5217,42 @@ export default async function handler(req, res) {
 
     if (req.method === 'GET' && view === 'branches') {
       res.setHeader('Cache-Control', 'no-store');
-      const branchNames = await getDashboardBranchNames(sheets, dashboardSession);
-      const branches = (await getBranches(sheets)).filter((branch) =>
-        !branchNames || branchNames.has(String(branch.name).trim().toLowerCase()),
+      const { branches: allBranches, source } = await getBranchConfiguration(sheets);
+      const branchIds = !dashboardSession || dashboardSession.role === 'owner'
+        ? null
+        : new Set(dashboardSession.branchIds);
+      const branches = allBranches.filter((branch) =>
+        !branchIds || branchIds.has(String(branch.id)),
       );
-      return res.status(200).json({ branches });
+      return res.status(200).json({ branches, source });
+    }
+
+    if (req.method === 'POST' && view === 'branches-migrate') {
+      if (!isSameOriginRequest(req)) return res.status(403).json({ message: 'Branch migration request origin is not allowed.' });
+      const bigquery = getBigQueryClient();
+      const existingBranches = await readBranchConfigFromBigQuery(bigquery);
+      if (existingBranches.length) {
+        return res.status(409).json({ message: 'Branch settings have already been imported into BigQuery.' });
+      }
+      const branches = validateBranches(await getBranchesFromSheets(sheets));
+      await writeBranchConfigToBigQuery(bigquery, branches);
+      return res.status(200).json({ branches, source: 'bigquery', importedCount: branches.length });
     }
 
     if (req.method === 'POST' && view === 'branches') {
+      let branches;
       try {
-        const branches = await saveBranches(sheets, req.body?.branches);
-        return res.status(200).json({ branches });
+        branches = validateBranches(req.body?.branches);
       } catch (validationError) {
         return res.status(400).json({ message: validationError.message || 'Unable to save branches' });
       }
+      const bigquery = getBigQueryClient();
+      if ((await readBranchConfigFromBigQuery(bigquery)).length) {
+        await writeBranchConfigToBigQuery(bigquery, branches);
+      } else {
+        branches = await saveBranches(sheets, branches);
+      }
+      return res.status(200).json({ branches });
     }
 
     if (req.method === 'GET' && view === 'services') {
@@ -5258,9 +5396,22 @@ export default async function handler(req, res) {
       const branchId = Number(req.query?.branchId);
       const durationMinutes = Number(req.query?.durationMinutes);
       const isRmt = req.query?.isRmt === 'true';
-      let startMinutes;
+      let requestedTimes;
       try {
-        startMinutes = appointmentTimeMinutes(String(req.query?.time || ''));
+        requestedTimes = req.query?.times === undefined
+          ? [String(req.query?.time || '')]
+          : JSON.parse(String(req.query.times));
+        if (!Array.isArray(requestedTimes) || requestedTimes.length === 0 || requestedTimes.length > 100 ||
+            !requestedTimes.every((time) => typeof time === 'string')) {
+          throw new Error('Invalid appointment times');
+        }
+        requestedTimes = [...new Set(requestedTimes)];
+      } catch {
+        return res.status(400).json({ message: 'Choose a valid appointment time.' });
+      }
+      let timeWindows;
+      try {
+        timeWindows = requestedTimes.map((time) => ({ time, start: appointmentTimeMinutes(time) }));
       } catch {
         return res.status(400).json({ message: 'Choose a valid appointment time.' });
       }
@@ -5303,30 +5454,13 @@ export default async function handler(req, res) {
             isTherapistScheduledAtBranch(therapist, branchId, date) &&
             (!isRmt || therapist.rmtCertified))
           .map((therapist) => therapist.id);
+        if (req.query?.times !== undefined) {
+          return res.status(200).json({
+            therapistIdsByTime: Object.fromEntries(timeWindows.map(({ time }) => [time, therapistIds])),
+          });
+        }
         return res.status(200).json({ therapistIds });
       }
-      const start = startMinutes;
-      const end = start + durationMinutes;
-      const scheduleEligible = therapists.filter((therapist) => {
-        if (therapist.active === false || (isRmt && !therapist.rmtCertified)) return false;
-        const shift = therapistShiftForDate(therapist, branchId, date, overrides);
-        return shiftCoversAppointment(shift, date, `${String(Math.floor(start / 60)).padStart(2, '0')}:${String(start % 60).padStart(2, '0')}`, durationMinutes);
-      });
-      const unavailability = blocks.filter((block) => blockOverlapsWindow(
-        block, date,
-        `${date}T${String(Math.floor(start / 60)).padStart(2, '0')}:${String(start % 60).padStart(2, '0')}:00-04:00`,
-        `${date}T${String(Math.floor(end / 60)).padStart(2, '0')}:${String(end % 60).padStart(2, '0')}:00-04:00`,
-      ) && ((block.scope === 'business' && (!block.branchName || block.branchName === branch.name)) || block.scope === 'therapist'));
-      const blockedNames = new Set(unavailability.filter((block) => block.scope === 'therapist').map((block) => block.therapistName));
-      const busyNames = new Set(blockedNames);
-      rows.slice(startIndex).forEach((row) => {
-        if (row[0] === excludeBookingId || row[7] !== date || ['Cancelled', 'No Show'].includes(String(row[24] || ''))) return;
-        const bookingStart = appointmentTimeMinutes(normalizeBookingTime(row[8] || ''));
-        const bookingEnd = bookingStart + (Number(row[12]) || 60);
-        if (intervalsOverlap(start, end, bookingStart, bookingEnd)) {
-          String(row[6] || '').split(',').map((name) => name.trim()).filter(Boolean).forEach((name) => busyNames.add(name));
-        }
-      });
       const startOfDay = zonedBookingInstant(`${date}T00:00:00`, CALENDAR_TIME_ZONE);
       const endOfDay = zonedBookingInstant(`${shiftDate(date, 1)}T00:00:00`, CALENDAR_TIME_ZONE);
       let calendarEvents;
@@ -5348,19 +5482,46 @@ export default async function handler(req, res) {
         const minute = Number(parts.find((part) => part.type === 'minute')?.value);
         return Number.isInteger(hour) && Number.isInteger(minute) ? hour * 60 + minute : null;
       };
-      calendarEvents.filter((event) => event.status !== 'cancelled').forEach((event) => {
-        const names = getTherapistFromDescription(event.description).split(',').map((name) => name.trim()).filter(Boolean);
-        const eventStart = localMinutes(event.start?.dateTime);
-        const eventEnd = localMinutes(event.end?.dateTime);
-        if (event.start?.date || eventStart === null || eventEnd === null || intervalsOverlap(start, end, eventStart, eventEnd)) {
-          names.forEach((name) => busyNames.add(name));
-        }
-      });
-      const businessBlocked = unavailability.some((block) => block.scope === 'business');
-      const availableIds = businessBlocked ? [] : scheduleEligible
-        .filter((therapist) => !busyNames.has(therapist.name))
-        .map((therapist) => therapist.id);
-      return res.status(200).json({ therapistIds: availableIds });
+      const calendarBusyWindows = calendarEvents.filter((event) => event.status !== 'cancelled').map((event) => ({
+        names: getTherapistFromDescription(event.description).split(',').map((name) => name.trim()).filter(Boolean),
+        start: localMinutes(event.start?.dateTime),
+        end: localMinutes(event.end?.dateTime),
+        allDay: Boolean(event.start?.date),
+      }));
+      const therapistIdsByTime = Object.fromEntries(timeWindows.map(({ time, start }) => {
+        const end = start + durationMinutes;
+        const windowStart = `${date}T${String(Math.floor(start / 60)).padStart(2, '0')}:${String(start % 60).padStart(2, '0')}:00-04:00`;
+        const windowEnd = `${date}T${String(Math.floor(end / 60)).padStart(2, '0')}:${String(end % 60).padStart(2, '0')}:00-04:00`;
+        const unavailability = blocks.filter((block) => blockOverlapsWindow(block, date, windowStart, windowEnd) &&
+          ((block.scope === 'business' && (!block.branchName || block.branchName === branch.name)) || block.scope === 'therapist'));
+        const busyNames = new Set(unavailability.filter((block) => block.scope === 'therapist').map((block) => block.therapistName));
+        rows.slice(startIndex).forEach((row) => {
+          if (row[0] === excludeBookingId || row[7] !== date || ['Cancelled', 'No Show'].includes(String(row[24] || ''))) return;
+          const bookingStart = appointmentTimeMinutes(normalizeBookingTime(row[8] || ''));
+          const bookingEnd = bookingStart + (Number(row[12]) || 60);
+          if (intervalsOverlap(start, end, bookingStart, bookingEnd)) {
+            String(row[6] || '').split(',').map((name) => name.trim()).filter(Boolean).forEach((name) => busyNames.add(name));
+          }
+        });
+        calendarBusyWindows.forEach(({ names, start: eventStart, end: eventEnd, allDay }) => {
+          if (allDay || eventStart === null || eventEnd === null || intervalsOverlap(start, end, eventStart, eventEnd)) {
+            names.forEach((name) => busyNames.add(name));
+          }
+        });
+        const scheduleEligible = therapists.filter((therapist) => {
+          if (therapist.active === false || (isRmt && !therapist.rmtCertified)) return false;
+          const shift = therapistShiftForDate(therapist, branchId, date, overrides);
+          return shiftCoversAppointment(shift, date, `${String(Math.floor(start / 60)).padStart(2, '0')}:${String(start % 60).padStart(2, '0')}`, durationMinutes);
+        });
+        const businessBlocked = unavailability.some((block) => block.scope === 'business');
+        const availableIds = businessBlocked ? [] : scheduleEligible
+          .filter((therapist) => !busyNames.has(therapist.name))
+          .map((therapist) => therapist.id);
+        return [time, availableIds];
+      }));
+      return req.query?.times !== undefined
+        ? res.status(200).json({ therapistIdsByTime })
+        : res.status(200).json({ therapistIds: therapistIdsByTime[timeWindows[0].time] });
     }
 
     if (req.method === 'GET' && view === 'availability') {
@@ -8585,7 +8746,8 @@ export default async function handler(req, res) {
         return res.status(400).json({ message: error.message });
       }
       const durationMinutes = Number(row[12]) || 60;
-      const branch = (await getBranches(sheets)).find((item) => item.name === row[4] || item.address === row[4]);
+      const branch = (await getBranchesForRescheduling(sheets, bigquery))
+        .find((item) => item.name === row[4] || item.address === row[4]);
       if (!branch || branch.active === false) return res.status(400).json({ message: 'Choose an active branch.' });
       const normalizedTime = newTime.replace(/^(\d):/, '0$1:');
       validateAppointmentTime(normalizedTime, branch, newDate, durationMinutes);

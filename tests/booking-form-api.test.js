@@ -24,6 +24,8 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   const ownerEmail = 'owner@example.com';
   const ownerPassword = 'synthetic-owner-password';
   let branchRows = [[1, 'Test Branch', 'Address', 'City', '555', 'TRUE', '', 'TRUE', 'TRUE', 'TRUE', 'TRUE']];
+  let failBranchesSheetRead = false;
+  let branchConfigRows = [];
   let busyEvents = [];
   let blockRows = [['Block ID']];
   let scheduleRows = [
@@ -65,7 +67,10 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
         get: async ({ range }) => {
           if (range === 'TherapistAliases!A:E') return { data: { values: aliasRows } };
           if (range === 'TherapistAccounts!A:F') return { data: { values: [['ID', 'Email', 'Name'], ['legacy-id', 'legacy@example.com', 'Legacy Staff']] } };
-          if (range === 'Branches!A2:L') return { data: { values: branchRows } };
+          if (range === 'Branches!A2:L') {
+            if (failBranchesSheetRead) throw new Error('Synthetic Sheets read quota exceeded');
+            return { data: { values: branchRows } };
+          }
           if (range === 'Unavailability!A1:J1') return { data: { values: [['Block ID']] } };
           if (range === 'Unavailability!A:J') return { data: { values: blockRows } };
           if (range === 'StaffWorkSchedule!A1:H1') return { data: { values: [['Therapist ID', 'Date', 'Branch ID', 'Working', 'Start Time', 'End Time', 'Updated By', 'Updated At']] } };
@@ -136,6 +141,30 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   t.mock.method(BigQuery.prototype, 'query', async ({ query, params }) => {
     const dashboardAuthResult = handleDashboardChallengeQuery(query, params, dashboardChallenges);
     if (dashboardAuthResult) return dashboardAuthResult;
+    if (query.includes('branch_config')) {
+      if (query.startsWith('SELECT id, name, address')) return [branchConfigRows];
+      if (query.includes('DELETE FROM')) {
+        branchConfigRows = Object.keys(params)
+          .filter((key) => /^branch_\d+_id$/.test(key))
+          .map((key) => {
+            const prefix = key.slice(0, -2);
+            return {
+              id: params[key],
+              name: params[`${prefix}name`],
+              address: params[`${prefix}address`],
+              city: params[`${prefix}city`],
+              phone: params[`${prefix}phone`],
+              active: params[`${prefix}active`],
+              collects_deposit: params[`${prefix}collects_deposit`],
+              allow_clinic_payment: params[`${prefix}allow_clinic_payment`],
+              allow_deposit_payment: params[`${prefix}allow_deposit_payment`],
+              allow_full_payment: params[`${prefix}allow_full_payment`],
+              business_hours: params[`${prefix}business_hours`],
+            };
+          });
+        return [[]];
+      }
+    }
     if (query.startsWith('WITH customers AS')) {
       customerSearches.push({ query, params });
       return [[{ name: 'Existing Client', email: 'client@example.com', phone: '+1 (437) 898-7424' }]];
@@ -294,6 +323,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   assert.equal((await request('owner-verify', { challengeId: login.data.challengeId, code: invalidOwnerOtp })).code, 401);
   const verified = await request('owner-verify', { challengeId: login.data.challengeId, code: ownerOtp });
   assert.equal(verified.code, 200);
+  const initialOwnerCookie = cookie;
   assert.equal((await request('owner-verify', { challengeId: login.data.challengeId, code: ownerOtp })).code, 401, 'OTP cannot be replayed');
 
   const todayAvailability = {
@@ -364,6 +394,42 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   assert.equal(events.length, 4);
   assert.equal(emails.length, 5);
   assert.equal(records.length, 4);
+  assert.equal(branchConfigRows.length, 0, 'Branch reads do not import data automatically');
+  const migrationOwnerCookie = initialOwnerCookie;
+  cookie = '';
+  assert.equal((await request('branches-migrate', {})).code, 401, 'Only a signed-in owner can run the import');
+  cookie = migrationOwnerCookie;
+  assert.equal((await request('branches-migrate', {}, { origin: 'https://untrusted.example' })).code, 403);
+  const branchImport = await request('branches-migrate', {});
+  assert.equal(branchImport.code, 200, JSON.stringify(branchImport.data));
+  assert.equal(branchImport.data.source, 'bigquery');
+  assert.equal(branchImport.data.importedCount, 1);
+  assert.equal((await request('branches-migrate', {})).code, 409, 'Branch import can only be run once');
+  assert.equal(branchConfigRows.length, 1, 'Branch details are imported into BigQuery on demand');
+  assert.deepEqual(JSON.parse(branchConfigRows[0].business_hours), defaultBusinessHours());
+  const importedBranches = await request('branches', null, { method: 'GET' });
+  assert.equal(importedBranches.data.source, 'bigquery');
+  const branchesBeforeSave = structuredClone(branchRows);
+  assert.equal((await request('branches', { branches: importedBranches.data.branches })).code, 200);
+  assert.deepEqual(branchRows, branchesBeforeSave, 'After migration branch edits no longer write to Sheets');
+  assert.equal((await request('branches', null, { method: 'GET' })).data.source, 'bigquery');
+  failBranchesSheetRead = true;
+  const branchesWithoutSheetRead = await request('branches', null, { method: 'GET' });
+  assert.equal(branchesWithoutSheetRead.code, 200, JSON.stringify(branchesWithoutSheetRead.data));
+  assert.equal(branchesWithoutSheetRead.data.source, 'bigquery');
+  assert.deepEqual(branchesWithoutSheetRead.data.branches, importedBranches.data.branches);
+  const rescheduledWithoutSheetRead = await request('reschedule-booking', {
+    bookingId: 'MTT-clinic',
+    email: 'test@example.com',
+    date: '2026-11-03',
+    time: '11:00 AM',
+  });
+  assert.equal(rescheduledWithoutSheetRead.code, 200, JSON.stringify(rescheduledWithoutSheetRead.data));
+  assert.equal(rescheduledWithoutSheetRead.data.date, '2026-11-03');
+  failBranchesSheetRead = false;
+  const rescheduledRecord = records.find((record) => record.booking_id === 'MTT-clinic');
+  rescheduledRecord.date = '2026-11-01';
+  rescheduledRecord.time = '10:00 AM';
 
   const reused = await request('', {
     ...base,
@@ -374,13 +440,13 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   });
   assert.equal(reused.code, 200, JSON.stringify(reused.data));
   assert.equal(reused.data.patientHistorySaved, true);
-  const reusedEmail = Buffer.from(emails[5].requestBody.raw, 'base64url').toString();
+  const reusedEmail = Buffer.from(emails.at(-1).requestBody.raw, 'base64url').toString();
   const reusedText = reusedEmail.match(/Content-Type: text\/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n([\s\S]*?)\r\n--/)[1];
   const reusedHtml = reusedEmail.match(/Content-Type: text\/html; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n([\s\S]*?)\r\n--/)[1];
   assert.match(Buffer.from(reusedText.replace(/\s/g, ''), 'base64').toString(), /MEDICAL HISTORY REMINDER[\s\S]*check it before your appointment[\s\S]*update any information that has changed[\s\S]*\?history=1&ref=MTT-reused/);
   assert.match(Buffer.from(reusedHtml.replace(/\s/g, ''), 'base64').toString(), /Check or update medical history/);
   assert.equal(events.length, 5);
-  assert.equal(emails.length, 6);
+  assert.equal(emails.length, 7);
   assert.equal(records.length, 5);
 
   const ownerLoginForAccounts = await request('owner-login', {
@@ -475,6 +541,10 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
     assert.equal(result.code, 400, JSON.stringify({ invalid, data: result.data }));
   }
   branchRows.push([2, 'Unassigned Branch', '', '', '', 'TRUE', '', 'TRUE', 'TRUE', 'TRUE', 'TRUE']);
+  branchConfigRows.push({
+    ...branchConfigRows[0], id: '2', name: 'Unassigned Branch',
+    business_hours: JSON.stringify(defaultBusinessHours()),
+  });
   assert.equal((await request('manual-booking', { ...manual, branchId: '2' })).code, 403);
   busyEvents = [{ start: { dateTime: '2026-11-01T10:00:00-04:00' }, end: { dateTime: '2026-11-01T11:00:00-04:00' }, description: 'Therapist: Test Therapist' }];
   const busyBooking = await request('manual-booking', manual);
@@ -859,6 +929,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   hours.sun = { open: '08:00', close: '22:00', closed: false };
   hours.mon.closed = true;
   branchRows[0][11] = JSON.stringify(hours);
+  branchConfigRows[0].business_hours = JSON.stringify(hours);
   scheduleRows.push([1, '2026-11-01', 1, 'TRUE', '08:00', '22:00', 'owner@example.com', 'test']);
   const morningAvailability = await request('available-therapists', null, {
     method: 'GET',
@@ -866,6 +937,15 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   });
   assert.equal(morningAvailability.code, 200, JSON.stringify(morningAvailability.data));
   assert.deepEqual(morningAvailability.data.therapistIds, [1], 'Date-specific shifts filter exact appointment availability');
+  blockRows.push(['closed-window', 'business', 'Test Branch', '', '2026-11-01', '09:00', '10:00', 'Temporary closure']);
+  const slotAvailability = await request('available-therapists', null, {
+    method: 'GET',
+    query: { date: '2026-11-01', branchId: '1', times: JSON.stringify(['09:00 AM', '01:00 PM']), durationMinutes: '60', isRmt: 'false' },
+  });
+  assert.equal(slotAvailability.code, 200, JSON.stringify(slotAvailability.data));
+  assert.deepEqual(slotAvailability.data.therapistIdsByTime['09:00 AM'], [], 'Closed slots have no available therapists');
+  assert.ok(slotAvailability.data.therapistIdsByTime['01:00 PM'].includes(1), 'Availability is calculated separately for each slot');
+  blockRows.pop();
   const beforeHoursBookings = events.length;
   for (const change of [
     { time: '07:45 AM' }, { time: '09:15 PM' }, { date: '2026-11-02' },
@@ -890,6 +970,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   })).code, 200);
   hours.sun.closed = true;
   branchRows[0][11] = JSON.stringify(hours);
+  branchConfigRows[0].business_hours = JSON.stringify(hours);
   assert.equal((await request('edit-booking', { ...editBody(), bookingNote: 'Retained existing appointment after hours change' })).code, 200,
     'Changing branch hours does not prevent non-scheduling edits to existing appointments');
   assert.equal((await request('manual-booking', manual)).code, 400, 'Closed days reject new appointments');

@@ -81,6 +81,16 @@ test('owner navigation retains each section once and identifies the current page
   assert.match(thai, /เมนูทั้งหมด/);
 });
 
+test('branch migration button is shown only until BigQuery becomes the source of truth', () => {
+  const owner = { dashboardUser: { role: 'owner', branchIds: [] } };
+  const beforeImport = render('branches', 'en', {}, { ...owner, branchConfigSource: 'sheets' });
+  assert.match(beforeImport, /One-time import to BigQuery/);
+  assert.match(beforeImport, /After import, BigQuery becomes the source of truth/);
+  const afterImport = render('branches', 'en', {}, { ...owner, branchConfigSource: 'bigquery' });
+  assert.match(afterImport, /BigQuery source of truth/);
+  assert.doesNotMatch(afterImport, /One-time import to BigQuery/);
+});
+
 test('dashboard KPIs are scoped to sales, bookings and calendar context', () => {
   const today = new Date().toISOString().slice(0, 10);
   const tomorrow = new Date(`${today}T12:00:00`);

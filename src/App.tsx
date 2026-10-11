@@ -29,7 +29,7 @@ import { anatomicalBodyParts } from '../lib/body-map.js';
 import { portalEntry } from '../lib/portal-entry.js';
 import { bookingTaxTreatment } from '../lib/booking-tax.js';
 import { isTherapistScheduledAtBranch } from '../lib/work-schedule.js';
-import useTherapistAvailability from './useTherapistAvailability';
+import useTherapistAvailability, { useBookingSlotAvailability } from './useTherapistAvailability';
 import WorkSchedule from './WorkSchedule';
 import TodayWorkSchedule from './TodayWorkSchedule';
 
@@ -644,6 +644,7 @@ export default function App() {
   const [therapistsError, setTherapistsError] = useState('');
   const [branchesList, setBranchesList] = useState(MOCK_BRANCHES);
   const [branchesError, setBranchesError] = useState('');
+  const [branchConfigSource, setBranchConfigSource] = useState('unknown');
   const [selectedBranchId, setSelectedBranchId] = useState(1);
 
   const loadBranches = async () => {
@@ -655,6 +656,7 @@ export default function App() {
         setBranchesList(data.branches);
         setBranchesError('');
       }
+      setBranchConfigSource(data.source || 'sheets');
     } catch (error) {
       setBranchesError(error.message || 'Unable to load branches; showing defaults.');
     }
@@ -797,6 +799,8 @@ export default function App() {
               branches={branchesList}
               onBranchesChange={setBranchesList}
               branchesError={branchesError}
+              branchConfigSource={branchConfigSource}
+              onBranchConfigSourceChange={setBranchConfigSource}
               services={servicesList}
               onServicesChange={setServicesList}
               servicesError={servicesError}
@@ -2534,19 +2538,29 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
 
   const requestedDurationMinutes = (Number(bookingData.service?.duration) || 60) +
     (bookingData.hotStoneAddOn && hotStoneAddOnService ? Number(hotStoneAddOnService.duration) || 0 : 0);
-  const therapistAvailability = useTherapistAvailability({
+  const appointmentTimes = bookingData.branch && bookingData.date
+    ? branchAppointmentTimes(bookingData.branch, bookingData.date, requestedDurationMinutes) : [];
+  const slotAvailability = useBookingSlotAvailability({
     branchId: bookingData.branch?.id,
     date: bookingData.date,
-    time: bookingData.time,
+    times: appointmentTimes,
     durationMinutes: requestedDurationMinutes,
     isRmt: Boolean(bookingData.service?.isRmt),
   });
+  const selectableAppointmentTimes = appointmentTimes.filter((time) =>
+    (slotAvailability.therapistIdsByTime[time]?.length || 0) >= (isCoupleService ? 2 : 1));
+  const selectedTherapistIds = slotAvailability.therapistIdsByTime[bookingData.time] || [];
+  const therapistAvailability = {
+    loading: slotAvailability.loading,
+    error: slotAvailability.error,
+    therapistIds: new Set(selectedTherapistIds),
+  };
   const branchTherapists = useMemo(
     () => therapists.filter((therapist) => therapist.active !== false &&
       isTherapistScheduledAtBranch(therapist, bookingData.branch?.id, bookingData.date) &&
       (!bookingData.service?.isRmt || therapist.rmtCertified) &&
       therapistAvailability.therapistIds.has(String(therapist.id))),
-    [therapists, bookingData.branch, bookingData.date, bookingData.service, therapistAvailability.therapistIds]
+    [therapists, bookingData.branch, bookingData.date, bookingData.service, selectedTherapistIds]
   );
 
   useEffect(() => {
@@ -2557,6 +2571,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
 
   // Clear any therapist selection that is no longer rotated into this branch/date combination
   useEffect(() => {
+    if (therapistAvailability.loading || therapistAvailability.error) return;
     setBookingData((prev) => {
       const stillValid = (therapist) => !therapist || branchTherapists.some((t) => t.id === therapist.id);
       if (stillValid(prev.therapist) && stillValid(prev.therapist2)) return prev;
@@ -2566,7 +2581,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
         therapist2: stillValid(prev.therapist2) ? prev.therapist2 : null,
       };
     });
-  }, [branchTherapists]);
+  }, [branchTherapists, therapistAvailability.loading, therapistAvailability.error]);
 
   const updateBooking = (field, val) => {
     setBookingData(prev => ({ ...prev, [field]: val }));
@@ -2633,13 +2648,12 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
   };
 
   const paymentOptions = branchPaymentOptions(bookingData.branch);
-  const appointmentTimes = bookingData.branch && bookingData.date
-    ? branchAppointmentTimes(bookingData.branch, bookingData.date, (Number(bookingData.service?.duration) || 60) +
-      (bookingData.hotStoneAddOn && hotStoneAddOnService ? Number(hotStoneAddOnService.duration) || 0 : 0)) : [];
-  const validBookingTime = appointmentTimes.includes(bookingData.time);
+  const validBookingTime = selectableAppointmentTimes.includes(bookingData.time);
   useEffect(() => {
-    if (bookingData.time && !validBookingTime) setBookingData((prev) => ({ ...prev, time: null }));
-  }, [validBookingTime, bookingData.time]);
+    if (!therapistAvailability.loading && !therapistAvailability.error && bookingData.time && !validBookingTime) {
+      setBookingData((prev) => ({ ...prev, time: null }));
+    }
+  }, [validBookingTime, bookingData.time, therapistAvailability.loading, therapistAvailability.error]);
   const paymentSkipped = (staffBooking && bookingData.skipPayment) || bookingData.paymentOption === 'clinic';
   useEffect(() => {
     if (!paymentOptions[bookingData.paymentOption]) {
@@ -3080,8 +3094,10 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                 </div>
               </div>
               <label className="block text-xs font-semibold text-stone-700 mb-2">Available Time Slots</label>
+              {slotAvailability.loading && <p role="status" className="mb-3 text-xs text-slate-600">Checking therapist availability for these times…</p>}
+              {slotAvailability.error && <p role="alert" className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">{slotAvailability.error}</p>}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                {appointmentTimes.map((time) => (
+                {selectableAppointmentTimes.map((time) => (
                   <button key={time} type="button" onClick={() => updateBooking('time', time)}
                     className={`py-2.5 px-3 rounded-xl border text-sm font-semibold transition ${
                       bookingData.time === time
@@ -3092,6 +3108,13 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                 ))}
               </div>
               {appointmentTimes.length === 0 && <p role="alert" className="mt-3 text-sm text-amber-800">No appointment times fit the business hours for this branch, date and service.</p>}
+              {!slotAvailability.loading && !slotAvailability.error && appointmentTimes.length > 0 && selectableAppointmentTimes.length === 0 && (
+                <p role="status" className="mt-3 text-sm text-amber-800">
+                  {isCoupleService
+                    ? 'Not enough therapists are available together for this date and service. Choose another date or service.'
+                    : 'No therapist is available for this date and service. Choose another date or service.'}
+                </p>
+              )}
             </div>
             <div>
               <h2 className="text-xl font-bold text-stone-900 mb-1">Select Therapist{isCoupleService ? 's' : ''}</h2>
@@ -4129,6 +4152,8 @@ function AdminPortal({
   branches, 
   onBranchesChange,
   branchesError,
+  branchConfigSource,
+  onBranchConfigSourceChange,
   services, 
   onServicesChange,
   servicesError,
@@ -4158,6 +4183,7 @@ function AdminPortal({
   const [isSavingBranches, setIsSavingBranches] = useState(false);
   const [branchSaveError, setBranchSaveError] = useState('');
   const [branchSaveMessage, setBranchSaveMessage] = useState('');
+  const [isMigratingBranches, setIsMigratingBranches] = useState(false);
 
   useEffect(() => {
     setBranchForm(branches.map((branch) => ({ ...branch })));
@@ -4197,6 +4223,28 @@ function AdminPortal({
       setBranchSaveError(error.message || 'Unable to save branches');
     } finally {
       setIsSavingBranches(false);
+    }
+  };
+
+  const migrateBranchesToBigQuery = async () => {
+    setIsMigratingBranches(true);
+    setBranchSaveError('');
+    setBranchSaveMessage('');
+    try {
+      const response = await fetch('/api/booking?view=branches-migrate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+      onBranchesChange(data.branches);
+      onBranchConfigSourceChange(data.source);
+      setBranchSaveMessage('Branches imported into BigQuery. BigQuery is now the source of truth for branch settings.');
+    } catch (error) {
+      setBranchSaveError(error.message || 'Unable to import branches into BigQuery.');
+    } finally {
+      setIsMigratingBranches(false);
     }
   };
 
@@ -6766,14 +6814,32 @@ function AdminPortal({
           <div className="flex justify-between items-center">
             <div>
               <h2 className="text-lg font-bold text-stone-900">{tr("Branches")}</h2>
-              <p className="text-xs text-stone-500">{tr("Add, edit, or deactivate locations. Changes appear on the booking portal immediately after saving.")}</p>
+              <p className="text-xs text-stone-500">{tr(branchConfigSource === 'bigquery'
+                ? "BigQuery is the source of truth for branch settings."
+                : "Add, edit, or deactivate locations. Changes appear on the booking portal immediately after saving.")}</p>
             </div>
-            <button
-              onClick={addBranchRow}
-              className="px-4 py-2 bg-amber-700 text-white rounded-xl text-xs font-bold hover:bg-amber-800 transition flex items-center"
-            >
-              <Plus className="w-4 h-4 mr-1" />{tr("Add branch")}</button>
+            <div className="flex flex-wrap justify-end gap-2">
+              {branchConfigSource === 'bigquery' && <span className="self-center rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-800">{tr("BigQuery source of truth")}</span>}
+              {dashboardUser?.role === 'owner' && branchConfigSource === 'sheets' && (
+                <button
+                  type="button"
+                  onClick={migrateBranchesToBigQuery}
+                  disabled={isMigratingBranches}
+                  className="px-3 py-2 border border-blue-300 text-blue-800 rounded-xl text-xs font-bold hover:bg-blue-50 disabled:opacity-50"
+                >
+                  {isMigratingBranches ? tr("Importing…") : tr("One-time import to BigQuery")}
+                </button>
+              )}
+              <button
+                onClick={addBranchRow}
+                className="px-4 py-2 bg-amber-700 text-white rounded-xl text-xs font-bold hover:bg-amber-800 transition flex items-center"
+              >
+                <Plus className="w-4 h-4 mr-1" />{tr("Add branch")}</button>
+            </div>
           </div>
+          {dashboardUser?.role === 'owner' && branchConfigSource === 'sheets' && (
+            <p className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-xs text-blue-900">{tr("This one-time import copies the current branch settings from Google Sheets. After import, BigQuery becomes the source of truth and branch edits are saved there.")}</p>
+          )}
 
           {branchesError && (
             <p role="alert" className="text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">{tr(branchesError)}</p>

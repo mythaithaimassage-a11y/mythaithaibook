@@ -9,6 +9,71 @@ type AvailabilityRequest = {
   excludeBookingId?: string;
 };
 
+type BookingSlotAvailabilityRequest = Omit<AvailabilityRequest, 'time' | 'excludeBookingId'> & {
+  times: string[];
+};
+
+export function useBookingSlotAvailability({ branchId, date, times, durationMinutes, isRmt }: BookingSlotAvailabilityRequest) {
+  const timesKey = JSON.stringify(times);
+  const requestKey = JSON.stringify([branchId, date, timesKey, durationMinutes, isRmt]);
+  const [state, setState] = useState<{
+    key: string;
+    therapistIdsByTime: Record<string, string[]>;
+    loading: boolean;
+    error: string;
+  }>({ key: '', therapistIdsByTime: {}, loading: false, error: '' });
+
+  useEffect(() => {
+    if (!branchId || !date || !times.length || !Number.isInteger(durationMinutes) || durationMinutes <= 0) {
+      setState({ key: requestKey, therapistIdsByTime: {}, loading: false, error: '' });
+      return;
+    }
+    const controller = new AbortController();
+    setState({ key: requestKey, therapistIdsByTime: {}, loading: true, error: '' });
+    const query = new URLSearchParams({
+      branchId: String(branchId),
+      date,
+      times: timesKey,
+      durationMinutes: String(durationMinutes),
+      isRmt: String(isRmt),
+    });
+    fetch(`/api/booking?view=available-therapists&${query}`, { signal: controller.signal, cache: 'no-store' })
+      .then(async (response) => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+        if (!data.therapistIdsByTime || typeof data.therapistIdsByTime !== 'object' || Array.isArray(data.therapistIdsByTime)) {
+          throw new Error('Therapist availability could not be verified. Refresh and try again.');
+        }
+        const therapistIdsByTime = Object.fromEntries(times.map((time) => {
+          const ids = data.therapistIdsByTime[time];
+          if (!Array.isArray(ids) || !ids.every((id: unknown) => typeof id === 'string' || typeof id === 'number')) {
+            throw new Error('Therapist availability could not be verified. Refresh and try again.');
+          }
+          return [time, ids.map(String)];
+        }));
+        if (!controller.signal.aborted) setState({ key: requestKey, therapistIdsByTime, loading: false, error: '' });
+      })
+      .catch((requestError: unknown) => {
+        if (!controller.signal.aborted) {
+          setState({
+            key: requestKey,
+            therapistIdsByTime: {},
+            loading: false,
+            error: requestError instanceof Error ? requestError.message : 'Therapist availability could not be verified. Refresh and try again.',
+          });
+        }
+      });
+    return () => controller.abort();
+  }, [branchId, date, timesKey, durationMinutes, isRmt, requestKey]);
+
+  const current = state.key === requestKey;
+  return {
+    therapistIdsByTime: current ? state.therapistIdsByTime : {},
+    loading: !current || state.loading,
+    error: current ? state.error : '',
+  };
+}
+
 export default function useTherapistAvailability({ branchId, date, time, durationMinutes, isRmt, excludeBookingId }: AvailabilityRequest) {
   const [therapistIds, setTherapistIds] = useState<Set<string>>(() => new Set());
   const [loading, setLoading] = useState(false);
