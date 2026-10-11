@@ -20,6 +20,7 @@ import QuickBooking from './QuickBooking';
 import EditBooking from './EditBooking';
 import BookingNote from './BookingNote';
 import AppointmentCheckIn, { formatCheckInTime } from './AppointmentCheckIn';
+import CheckInReminders from './CheckInReminders';
 import { LanguageProvider, createTranslator, message, useTranslation } from './localization';
 import { AVAILABLE_TIMES, BOOKING_DEPOSIT_AMOUNT, branchPaymentOptions, bookingCategories, branchAppointmentTimes, businessHoursForDate, appointmentTimeMinutes } from '../lib/booking-options.js';
 import BusinessHours from './BusinessHours';
@@ -6425,6 +6426,18 @@ function AdminPortal({
         </div>
 
         <main className="mx-auto max-w-[1600px] space-y-6 p-4 sm:p-6 xl:p-8">
+          <CheckInReminders
+            bookings={dashboardBookings.filter((booking) => dashboardUser.role === 'owner' ||
+              branches.some((branch) => dashboardUser.branchIds.includes(String(branch.id)) &&
+                (booking.branchName === branch.name || booking.branchName === branch.address)))}
+            onRefresh={loadBookingsFromBackend}
+            onChanged={async (bookingId, checkIn) => {
+              setBookings((current) => current.map((item) => item.id === bookingId ? { ...item, ...checkIn } : item));
+              setSelectedCalendarEvent((current) => current?.booking?.id === bookingId
+                ? { ...current, booking: { ...current.booking, ...checkIn } } : current);
+              await loadBookingsFromBackend();
+            }}
+          />
       {bookingEditNotice && <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">{tr(bookingEditNotice)}</p>}
       <section className="dashboard-banner relative overflow-hidden rounded-3xl bg-gradient-to-br from-slate-950 via-emerald-950 to-emerald-800 px-5 py-6 text-white shadow-xl shadow-emerald-950/10 sm:px-8 sm:py-8">
         <div aria-hidden="true" className="absolute -right-16 -top-28 h-72 w-72 rounded-full border border-white/10" />

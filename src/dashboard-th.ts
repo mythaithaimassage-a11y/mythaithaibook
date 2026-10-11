@@ -1,5 +1,8 @@
 export const dashboardThai: Record<string, string> = {
   'Owner dashboard shortcuts': 'ทางลัดแผงควบคุมเจ้าของ',
+  'Overdue check-in reminders': 'แจ้งเตือนการเช็คอินที่เกินเวลา',
+  'Check-in overdue (10 minutes after appointment time)': 'เช็คอินเกินเวลา (10 นาทีหลังเวลานัดหมาย)',
+  'Confirm the client has arrived before checking them in.': 'ยืนยันว่าลูกค้ามาถึงแล้วก่อนเช็คอิน',
   'All sections': 'เมนูทั้งหมด',
   'Upcoming bookings': 'การจองที่กำลังจะมาถึง',
   'Appointments on selected date': 'การนัดหมายในวันที่เลือก',
