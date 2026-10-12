@@ -354,6 +354,19 @@ test('saving a quick booking does not filter the calendar to the booked therapis
   assert.match(saveHandler, /date === calendarDate && branchId === calendarBranch\) await loadCalendar\(\)/);
 });
 
+test('appointment details render inside the fullscreen calendar rather than behind it', () => {
+  const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  assert.match(app, /import \{ createPortal \} from 'react-dom'/);
+  const start = app.indexOf('{selectedCalendarEvent && createPortal(');
+  assert.ok(start >= 0, 'Appointment details must be rendered through a portal');
+  const details = app.slice(start, app.indexOf('</main>', start));
+  assert.match(details, /role="dialog" aria-modal="true" aria-labelledby="appointment-receipt-title"/);
+  assert.match(details, /calendarFullscreen && calendarPanelRef\.current \? calendarPanelRef\.current : document\.body/);
+  assert.match(details, /aria-label=\{tr\("Close appointment details"\)\}/);
+  assert.match(details, /setSelectedCalendarEvent\(null\)/);
+  assert.doesNotMatch(details, /exitFullscreen/);
+});
+
 test('schedule new-booking button navigates to the booking calendar and preserves the selected branch', () => {
   const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
   const schedule = app.slice(app.indexOf('{/* TAB CONTENT: SCHEDULE */}'), app.indexOf("{activeTab === 'calendar' &&"));

@@ -2,6 +2,7 @@
 // Keep its runtime behavior unchanged while the app is incrementally typed.
 // @ts-nocheck
 import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   Calendar as CalendarIcon, Clock, User, MapPin, CreditCard, CheckCircle2, Globe, Settings, 
   Plus, Edit, Trash2, Building, FileText, Phone, Mail, Search, Filter, 
@@ -8785,7 +8786,7 @@ function AdminPortal({
         </div>
       )}
 
-      {selectedCalendarEvent && (
+      {selectedCalendarEvent && createPortal(
         <div className="fixed inset-0 z-[70] flex items-center justify-center overflow-y-auto bg-slate-950/55 p-4 backdrop-blur-sm" onClick={(event) => { if (event.target === event.currentTarget) setSelectedCalendarEvent(null); }}>
           <section role="dialog" aria-modal="true" aria-labelledby="appointment-receipt-title" className="my-auto w-full max-w-xl overflow-hidden rounded-2xl bg-white shadow-2xl">
             <div className="flex items-start justify-between gap-4 bg-gradient-to-r from-slate-950 to-emerald-900 px-5 py-5 text-white sm:px-6">
@@ -9016,7 +9017,8 @@ function AdminPortal({
             </div>
             {issuedReceipt && <div className="flex justify-end border-t border-slate-100 bg-slate-50 px-5 py-4"><button type="button" onClick={() => printIssuedReceipt(issuedReceipt)} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-xs font-bold text-slate-700 hover:bg-slate-100"><Download className="h-4 w-4" />{tr("Print / save PDF")}</button></div>}
           </section>
-        </div>
+        </div>,
+        calendarFullscreen && calendarPanelRef.current ? calendarPanelRef.current : document.body
       )}
         </main>
       </div>
