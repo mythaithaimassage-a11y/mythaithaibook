@@ -31,7 +31,7 @@ import { anatomicalBodyParts } from '../lib/body-map.js';
 import { portalEntry } from '../lib/portal-entry.js';
 import { bookingTaxTreatment } from '../lib/booking-tax.js';
 import { isTherapistScheduledAtBranch } from '../lib/work-schedule.js';
-import { COUPLE_PAIR_WINDOW_MINUTES, couplePairCandidates, filterCoupleCalendarEvents } from '../lib/couple-pairing.js';
+import { couplePairCandidates, filterCoupleCalendarEvents } from '../lib/couple-pairing.js';
 import useTherapistAvailability, { useBookingSlotAvailability, useNextAvailableBookingSlot } from './useTherapistAvailability';
 import WorkSchedule from './WorkSchedule';
 import TodayWorkSchedule from './TodayWorkSchedule';
@@ -8982,7 +8982,7 @@ function AdminPortal({
                       const candidateBookings = calendarEvents.map((event) => event.booking).filter((item) => item?.id);
                       const partnerId = String(booking.couplePartnerBookingId || '');
                       const partner = candidateBookings.find((item) => item.id === partnerId);
-                      const candidates = couplePairCandidates(booking, candidateBookings, COUPLE_PAIR_WINDOW_MINUTES);
+                      const candidates = couplePairCandidates(booking, candidateBookings);
                       const isCancelled = String(booking.status || '') === 'Cancelled';
                       const canPair = canManageTherapistAssignments && !isCancelled;
                       if (!canPair && !partnerId) return null;
@@ -9027,8 +9027,8 @@ function AdminPortal({
                           </div>
                           {partnerId && partner && <p className="mt-2 text-[11px] text-slate-500">{tr(partner.serviceName || "Not recorded")} · {formatTime(partner.time || "")} · {partner.therapistName || tr("Unassigned")}</p>}
                           {canPair && !partnerId && <p className="mt-2 text-[11px] leading-4 text-slate-500">{tr(candidates.length
-                            ? "Pair two separately booked clients who are treated together. Only same-branch appointments on this date starting within {value0} minutes are listed."
-                            : "No other appointment at this branch starts within {value0} minutes of this one.", { value0: COUPLE_PAIR_WINDOW_MINUTES })}</p>}
+                            ? "Pair separately booked clients who are treated together. Only same-branch appointments on this date with the same start and end time are listed."
+                            : "No other appointment at this branch has the same start and end time.")}</p>}
                         </div>
                       );
                     })()}

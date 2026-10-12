@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  COUPLE_PAIR_WINDOW_MINUTES,
   coupleTimeMinutes,
   isCoupleCandidate,
   couplePairCandidates,
@@ -15,6 +14,7 @@ const base = {
   branchName: 'Bang Rak',
   date: '2025-03-04',
   time: '11:00 AM',
+  durationMinutes: 60,
   status: 'Confirmed',
   customerName: 'Anna',
   couplePartnerBookingId: '',
@@ -33,11 +33,10 @@ test('coupleTimeMinutes parses 12-hour and 24-hour times and rejects junk', () =
   assert.equal(coupleTimeMinutes(undefined), null);
 });
 
-test('candidates must share the branch and date within the pairing window', () => {
-  assert.equal(COUPLE_PAIR_WINDOW_MINUTES, 60);
-  assert.ok(isCoupleCandidate(base, candidate({ time: '12:00 PM' })));
-  assert.ok(isCoupleCandidate(base, candidate({ time: '10:00 AM' })));
-  assert.equal(isCoupleCandidate(base, candidate({ time: '12:01 PM' })), false);
+test('candidates must share the branch, date, start time and end time', () => {
+  assert.ok(isCoupleCandidate(base, candidate({})));
+  assert.equal(isCoupleCandidate(base, candidate({ time: '11:15 AM' })), false);
+  assert.equal(isCoupleCandidate(base, candidate({ durationMinutes: 75 })), false);
   assert.equal(isCoupleCandidate(base, candidate({ branchName: 'Sukhumvit' })), false);
   assert.equal(isCoupleCandidate(base, candidate({ date: '2025-03-05' })), false);
   assert.ok(isCoupleCandidate(base, candidate({ branchName: '  bang rak ' })));
@@ -53,12 +52,12 @@ test('cancelled, self and already paired bookings are excluded', () => {
   assert.equal(isCoupleCandidate(base, candidate({ time: 'soon' })), false);
 });
 
-test('couplePairCandidates filters and sorts by start time then name', () => {
+test('couplePairCandidates filters and sorts by customer name', () => {
   const bookings = [
-    candidate({ id: 'b-late', time: '11:45 AM', customerName: 'Zoe' }),
+    candidate({ id: 'b-late', customerName: 'Zoe' }),
     candidate({ id: 'b-far', time: '03:00 PM', customerName: 'Far' }),
-    candidate({ id: 'b-early-b', time: '10:30 AM', customerName: 'Bob' }),
-    candidate({ id: 'b-early-a', time: '10:30 AM', customerName: 'Amy' }),
+    candidate({ id: 'b-early-b', customerName: 'Bob' }),
+    candidate({ id: 'b-early-a', customerName: 'Amy' }),
     candidate({ id: base.id }),
   ];
   assert.deepEqual(
@@ -67,10 +66,6 @@ test('couplePairCandidates filters and sorts by start time then name', () => {
   );
   assert.deepEqual(couplePairCandidates(base, []), []);
   assert.deepEqual(couplePairCandidates(base, undefined), []);
-  assert.deepEqual(
-    couplePairCandidates(base, bookings, 30).map((item) => item.id),
-    ['b-early-a', 'b-early-b'],
-  );
 });
 
 test('couple calendar filter keeps couple services and paired appointments', () => {

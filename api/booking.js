@@ -12,7 +12,7 @@ import { createBookingHistoryStore } from '../lib/booking-history.js';
 import { syncWixCalendarBatch } from '../lib/wix-calendar.js';
 import { searchBookingCustomers } from '../lib/customer-search.js';
 import { customerTypeForBooking } from '../lib/customer-type.js';
-import { COUPLE_PAIR_WINDOW_MINUTES, coupleTimeMinutes } from '../lib/couple-pairing.js';
+import { coupleTimeMinutes } from '../lib/couple-pairing.js';
 import { applySavedTherapistAliases, parseTherapistAliases, planTherapistRename, readTherapistAliases, renameTherapistBookingBatch, renameTherapistLabel, saveTherapistAlias } from '../lib/therapist-rename.js';
 import { sendGmailMessage } from '../lib/gmail.js';
 import { BOOKING_DEPOSIT_AMOUNT, validateBranchPaymentOptions, validateAppointmentTime, validateBusinessHours, appointmentTimeMinutes } from '../lib/booking-options.js';
@@ -9514,8 +9514,14 @@ export default async function handler(req, res) {
       if (bookingMinutes === null || partnerMinutes === null) {
         return res.status(400).json({ message: 'These appointments have no valid time, so they cannot be paired.' });
       }
-      if (Math.abs(bookingMinutes - partnerMinutes) > COUPLE_PAIR_WINDOW_MINUTES) {
-        return res.status(409).json({ message: `Couple appointments must start within ${COUPLE_PAIR_WINDOW_MINUTES} minutes of each other.` });
+      const bookingDuration = Number(row[12]);
+      const partnerDuration = Number(partnerRow[12]);
+      if (!Number.isInteger(bookingDuration) || bookingDuration <= 0 ||
+          !Number.isInteger(partnerDuration) || partnerDuration <= 0) {
+        return res.status(400).json({ message: 'These appointments have no valid duration, so they cannot be paired.' });
+      }
+      if (bookingMinutes !== partnerMinutes || bookingMinutes + bookingDuration !== partnerMinutes + partnerDuration) {
+        return res.status(409).json({ message: 'Couple appointments must have the same start and end time.' });
       }
       const partnerExistingPartnerId = String(partnerRow[31] || '');
       if (partnerExistingPartnerId && partnerExistingPartnerId !== bookingId) {

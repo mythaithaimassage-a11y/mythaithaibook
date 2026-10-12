@@ -824,14 +824,20 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
     status: 'Confirmed', receipt_number: '', calendar_event_id: '', couple_partner_booking_id: '',
   });
   const coupleA = coupleBooking('couple-pair-a', '11:00 AM', 'Couple A');
-  const coupleB = coupleBooking('couple-pair-b', '11:30 AM', 'Couple B');
-  const coupleC = coupleBooking('couple-pair-c', '11:15 AM', 'Couple C');
+  const coupleB = coupleBooking('couple-pair-b', '11:00 AM', 'Couple B');
+  const coupleC = coupleBooking('couple-pair-c', '11:00 AM', 'Couple C');
+  const coupleDifferentStart = coupleBooking('couple-pair-different-start', '11:15 AM', 'Couple Different Start');
   const coupleFar = coupleBooking('couple-pair-far', '03:00 PM', 'Couple Far');
+  const coupleDifferentEnd = { ...coupleBooking('couple-pair-different-end', '11:00 AM', 'Couple Different End'), duration_minutes: 60 };
   const coupleCancelled = { ...coupleBooking('couple-pair-cancelled', '11:05 AM', 'Couple X'), status: 'Cancelled' };
-  records.push(coupleA, coupleB, coupleC, coupleFar, coupleCancelled);
+  records.push(coupleA, coupleB, coupleC, coupleDifferentStart, coupleFar, coupleDifferentEnd, coupleCancelled);
   const pairRequest = (bookingId, partnerBookingId) => request('couple-pair', { bookingId, partnerBookingId });
+  assert.equal((await pairRequest(coupleA.booking_id, coupleDifferentStart.booking_id)).code, 409,
+    'Couple pairing rejects appointments with a different start time, even within the former pairing window');
   assert.equal((await pairRequest(coupleA.booking_id, coupleFar.booking_id)).code, 409,
-    'Couple pairing rejects appointments outside the start-time window');
+    'Couple pairing rejects appointments with a different start time');
+  assert.equal((await pairRequest(coupleA.booking_id, coupleDifferentEnd.booking_id)).code, 409,
+    'Couple pairing rejects appointments with a different end time');
   assert.equal((await pairRequest(coupleA.booking_id, coupleCancelled.booking_id)).code, 409,
     'Cancelled appointments cannot be paired');
   assert.equal((await pairRequest(coupleA.booking_id, coupleA.booking_id)).code, 400,
