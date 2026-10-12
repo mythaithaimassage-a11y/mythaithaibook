@@ -9,7 +9,7 @@ import {
   TrendingUp, ChevronRight, AlertCircle, Sparkles, ShieldCheck, Check, X,
   DollarSign, Users, Award, Briefcase, RefreshCw, Layers, CheckSquare, Stethoscope, Database,
   Menu, Home, CalendarDays, UserRound, BarChart3, ChevronRight as ChevronRightIcon, Maximize2, Minimize2,
-  Megaphone, ReceiptText, Download, Eye, MousePointerClick, Upload, Crown, Star, CalendarX, CalendarOff, Ban, Copy, UserCheck
+  Megaphone, ReceiptText, Download, Eye, MousePointerClick, Upload, Crown, Star, CalendarX, CalendarOff, Ban, Copy, UserCheck, Bell
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import WixContacts from './WixContacts';
@@ -30,7 +30,7 @@ import { emptyPatientHistory } from '../lib/patient-history.js';
 import { anatomicalBodyParts } from '../lib/body-map.js';
 import { portalEntry } from '../lib/portal-entry.js';
 import { bookingTaxTreatment } from '../lib/booking-tax.js';
-import { isTherapistScheduledAtBranch } from '../lib/work-schedule.js';
+import { DEFAULT_THERAPIST_END, DEFAULT_THERAPIST_START, isTherapistScheduledAtBranch } from '../lib/work-schedule.js';
 import { couplePairCandidates, filterCoupleCalendarEvents } from '../lib/couple-pairing.js';
 import useTherapistAvailability, { useBookingSlotAvailability, useNextAvailableBookingSlot } from './useTherapistAvailability';
 import WorkSchedule from './WorkSchedule';
@@ -2431,6 +2431,11 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
     const params = new URLSearchParams(window.location.search);
     return { open: params.get('manage') === '1', history: params.get('history') === '1', ref: params.get('ref') || '' };
   });
+  const [attendanceConfirmed, setAttendanceConfirmed] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    const params = new URLSearchParams(window.location.search);
+    return params.get('confirmed') === '1';
+  });
   const [portalMode, setPortalMode] = useState(manageDeepLink.history ? 'history' : manageDeepLink.open ? 'manage' : 'book');
   const { businessName, photoUrl, error: brandingError } = useBusinessBranding();
   const { translate: tr, locale } = useTranslation();
@@ -2960,6 +2965,31 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
           </div>
         </div>
       </div>
+
+      {attendanceConfirmed && (
+        <div className="mb-6 flex items-start gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-emerald-900 shadow-sm sm:p-5">
+          <CheckCircle2 className="mt-0.5 h-6 w-6 shrink-0 text-emerald-600" />
+          <div className="flex-1">
+            <h3 className="text-base font-bold text-emerald-950">Attendance confirmed</h3>
+            <p className="mt-1 text-sm text-emerald-800">
+              Your attendance for today's appointment has been confirmed. Our team looks forward to seeing you!
+            </p>
+            {manageDeepLink.ref && (
+              <p className="mt-1 text-xs font-semibold text-emerald-700">
+                Booking reference: {manageDeepLink.ref}
+              </p>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => setAttendanceConfirmed(false)}
+            className="rounded-lg p-1 text-emerald-700 hover:bg-emerald-100"
+            aria-label="Close"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
 
       {portalMode === 'manage' ? (
         <ManageBookingPanel branches={branches} onBack={() => setPortalMode('book')} initialBookingId={manageDeepLink.ref} />
@@ -4494,6 +4524,13 @@ function AdminPortal({
   const [isSendingReviewRequests, setIsSendingReviewRequests] = useState(false);
   const [reviewRequestError, setReviewRequestError] = useState('');
   const [reviewRequestResult, setReviewRequestResult] = useState('');
+  const [alertsData, setAlertsData] = useState(null);
+  const [alertsSelected, setAlertsSelected] = useState([]);
+  const [isLoadingAlerts, setIsLoadingAlerts] = useState(false);
+  const [isSendingAlerts, setIsSendingAlerts] = useState(false);
+  const [alertsError, setAlertsError] = useState('');
+  const [alertsResult, setAlertsResult] = useState('');
+  const [alertsFilter, setAlertsFilter] = useState('upcoming');
   useEffect(() => {
     setNotifyClientOnReassign(false);
     setTherapistReassignTo('');
@@ -4774,6 +4811,60 @@ function AdminPortal({
       setReviewRequestError(error.message || 'Unable to send review requests.');
     } finally {
       setIsSendingReviewRequests(false);
+    }
+  };
+
+  const loadAlerts = async () => {
+    setIsLoadingAlerts(true);
+    setAlertsError('');
+    try {
+      const response = await fetch('/api/booking?view=appointment-alerts-audience');
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+      setAlertsData(data);
+      setAlertsSelected((data.candidates || []).filter((c) => c.eligible).map((c) => c.id));
+    } catch (error) {
+      setAlertsError(error.message || 'Unable to load today\'s appointments.');
+    } finally {
+      setIsLoadingAlerts(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'alerts') loadAlerts();
+  }, [activeTab]);
+
+  const toggleAlertRecipient = (bookingId) => {
+    setAlertsSelected((current) =>
+      current.includes(bookingId) ? current.filter((id) => id !== bookingId) : [...current, bookingId],
+    );
+  };
+
+  const sendAlertReminders = async (singleBookingId) => {
+    const idsToSend = singleBookingId ? [singleBookingId] : alertsSelected;
+    if (!idsToSend.length) {
+      setAlertsError('Select at least one appointment to send a reminder.');
+      return;
+    }
+    setIsSendingAlerts(true);
+    setAlertsError('');
+    setAlertsResult('');
+    try {
+      const response = await fetch('/api/booking?view=appointment-alerts-send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bookingIds: idsToSend }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+      const summary = (data.sent === 1 ? tr("Reminder sent to {value0} customer.", { value0: data.sent }) : tr("Reminder sent to {value0} customers.", { value0: data.sent })) +
+        (data.failed ? ` ${tr("{value0} failed to send.", { value0: data.failed })}` : '');
+      setAlertsResult(summary);
+      await Promise.all([loadAlerts(), loadBookingsFromBackend()]);
+    } catch (error) {
+      setAlertsError(error.message || 'Unable to send appointment reminders.');
+    } finally {
+      setIsSendingAlerts(false);
     }
   };
 
@@ -5156,9 +5247,26 @@ function AdminPortal({
     )));
   };
 
+  const updateTherapistWorkingHoursDay = (id, dayKey, field, value) => {
+    setTherapistForm((prev) => prev.map((therapist) => (
+      therapist.id === id ? {
+        ...therapist,
+        workingHours: {
+          ...therapist.workingHours,
+          [dayKey]: {
+            startTime: therapist.workingHours?.[dayKey]?.startTime || DEFAULT_THERAPIST_START,
+            endTime: therapist.workingHours?.[dayKey]?.endTime || DEFAULT_THERAPIST_END,
+            ...therapist.workingHours?.[dayKey],
+            [field]: value,
+          },
+        },
+      } : therapist
+    )));
+  };
+
   const addTherapistRow = () => {
     setTherapistForm((prev) => [
-      { id: -Date.now(), name: '', bio: '', rating: 4.9, thaiCertified: true, rmtCertified: false, branches: [], schedule: {}, active: true },
+      { id: -Date.now(), name: '', bio: '', rating: 4.9, thaiCertified: true, rmtCertified: false, branches: [], schedule: {}, workingHours: {}, active: true },
       ...prev,
     ]);
   };
@@ -5185,7 +5293,7 @@ function AdminPortal({
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
       onTherapistsChange(data.therapists);
-      setTherapistSaveMessage('Therapist roster and branch rotation saved. This syncs to the booking portal and therapist portal immediately.');
+      setTherapistSaveMessage('Therapist roster, branch rotation, and default working hours saved. This syncs to the booking portal and therapist portal immediately.');
     } catch (error) {
       setTherapistSaveError(error.message || 'Unable to save therapists');
     } finally {
@@ -6387,9 +6495,19 @@ function AdminPortal({
 
   const pendingTherapistAccounts = therapistAccounts.filter((account) => account.status === 'pending');
 
+  const upcomingAlertsCount = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    return dashboardBookings.filter((b) => {
+      if (b.date !== today) return false;
+      if (b.status === 'Cancelled' || b.status === 'No Show' || b.status === 'Completed') return false;
+      return true;
+    }).length;
+  }, [dashboardBookings]);
+
   const adminNavigation = [
     { id: 'schedule', label: 'Home', icon: Home, section: 'Workspace' },
     { id: 'calendar', label: 'Booking Calendar', icon: CalendarDays, section: 'Workspace' },
+    { id: 'alerts', label: 'Alerts', icon: Bell, section: 'Workspace', badge: upcomingAlertsCount },
     { id: 'reports', label: 'Sales & reports', icon: BarChart3, section: 'Workspace' },
     { id: 'services', label: 'Service catalogue', icon: Layers, section: 'Manage' },
     { id: 'staff', label: 'Staff', icon: Users, section: 'Manage' },
@@ -6410,7 +6528,7 @@ function AdminPortal({
   ];
   const visibleAdminNavigation = adminNavigation.filter((item) => {
     if (dashboardUser.role === 'owner') return true;
-    if (item.id === 'schedule' || item.id === 'calendar' || item.id === 'work-schedule') return true;
+    if (item.id === 'schedule' || item.id === 'calendar' || item.id === 'work-schedule' || item.id === 'alerts') return true;
     if (dashboardUser.role === 'branch_manager' && item.id === 'reports') return true;
     if (dashboardUser.role === 'branch_manager' && item.id === 'dashboard-users') return true;
     return false;
@@ -6423,6 +6541,7 @@ function AdminPortal({
   const pageTitle = {
     schedule: t.schedule,
     calendar: 'Booking Calendar',
+    alerts: 'Alerts',
     reports: 'Sales & reports',
     loyalty: 'Loyalty program',
     marketing: 'Email marketing',
@@ -7215,6 +7334,238 @@ function AdminPortal({
         }}
       />}
 
+      {/* TAB CONTENT: ALERTS */}
+      {activeTab === 'alerts' && (
+        <div className="space-y-5">
+          <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <div className="bg-gradient-to-r from-slate-950 via-slate-900 to-emerald-950 px-5 py-6 text-white sm:px-7">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div className="flex items-start gap-4">
+                  <span className="rounded-xl bg-white/10 p-3 text-emerald-300">
+                    <Bell className="h-5 w-5" />
+                  </span>
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-300">{tr("Workspace")}</p>
+                    <h2 className="mt-1 text-xl font-bold">{tr("Alerts")}</h2>
+                    <p className="mt-1 max-w-2xl text-sm text-slate-300">
+                      {tr("Filter today's upcoming appointments and send timely reminders with attendance confirmation and self-service rescheduling.")}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={loadAlerts}
+                    disabled={isLoadingAlerts || isSendingAlerts}
+                    className="inline-flex items-center gap-2 rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-xs font-semibold text-white transition hover:bg-white/15 disabled:opacity-50"
+                  >
+                    <RefreshCw className={`h-3.5 w-3.5 ${isLoadingAlerts ? 'animate-spin' : ''}`} />
+                    {tr("Refresh")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => sendAlertReminders()}
+                    disabled={isSendingAlerts || isLoadingAlerts || !alertsSelected.length}
+                    className="inline-flex items-center gap-2 rounded-lg bg-emerald-500 px-3 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-45"
+                  >
+                    <Mail className="h-3.5 w-3.5" />
+                    {isSendingAlerts ? tr("Sending…") : tr("Send reminders ({value0})", { value0: alertsSelected.length })}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          {alertsError && (
+            <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
+              {tr(alertsError)}
+            </div>
+          )}
+          {alertsResult && (
+            <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+              {alertsResult}
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <p className="text-xs font-medium text-slate-500">{tr("Upcoming today")}</p>
+              <p className="mt-1 text-2xl font-bold text-slate-900">{alertsData?.stats?.upcoming ?? 0}</p>
+            </section>
+            <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <p className="text-xs font-medium text-slate-500">{tr("Confirmed on time")}</p>
+              <p className="mt-1 text-2xl font-bold text-emerald-800">{alertsData?.stats?.confirmed ?? 0}</p>
+            </section>
+            <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <p className="text-xs font-medium text-slate-500">{tr("Reminders sent")}</p>
+              <p className="mt-1 text-2xl font-bold text-sky-800">{alertsData?.stats?.remindersSent ?? 0}</p>
+            </section>
+            <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <p className="text-xs font-medium text-slate-500">{tr("Total today")}</p>
+              <p className="mt-1 text-2xl font-bold text-slate-900">{alertsData?.stats?.totalToday ?? 0}</p>
+            </section>
+          </div>
+
+          <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-bold text-slate-900">{tr("Appointments today")}</span>
+                <span className="text-xs text-slate-400">({alertsData?.todayDate || new Date().toISOString().slice(0, 10)})</span>
+              </div>
+              <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setAlertsFilter('upcoming')}
+                  className={`rounded-md px-3 py-1.5 font-semibold transition ${alertsFilter === 'upcoming' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+                >
+                  {tr("Upcoming today")} ({alertsData?.candidates?.filter((c) => !c.isPast).length ?? 0})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAlertsFilter('all')}
+                  className={`rounded-md px-3 py-1.5 font-semibold transition ${alertsFilter === 'all' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+                >
+                  {tr("All today")} ({alertsData?.candidates?.length ?? 0})
+                </button>
+              </div>
+            </div>
+
+            {isLoadingAlerts && !alertsData && (
+              <p className="py-12 text-center text-sm text-slate-500">{tr("Loading today's appointment alerts…")}</p>
+            )}
+
+            {!isLoadingAlerts && (!alertsData || !alertsData.candidates?.length) && (
+              <div className="py-12 text-center text-sm text-slate-500">
+                <p className="font-semibold text-slate-700">{tr("No appointments scheduled for today.")}</p>
+                <p className="mt-1 text-xs">{tr("As appointments are booked for today, they will appear here with reminder controls.")}</p>
+              </div>
+            )}
+
+            {!isLoadingAlerts && alertsData && alertsData.candidates?.length > 0 && (() => {
+              const displayed = alertsData.candidates.filter((candidate) => alertsFilter === 'all' || !candidate.isPast);
+              const eligibleDisplayed = displayed.filter((c) => c.eligible);
+              return (
+                <div className="p-4 sm:p-5">
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <span className="font-semibold text-slate-600">
+                      {alertsSelected.length} {tr("of")} {displayed.length} {tr("selected")}
+                    </span>
+                    <div className="flex gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setAlertsSelected(eligibleDisplayed.map((c) => c.id))}
+                        className="font-semibold text-emerald-800 hover:underline"
+                      >
+                        {tr("Select all")}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAlertsSelected([])}
+                        className="font-semibold text-slate-500 hover:underline"
+                      >
+                        {tr("Clear")}
+                      </button>
+                    </div>
+                  </div>
+
+                  {displayed.length === 0 ? (
+                    <div className="py-8 text-center text-sm text-slate-500">
+                      <p className="font-semibold text-slate-700">{tr("No upcoming appointments remaining today.")}</p>
+                      <button
+                        type="button"
+                        onClick={() => setAlertsFilter('all')}
+                        className="mt-2 text-xs font-semibold text-emerald-800 underline"
+                      >
+                        {tr("View all appointments for today")}
+                      </button>
+                    </div>
+                  ) : (
+                    <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200">
+                      {displayed.map((candidate) => (
+                        <li key={candidate.id} className="flex items-start gap-3 p-3.5 transition hover:bg-slate-50/70 sm:items-center">
+                          <input
+                            type="checkbox"
+                            className="mt-1 h-4 w-4 accent-emerald-700 disabled:opacity-40 sm:mt-0"
+                            checked={alertsSelected.includes(candidate.id)}
+                            disabled={!candidate.hasEmail}
+                            onChange={() => toggleAlertRecipient(candidate.id)}
+                            aria-label={`Select ${candidate.customerName || candidate.id}`}
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-bold text-slate-900">{candidate.customerName || tr("Guest customer")}</span>
+                              {candidate.confirmedOnTime && (
+                                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-900">
+                                  <Check className="h-3 w-3" />
+                                  {tr("Confirmed on time")}
+                                </span>
+                              )}
+                              {candidate.reminderSent && (
+                                <span className="inline-flex items-center gap-1 rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-bold text-sky-900">
+                                  <Mail className="h-3 w-3" />
+                                  {tr("Reminder sent")}
+                                </span>
+                              )}
+                              {!candidate.hasEmail && (
+                                <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-900">
+                                  {tr("Missing email")}
+                                </span>
+                              )}
+                              {candidate.isPast && (
+                                <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600">
+                                  {tr("Past time")}
+                                </span>
+                              )}
+                            </div>
+                            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-500">
+                              <span className="font-semibold text-slate-700">{formatTime(candidate.time)}</span>
+                              {candidate.branchName && <span>· {candidate.branchName}</span>}
+                              {candidate.serviceName && <span>· {candidate.serviceName}</span>}
+                              {candidate.therapistName && <span>· {candidate.therapistName}</span>}
+                            </div>
+                            <div className="mt-0.5 flex flex-wrap items-center gap-x-3 text-[11px] text-slate-400">
+                              {candidate.email && <span>{candidate.email}</span>}
+                              {candidate.phone && <span>{candidate.phone}</span>}
+                              <span>{tr("Ref:")} {candidate.id}</span>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => sendAlertReminders(candidate.id)}
+                              disabled={isSendingAlerts || !candidate.hasEmail}
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:opacity-40"
+                            >
+                              <Mail className="h-3.5 w-3.5 text-slate-500" />
+                              <span className="hidden sm:inline">{candidate.reminderSent ? tr("Resend") : tr("Send")}</span>
+                            </button>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50/70 p-3 text-xs text-slate-500">
+                    <p className="leading-5">
+                      {tr("Reminders contain a 1-click confirmation link for customers to confirm they will arrive on time, as well as links to cancel or reschedule.")}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => sendAlertReminders()}
+                      disabled={isSendingAlerts || isLoadingAlerts || !alertsSelected.length}
+                      className="inline-flex items-center gap-2 rounded-xl bg-emerald-950 px-4 py-2 text-xs font-bold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-45"
+                    >
+                      <Mail className="h-4 w-4" />
+                      {isSendingAlerts ? tr("Sending…") : tr("Send reminders ({value0})", { value0: alertsSelected.length })}
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
+          </section>
+        </div>
+      )}
+
       {/* TAB CONTENT: SERVICES CATALOGUE MANAGER */}
       {activeTab === 'services' && (
         <div className="bg-white rounded-2xl p-6 border border-stone-200 shadow-sm space-y-4">
@@ -7705,6 +8056,38 @@ function AdminPortal({
                         </select>
                       </div>
                     ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-stone-700 mb-1.5">{tr("Default working hours per day (used unless a date is customized in Work schedule)")}</label>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2">
+                    {WEEKDAYS.map((day) => {
+                      const hours = th.workingHours?.[day.key] || {};
+                      return <div key={day.key}>
+                        <span className="block text-[10px] font-bold text-stone-500 mb-0.5 uppercase">{tr(day.label)}</span>
+                        <label className="block text-[9px] font-medium text-stone-500">
+                          {tr('Starts')}
+                          <input
+                            type="time"
+                            aria-label={tr('{value0} start time', { value0: `${th.name || tr('Therapist')} ${day.label}` })}
+                            value={hours.startTime === undefined ? DEFAULT_THERAPIST_START : hours.startTime}
+                            onChange={(e) => updateTherapistWorkingHoursDay(th.id, day.key, 'startTime', e.target.value)}
+                            className="mt-0.5 w-full p-1.5 text-[11px] rounded-lg border border-stone-300 focus:ring-2 focus:ring-emerald-600 focus:outline-none"
+                          />
+                        </label>
+                        <label className="mt-1 block text-[9px] font-medium text-stone-500">
+                          {tr('Ends')}
+                          <input
+                            type="time"
+                            aria-label={tr('{value0} end time', { value0: `${th.name || tr('Therapist')} ${day.label}` })}
+                            value={hours.endTime === undefined ? DEFAULT_THERAPIST_END : hours.endTime}
+                            onChange={(e) => updateTherapistWorkingHoursDay(th.id, day.key, 'endTime', e.target.value)}
+                            className="mt-0.5 w-full p-1.5 text-[11px] rounded-lg border border-stone-300 focus:ring-2 focus:ring-emerald-600 focus:outline-none"
+                          />
+                        </label>
+                      </div>;
+                    })}
                   </div>
                 </div>
 
@@ -8887,11 +9270,19 @@ function AdminPortal({
               <div>
                 <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-200">{tr("Appointment details")}</p>
                 <h2 id="appointment-receipt-title" className="mt-1 text-lg font-bold">{issuedReceipt?.booking?.customerName || selectedCalendarEvent.booking?.customerName || selectedCalendarEvent.summary}</h2>
-                {selectedCalendarEvent.booking?.customerType && (
-                  <span className={`mt-1 inline-flex rounded-full px-2.5 py-1 text-[10px] font-bold ${selectedCalendarEvent.booking.customerType === 'returning' ? 'bg-sky-100 text-sky-900' : 'bg-emerald-100 text-emerald-900'}`}>
-                    {tr(selectedCalendarEvent.booking.customerType === 'returning' ? "Returning customer" : "New customer")}
-                  </span>
-                )}
+                <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                  {selectedCalendarEvent.booking?.customerType && (
+                    <span className={`inline-flex rounded-full px-2.5 py-1 text-[10px] font-bold ${selectedCalendarEvent.booking.customerType === 'returning' ? 'bg-sky-100 text-sky-900' : 'bg-emerald-100 text-emerald-900'}`}>
+                      {tr(selectedCalendarEvent.booking.customerType === 'returning' ? "Returning customer" : "New customer")}
+                    </span>
+                  )}
+                  {(selectedCalendarEvent.booking?.confirmedOnTime || selectedCalendarEvent.booking?.statusNotes?.includes('Confirmed on time') || issuedReceipt?.booking?.statusNotes?.includes('Confirmed on time')) && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/20 px-2.5 py-1 text-[10px] font-bold text-emerald-200 border border-emerald-400/30">
+                      <Check className="h-3 w-3" />
+                      {tr("Confirmed on time")}
+                    </span>
+                  )}
+                </div>
                 <p className="mt-1 text-xs text-emerald-100/80">{selectedCalendarEvent.booking?.id || tr("Calendar event")} · {formatTime(selectedCalendarEvent.timeRange || selectedCalendarEvent.localTime)}</p>
               </div>
               <button type="button" aria-label={tr("Close appointment details")} onClick={() => setSelectedCalendarEvent(null)} className="rounded-lg p-1.5 text-white/80 hover:bg-white/10 hover:text-white"><X className="h-5 w-5" /></button>
@@ -9182,7 +9573,7 @@ function AdminPortal({
             {issuedReceipt && <div className="flex justify-end border-t border-slate-100 bg-slate-50 px-5 py-4"><button type="button" onClick={() => printIssuedReceipt(issuedReceipt)} className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-xs font-bold text-slate-700 hover:bg-slate-100"><Download className="h-4 w-4" />{tr("Print / save PDF")}</button></div>}
           </section>
         </div>,
-        calendarFullscreen && calendarPanelRef.current ? calendarPanelRef.current : document.body
+        calendarFullscreen && calendarPanelRef.current ? calendarPanelRef.current : (typeof document !== 'undefined' ? document.body : null)
       )}
         </main>
       </div>

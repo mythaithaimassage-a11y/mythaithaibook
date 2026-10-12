@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { CalendarDays, Save, Users } from 'lucide-react';
-import { DEFAULT_THERAPIST_END, DEFAULT_THERAPIST_START, defaultTherapistShift, type TherapistWorkShift } from '../lib/work-schedule.js';
+import { defaultTherapistShift, defaultTherapistWorkingHours, type TherapistWorkShift } from '../lib/work-schedule.js';
 import { useTranslation } from './localization';
 
 type Branch = { id: number; name: string };
 type Therapist = {
   id: number | string; name: string; branches?: number[];
   schedule?: Record<string, number | null>;
+  workingHours?: Record<string, { startTime: string; endTime: string }>;
 };
 type Props = {
   branches: Branch[];
@@ -228,12 +229,15 @@ export default function TodayWorkSchedule({ branches, therapists, initialBranchI
       <section className="w-full max-w-md rounded-xl bg-white p-5 shadow-xl">
         <h3 id="today-work-schedule-editor-title" className="font-bold text-slate-900">{tr('Edit work hours')}</h3>
         <p className="mt-1 text-sm text-slate-600">{editingTherapist.name} · {selectedDateLabel} · {selectedBranch?.name}</p>
-        <label className="mt-4 flex items-center gap-2 text-sm font-semibold text-slate-700"><input type="checkbox" checked={editShift.isWorking} onChange={(event) => setEditShift({
-          ...editShift,
-          isWorking: event.target.checked,
-          startTime: event.target.checked && !editShift.startTime ? DEFAULT_THERAPIST_START : editShift.startTime,
-          endTime: event.target.checked && !editShift.endTime ? DEFAULT_THERAPIST_END : editShift.endTime,
-        })} />{tr('Working this day')}</label>
+        <label className="mt-4 flex items-center gap-2 text-sm font-semibold text-slate-700"><input type="checkbox" checked={editShift.isWorking} onChange={(event) => {
+          const defaultHours = defaultTherapistWorkingHours(editingTherapist, date);
+          setEditShift({
+            ...editShift,
+            isWorking: event.target.checked,
+            startTime: event.target.checked && !editShift.startTime ? defaultHours.startTime : editShift.startTime,
+            endTime: event.target.checked && !editShift.endTime ? defaultHours.endTime : editShift.endTime,
+          });
+        }} />{tr('Working this day')}</label>
         <label className="mt-3 flex items-start gap-2 text-sm font-semibold text-slate-700">
           <input type="checkbox" checked={editShift.showToPublic === true} disabled={!editShift.isWorking || saving}
             onChange={(event) => setEditShift({ ...editShift, showToPublic: event.target.checked })} />

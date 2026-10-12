@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { CalendarDays, ChevronLeft, ChevronRight, Save } from 'lucide-react';
-import { DEFAULT_THERAPIST_END, DEFAULT_THERAPIST_START, defaultTherapistShift, type TherapistWorkShift } from '../lib/work-schedule.js';
+import { defaultTherapistShift, defaultTherapistWorkingHours, type TherapistWorkShift } from '../lib/work-schedule.js';
 import { useTranslation } from './localization';
 
 type Branch = { id: number; name: string };
 type Therapist = {
   id: number | string; name: string; branches?: number[];
   schedule?: Record<string, number | null>;
+  workingHours?: Record<string, { startTime: string; endTime: string }>;
 };
 type Props = { branches: Branch[]; therapists: Therapist[]; initialBranchId?: string; initialDate?: string };
 
@@ -166,7 +167,7 @@ export default function WorkSchedule({ branches, therapists, initialBranchId = '
   return <section className="space-y-4">
     <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div><h2 className="text-lg font-bold text-slate-900">{tr('Work schedule')}</h2><p className="mt-1 text-sm text-slate-600">{tr('Review and adjust therapist working hours for the month. Weekly working days default to 10:00 AM–8:00 PM.')}</p></div>
+        <div><h2 className="text-lg font-bold text-slate-900">{tr('Work schedule')}</h2><p className="mt-1 text-sm text-slate-600">{tr('Review and adjust therapist working hours for the month. Weekly defaults come from each therapist’s Staff settings.')}</p></div>
         <button type="button" onClick={saveMonth} disabled={saving || loading || !branchId} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"><Save className="h-4 w-4" />{tr(saving ? 'Saving…' : 'Save month')}</button>
       </div>
       <div className="mt-4 flex flex-wrap items-end gap-3">
@@ -211,12 +212,15 @@ export default function WorkSchedule({ branches, therapists, initialBranchId = '
       <section className="w-full max-w-md rounded-xl bg-white p-5 shadow-xl">
         <h3 id="work-schedule-editor-title" className="font-bold text-slate-900">{tr('Edit work hours')}</h3>
         <p className="mt-1 text-sm text-slate-600">{selectedTherapist.name} · {selectedDateLabel} · {branches.find((branch) => String(branch.id) === branchId)?.name}</p>
-        <label className="mt-4 flex items-center gap-2 text-sm font-semibold text-slate-700"><input type="checkbox" checked={editShift.isWorking} onChange={(event) => setEditShift({
-          ...editShift,
-          isWorking: event.target.checked,
-          startTime: event.target.checked && !editShift.startTime ? DEFAULT_THERAPIST_START : editShift.startTime,
-          endTime: event.target.checked && !editShift.endTime ? DEFAULT_THERAPIST_END : editShift.endTime,
-        })} />{tr('Working this day')}</label>
+        <label className="mt-4 flex items-center gap-2 text-sm font-semibold text-slate-700"><input type="checkbox" checked={editShift.isWorking} onChange={(event) => {
+          const defaultHours = defaultTherapistWorkingHours(selectedTherapist, editing.date);
+          setEditShift({
+            ...editShift,
+            isWorking: event.target.checked,
+            startTime: event.target.checked && !editShift.startTime ? defaultHours.startTime : editShift.startTime,
+            endTime: event.target.checked && !editShift.endTime ? defaultHours.endTime : editShift.endTime,
+          });
+        }} />{tr('Working this day')}</label>
         <label className="mt-3 flex items-start gap-2 text-sm font-semibold text-slate-700">
           <input type="checkbox" checked={editShift.showToPublic === true} disabled={!editShift.isWorking}
             onChange={(event) => setEditShift({ ...editShift, showToPublic: event.target.checked })} />

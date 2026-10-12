@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
   defaultTherapistShift,
+  defaultTherapistWorkingHours,
   intervalsOverlap,
   isTherapistScheduledAtBranch,
   shiftCoversAppointment,
@@ -20,6 +21,20 @@ test('weekly branch schedules fall back to a default ten-to-eight shift', () => 
   assert.equal(isTherapistScheduledAtBranch(therapist, 2, '2026-11-02'), true);
   assert.equal(isTherapistScheduledAtBranch(therapist, 3, '2026-11-02'), false);
   assert.equal(defaultTherapistShift(therapist, 2, 'invalid').isWorking, false);
+});
+
+test('weekly default hours use each therapist weekday setting and retain legacy defaults', () => {
+  const therapist = {
+    id: 9,
+    branches: [2],
+    workingHours: { mon: { startTime: '08:30', endTime: '16:00' } },
+  };
+  assert.equal(defaultTherapistShift(therapist, 2, '2026-11-02').startTime, '08:30');
+  assert.equal(defaultTherapistShift(therapist, 2, '2026-11-02').endTime, '16:00');
+  assert.equal(defaultTherapistShift(therapist, 2, '2026-11-03').startTime, '10:00');
+  assert.deepEqual(defaultTherapistWorkingHours(therapist, '2026-11-02'), { startTime: '08:30', endTime: '16:00' });
+  assert.deepEqual(defaultTherapistWorkingHours(therapist, '2026-11-03'), { startTime: '10:00', endTime: '20:00' });
+  assert.equal(defaultTherapistShift({ ...therapist, workingHours: { mon: { startTime: '18:00', endTime: '09:00' } } }, 2, '2026-11-02').endTime, '20:00');
 });
 
 test('public visibility defaults to on and can be managed from both schedule screens', () => {

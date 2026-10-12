@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import React from 'react';
+import ReactDOM from 'react-dom';
 import { renderToStaticMarkup } from 'react-dom/server';
 import ts from 'typescript';
 import vm from 'node:vm';
@@ -32,6 +33,14 @@ const load = createTsLoader({
       const name = activeStates[stateIndex++];
       return React.useState(Object.prototype.hasOwnProperty.call(fixtures, name) ? fixtures[name] : initial);
     },
+  },
+  'react-dom': {
+    ...ReactDOM,
+    createPortal: (node) => node,
+  },
+  './useTherapistAvailability': {
+    __esModule: true,
+    default: () => ({ therapistIds: new Set(['1', '2', '3', '4', '5']), loading: false, error: '' }),
   },
 });
 const { AdminPortal, AdminGate, BodyAreaMap } = load(appPath, '\nexport { AdminPortal, AdminGate, BodyAreaMap };\n');
@@ -69,10 +78,11 @@ test('owner navigation retains each section once and identifies the current page
   const menu = html.match(/<nav id="mobile-dashboard-menu"[\s\S]*?<\/nav>/)?.[0];
   assert.ok(menu);
   for (const section of ['Workspace', 'Manage', 'Grow']) assert.match(menu, new RegExp(`aria-label="${section}"`));
-  assert.equal((menu.match(/<button /g) || []).length, 19);
+  assert.equal((menu.match(/<button /g) || []).length, 20);
   assert.equal((menu.match(/aria-current="page"/g) || []).length, 1);
   assert.doesNotMatch(menu, /Events &amp; bookings/);
   assert.doesNotMatch(html, /Events &amp; bookings/);
+  assert.match(menu, /Alerts/);
   assert.match(menu, /Dashboard access/);
   assert.match(menu, /Therapist approvals/);
   assert.doesNotMatch(render('schedule', 'en'), /<nav id="mobile-dashboard-menu"/);
@@ -210,7 +220,7 @@ test('owners, managers and receptionists can correct completed appointment thera
 });
 
 test('Wix calendar sync appears below the calendar and appointment list', () => {
-  const html = render('calendar', 'en');
+  const html = render('calendar', 'en', { calendarViewMode: 'agenda' });
   const calendarContentIndex = html.indexOf('No appointments match this date');
   const syncSectionIndex = html.indexOf('Append missing imported Wix bookings');
   assert.notEqual(calendarContentIndex, -1);
@@ -273,6 +283,14 @@ test('owner menu toggles, closes after navigation and supports Escape without bo
       useMemo(compute) { return compute(); },
       useRef(current) { return { current }; },
     },
+    'react-dom': {
+      ...ReactDOM,
+      createPortal: (node) => node,
+    },
+    './useTherapistAvailability': {
+      __esModule: true,
+      default: () => ({ therapistIds: new Set(['1', '2', '3', '4', '5']), loading: false, error: '' }),
+    },
     './localization': {
       useTranslation: () => ({ translate: createTranslator('en'), locale: 'en-CA', formatTime: (value) => value }),
       message,
@@ -325,7 +343,7 @@ test('managers and receptionists can edit bookings and issue receipts without ma
     const details = render('calendar', 'en', { selectedCalendarEvent: { id: 'event', booking, localTime: booking.time } }, user);
     assert.doesNotMatch(details, /Manual discount|Confirm reconciliation/);
     assert.match(details, />Edit booking</);
-    assert.doesNotMatch(details, /Log a quick note about this appointment|Change therapist…/);
+    assert.doesNotMatch(details, /Log a quick note about this appointment/);
   }
 });
 
@@ -355,6 +373,7 @@ for (const [tab, expected] of [
   ['dashboard-users', 'สร้างบัญชีแผงควบคุม'], ['patient-history', 'ประวัติลูกค้า'],
   ['google-ads', 'ผลการโฆษณา Google Ads'], ['reviews', 'รีวิวบน Google'],
   ['wix-contacts', 'Wix'], ['wix-bookings', 'Wix'], ['packages', 'แพ็กเกจ'],
+  ['alerts', 'การแจ้งเตือน'],
 ]) {
   test(`dashboard feature ${tab} renders under the Thai language provider`, () => {
     assert.ok(render(tab).includes(expected), `Missing Thai heading/control: ${expected}`);

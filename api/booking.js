@@ -15,9 +15,20 @@ import { customerTypeForBooking } from '../lib/customer-type.js';
 import { isCoupleCandidate, branchesMatch } from '../lib/couple-pairing.js';
 import { applySavedTherapistAliases, parseTherapistAliases, planTherapistRename, readTherapistAliases, renameTherapistBookingBatch, renameTherapistLabel, saveTherapistAlias } from '../lib/therapist-rename.js';
 import { sendGmailMessage } from '../lib/gmail.js';
+import {
+  collectAppointmentAlertCandidates,
+  formatAppointmentReminderEmail,
+  buildConfirmedOnTimeNotes,
+  buildReminderSentNotes,
+  isConfirmedOnTime,
+  isReminderSent,
+  isValidEmail,
+} from '../lib/appointment-alerts.js';
 import { BOOKING_DEPOSIT_AMOUNT, validateBranchPaymentOptions, validateAppointmentTime, validateBusinessHours, appointmentTimeMinutes } from '../lib/booking-options.js';
 import { validatePatientHistory, patientHistoryValues } from '../lib/patient-history.js';
 import {
+  DEFAULT_THERAPIST_END,
+  DEFAULT_THERAPIST_START,
   defaultTherapistShift,
   intervalsOverlap,
   minutesOfDay,
@@ -2651,6 +2662,16 @@ function validateTherapists(input) {
       const branchId = Number(value);
       schedule[key] = Number.isFinite(branchId) && branchId > 0 ? branchId : null;
     });
+    const workingHours = {};
+    WEEKDAY_KEYS.forEach((key) => {
+      const savedHours = therapist?.workingHours?.[key];
+      const startTime = savedHours?.startTime === undefined ? DEFAULT_THERAPIST_START : String(savedHours.startTime || '');
+      const endTime = savedHours?.endTime === undefined ? DEFAULT_THERAPIST_END : String(savedHours.endTime || '');
+      if (minutesOfDay(startTime) === null || minutesOfDay(endTime) === null || minutesOfDay(startTime) >= minutesOfDay(endTime)) {
+        throw new Error(`Default working hours for ${name} on ${key} are invalid. Choose a valid start and end time.`);
+      }
+      workingHours[key] = { startTime, endTime };
+    });
     return {
       id,
       name,
@@ -2660,9 +2681,17 @@ function validateTherapists(input) {
       rmtCertified: therapist?.rmtCertified === true,
       branches,
       schedule,
+      workingHours,
       active: therapist?.active !== false,
     };
   });
+}
+
+function parseTherapistSchedule(value) {
+  let storedSchedule = {};
+  try { storedSchedule = JSON.parse(value || '{}') || {}; } catch { storedSchedule = {}; }
+  const { workingHours, ...schedule } = storedSchedule;
+  return { schedule, workingHours: workingHours && typeof workingHours === 'object' ? workingHours : {} };
 }
 
 async function getTherapists(sheets) {
@@ -2677,8 +2706,7 @@ async function getTherapists(sheets) {
     return rows
       .filter((row) => row[0] !== undefined && row[0] !== '')
       .map((row) => {
-        let schedule = {};
-        try { schedule = JSON.parse(row[7] || '{}') || {}; } catch { schedule = {}; }
+        const { schedule, workingHours } = parseTherapistSchedule(row[7]);
         return {
           id: Number(row[0]) || row[0],
           name: row[1] || '',
@@ -2688,6 +2716,7 @@ async function getTherapists(sheets) {
           rmtCertified: String(row[5] || 'FALSE').toUpperCase() === 'TRUE',
           branches: String(row[6] || '').split(',').map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0),
           schedule,
+          workingHours,
           active: String(row[8] || 'TRUE').toUpperCase() !== 'FALSE',
         };
       });
@@ -2712,7 +2741,7 @@ async function saveTherapists(sheets, therapists) {
     const rows = validated.map((therapist) => [
       therapist.id, therapist.name, therapist.bio, therapist.rating,
       therapist.thaiCertified ? 'TRUE' : 'FALSE', therapist.rmtCertified ? 'TRUE' : 'FALSE',
-      therapist.branches.join(','), JSON.stringify(therapist.schedule || {}),
+      therapist.branches.join(','), JSON.stringify({ ...therapist.schedule, workingHours: therapist.workingHours }),
       therapist.active ? 'TRUE' : 'FALSE', new Date().toISOString(),
     ]);
     await sheets.spreadsheets.values.clear({
@@ -2778,8 +2807,7 @@ async function readAppointmentConfigFromSheets(sheets) {
     : DEFAULT_SERVICES;
   const therapists = therapistRows.length
     ? therapistRows.filter((row) => row[0] !== undefined && row[0] !== '').map((row) => {
-      let schedule = {};
-      try { schedule = JSON.parse(row[7] || '{}') || {}; } catch { schedule = {}; }
+      const { schedule, workingHours } = parseTherapistSchedule(row[7]);
       return {
         id: Number(row[0]) || row[0],
         name: row[1] || '',
@@ -2789,6 +2817,7 @@ async function readAppointmentConfigFromSheets(sheets) {
         rmtCertified: String(row[5] || 'FALSE').toUpperCase() === 'TRUE',
         branches: String(row[6] || '').split(',').map(Number).filter((value) => Number.isFinite(value) && value > 0),
         schedule,
+        workingHours,
         active: String(row[8] || 'TRUE').toUpperCase() !== 'FALSE',
       };
     })
@@ -2945,6 +2974,13 @@ function getManageBookingUrl(req, bookingId) {
   if (!host || /[\r\n/]/.test(host)) return '';
   const protocol = req.headers['x-forwarded-proto'] === 'http' ? 'http' : 'https';
   return `${protocol}://${host}/?manage=1&ref=${encodeURIComponent(bookingId)}`;
+}
+
+function getConfirmAttendanceUrl(req, bookingId) {
+  const host = req.headers['x-forwarded-host'] || req.headers.host;
+  if (!host || /[\r\n/]/.test(host)) return '';
+  const protocol = req.headers['x-forwarded-proto'] === 'http' ? 'http' : 'https';
+  return `${protocol}://${host}/api/booking?view=confirm-attendance&ref=${encodeURIComponent(bookingId)}`;
 }
 
 // Shared enrolment path for both the admin company portal and the restricted employee join link.
@@ -5007,7 +5043,7 @@ export default async function handler(req, res) {
     const packageViews = ['packages', 'package-register', 'package-redeem', 'package-customer-search'];
     const historyViews = ['booking-history-preview', 'clear-booking-history'];
     const wixCalendarViews = ['wix-calendar-sync'];
-    const validGetViews = ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'business-name', 'square-config', 'google-reviews', 'branches', 'services', 'therapists', 'staff-work-schedule', 'available-therapists', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal', 'company-join', 'find-booking', 'availability', 'unavailability', 'appointment-config-status', 'campaign-log', 'campaign-audience-options', 'review-request-audience', 'therapist-accounts', 'wix-contacts', 'dashboard-users'];
+    const validGetViews = ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'business-name', 'square-config', 'google-reviews', 'branches', 'services', 'therapists', 'staff-work-schedule', 'available-therapists', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal', 'company-join', 'find-booking', 'availability', 'unavailability', 'appointment-config-status', 'campaign-log', 'campaign-audience-options', 'review-request-audience', 'appointment-alerts-audience', 'confirm-attendance', 'therapist-accounts', 'wix-contacts', 'dashboard-users'];
     if (req.method === 'GET' && !validGetViews.includes(view) && !['therapist-name-merge', 'customer-search', 'wix-contacts-import', 'wix-bookings-import', ...packageViews, ...historyViews, ...wixCalendarViews].includes(view)) {
       return res.status(404).json({ message: 'Unknown booking view' });
     }
@@ -5060,6 +5096,10 @@ export default async function handler(req, res) {
     }
     if (view === 'mark-paid' && !['owner', 'branch_manager', 'branch_receptionist'].includes(dashboardSession?.role)) {
       return res.status(dashboardSession ? 403 : 401).json({ message: 'A branch manager or owner sign-in is required for this action.' });
+    }
+    if (['appointment-alerts-audience', 'appointment-alerts-send'].includes(view) &&
+        !['owner', 'branch_manager', 'branch_receptionist'].includes(dashboardSession?.role)) {
+      return res.status(dashboardSession ? 403 : 401).json({ message: 'Dashboard sign-in required' });
     }
 
     if (req.method === 'GET' && view === 'dashboard-users') {
@@ -5324,7 +5364,7 @@ export default async function handler(req, res) {
       const imported = await store.importContacts(prepared.contacts);
       return res.status(200).json({ ...prepared.summary, imported, existing: prepared.contacts.length - imported });
     }
-    if (['business-profile', 'appointment-config-migrate', 'branches', 'services', 'therapists', 'therapist-account-status', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-clear-ledger', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-signup', 'company-portal-bulk-signup', 'company-join-signup', 'company-portal-link', 'square-create-checkout', 'cancel-booking', 'reschedule-booking', 'unavailability', 'unavailability-delete', 'review-request-send', 'reassign-therapist', 'couple-pair'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
+    if (['business-profile', 'appointment-config-migrate', 'branches', 'services', 'therapists', 'therapist-account-status', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-clear-ledger', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-signup', 'company-portal-bulk-signup', 'company-join-signup', 'company-portal-link', 'square-create-checkout', 'cancel-booking', 'reschedule-booking', 'unavailability', 'unavailability-delete', 'review-request-send', 'appointment-alerts-send', 'reassign-therapist', 'couple-pair'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
       return res.status(403).json({ message: 'Profile update origin is not allowed' });
     }
 
@@ -5671,6 +5711,175 @@ export default async function handler(req, res) {
         console.error('Review request log write failed:', error.message || error);
       }
       return res.status(200).json({ ...results, skipped: selected.size - recipients.length });
+    }
+
+    if (req.method === 'GET' && view === 'appointment-alerts-audience') {
+      res.setHeader('Cache-Control', 'no-store');
+      if (!dashboardSession) return res.status(401).json({ message: 'Dashboard sign-in required' });
+      const bigquery = getBigQueryClient();
+      const [bookingResult, allowedBranches] = await Promise.all([
+        bqFetchBookingRows(bigquery),
+        getDashboardBranchNames(sheets, dashboardSession),
+      ]);
+      const now = new Date();
+      const localDateParts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+        timeZone: CALENDAR_TIME_ZONE,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hourCycle: 'h23',
+      }).formatToParts(now).map((part) => [part.type, part.value]));
+      const todayDate = `${localDateParts.year}-${localDateParts.month}-${localDateParts.day}`;
+      const nowTimeMinutes = Number(localDateParts.hour) * 60 + Number(localDateParts.minute);
+
+      const rows = bookingResult.data.values || [];
+      const audience = collectAppointmentAlertCandidates(rows, {
+        todayDate,
+        allowedBranches,
+        nowTimeMinutes,
+      });
+
+      return res.status(200).json(audience);
+    }
+
+    if (req.method === 'POST' && view === 'appointment-alerts-send') {
+      res.setHeader('Cache-Control', 'no-store');
+      if (!dashboardSession) return res.status(401).json({ message: 'Dashboard sign-in required' });
+      const requestedIds = Array.isArray(req.body?.bookingIds) ? req.body.bookingIds : [];
+      const selectedIds = new Set(
+        requestedIds.map((id) => String(id || '').trim()).filter(Boolean),
+      );
+      if (!selectedIds.size) {
+        return res.status(400).json({ message: 'Select at least one appointment to send a reminder.' });
+      }
+
+      const bigquery = getBigQueryClient();
+      const [result, businessProfile, allowedBranches] = await Promise.all([
+        bqFetchBookingRows(bigquery),
+        getBusinessProfile(sheets),
+        getDashboardBranchNames(sheets, dashboardSession),
+      ]);
+      const rows = (result.data.values || []).filter((row) => row[0] && row[0] !== 'Booking ID');
+
+      const gmail = createGmailApi();
+      const results = { sent: 0, failed: 0, skipped: 0 };
+      const nowIso = new Date().toISOString();
+
+      for (const row of rows) {
+        const bookingId = String(row[0] || '').trim();
+        if (!selectedIds.has(bookingId)) continue;
+
+        const branch = String(row[4] || '').trim();
+        if (allowedBranches && !allowedBranches.has(branch.toLowerCase())) {
+          results.skipped += 1;
+          continue;
+        }
+
+        const status = String(row[24] || '').trim();
+        if (status === 'Cancelled' || status === 'No Show') {
+          results.skipped += 1;
+          continue;
+        }
+
+        const email = String(row[3] || '').trim().toLowerCase();
+        if (!isValidEmail(email)) {
+          results.skipped += 1;
+          continue;
+        }
+
+        const booking = {
+          id: bookingId,
+          customerName: String(row[1] || '').trim(),
+          phone: String(row[2] || '').trim(),
+          email,
+          branchName: branch,
+          serviceName: String(row[5] || '').trim(),
+          therapistName: String(row[6] || '').trim(),
+          date: String(row[7] || '').trim(),
+          time: normalizeBookingTime(String(row[8] || '').trim()),
+          status,
+          statusNotes: String(row[25] || '').trim(),
+        };
+
+        const manageUrl = getManageBookingUrl(req, bookingId);
+        const confirmUrl = getConfirmAttendanceUrl(req, bookingId);
+
+        try {
+          const emailMessage = formatAppointmentReminderEmail({
+            booking,
+            confirmUrl,
+            manageUrl,
+            businessProfile,
+            senderEmail: GOOGLE_GMAIL_SENDER_EMAIL || businessProfile?.email || 'mythaithaimassage@gmail.com',
+          });
+          await sendGmailMessage(gmail, {
+            userId: 'me',
+            requestBody: { raw: Buffer.from(emailMessage.raw).toString('base64url') },
+          });
+          results.sent += 1;
+
+          const updatedNotes = buildReminderSentNotes(booking.statusNotes, nowIso);
+          await bqUpdateBookingFields(bigquery, bookingId, { statusNotes: updatedNotes });
+        } catch (error) {
+          results.failed += 1;
+          console.error(`Appointment reminder delivery failed for ${bookingId}:`, error.message || error);
+        }
+      }
+
+      return res.status(200).json(results);
+    }
+
+    if (view === 'confirm-attendance') {
+      res.setHeader('Cache-Control', 'no-store');
+      const ref = String(req.query?.ref || req.body?.ref || req.body?.bookingId || '').trim();
+      if (!ref) {
+        return res.status(400).json({ message: 'Booking reference is required.' });
+      }
+      const bigquery = getBigQueryClient();
+      const result = await bqFetchBookingRows(bigquery);
+      const rows = result.data.values || [];
+      const row = rows.find((r) => String(r[0] || '').trim() === ref && r[0] !== 'Booking ID');
+      if (!row) {
+        if (req.method === 'GET' && req.headers.accept?.includes('text/html')) {
+          return res.status(404).send(`<!doctype html><html><body style="font-family:sans-serif;padding:40px;text-align:center;"><h2>Booking not found</h2><p>We could not find an appointment with reference <strong>${escapeHtml(ref)}</strong>.</p></body></html>`);
+        }
+        return res.status(404).json({ message: 'Booking not found.' });
+      }
+
+      const status = String(row[24] || '').trim();
+      if (status === 'Cancelled') {
+        if (req.method === 'GET' && req.headers.accept?.includes('text/html')) {
+          return res.status(409).send(`<!doctype html><html><body style="font-family:sans-serif;padding:40px;text-align:center;"><h2>Appointment Cancelled</h2><p>This appointment has already been cancelled.</p></body></html>`);
+        }
+        return res.status(409).json({ message: 'This appointment has already been cancelled.' });
+      }
+
+      const existingNotes = String(row[25] || '').trim();
+      if (!isConfirmedOnTime(existingNotes)) {
+        const nowIso = new Date().toISOString();
+        const updatedNotes = buildConfirmedOnTimeNotes(existingNotes, nowIso);
+        await bqUpdateBookingFields(bigquery, ref, { statusNotes: updatedNotes });
+      }
+
+      const host = req.headers['x-forwarded-host'] || req.headers.host;
+      const protocol = req.headers['x-forwarded-proto'] === 'http' ? 'http' : 'https';
+      const portalUrl = host ? `${protocol}://${host}/?confirmed=1&ref=${encodeURIComponent(ref)}` : `/?confirmed=1&ref=${encodeURIComponent(ref)}`;
+
+      if (req.method === 'GET' && req.headers.accept?.includes('text/html')) {
+        return res.redirect(302, portalUrl);
+      }
+
+      return res.status(200).json({
+        success: true,
+        confirmed: true,
+        bookingId: ref,
+        customerName: String(row[1] || ''),
+        date: String(row[7] || ''),
+        time: String(row[8] || ''),
+        message: 'Thank you! Your on-time attendance has been confirmed.',
+      });
     }
 
     if (req.method === 'GET' && view === 'branches') {
@@ -8388,6 +8597,8 @@ export default async function handler(req, res) {
           editVersion: bookingEditVersion(row),
           status: row[24] || '',
           statusNotes: row[25] || '',
+          confirmedOnTime: isConfirmedOnTime(row[25]),
+          reminderSent: isReminderSent(row[25]),
           isCouple: /couple/i.test(row[5] || ''),
           syncedToSheets: true,
           bookingNote: row[28] || '',
