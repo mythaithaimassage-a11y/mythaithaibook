@@ -5012,8 +5012,8 @@ export default async function handler(req, res) {
     }
     const ownerOnlyRequest =
       ['therapist-name-merge', 'wix-contacts', 'wix-contacts-import', 'wix-bookings-import', ...packageViews, ...historyViews, ...wixCalendarViews].includes(view) ||
-      (req.method === 'GET' && ['patient-history', 'appointment-notes', 'business-profile', 'appointment-config-status', 'google-ads-report', 'loyalty-dashboard', 'google-reviews', 'unavailability', 'campaign-log', 'campaign-audience-options', 'review-request-audience', 'therapist-accounts', 'dashboard-users'].includes(view)) ||
-      ['business-profile', 'appointment-config-migrate', 'dashboard-user', 'dashboard-user-status', 'therapist-account-status', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-clear-ledger', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-link', 'unavailability-delete', 'review-request-send', 'branches-migrate'].includes(view) ||
+      (req.method === 'GET' && ['patient-history', 'appointment-notes', 'business-profile', 'appointment-config-status', 'google-ads-report', 'loyalty-dashboard', 'google-reviews', 'unavailability', 'campaign-log', 'campaign-audience-options', 'review-request-audience', 'therapist-accounts'].includes(view)) ||
+      ['business-profile', 'appointment-config-migrate', 'dashboard-user', 'dashboard-user-status', 'dashboard-user-password', 'therapist-account-status', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-clear-ledger', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'company-portal-link', 'unavailability-delete', 'review-request-send', 'branches-migrate'].includes(view) ||
       (req.method === 'POST' && ['branches', 'services', 'therapists', 'unavailability'].includes(view));
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
     const dashboardSession = await getOwnerSession(req);
@@ -5031,6 +5031,12 @@ export default async function handler(req, res) {
     }
     if (ownerOnlyRequest && dashboardSession?.role !== 'owner') {
       return res.status(dashboardSession ? 403 : 401).json({ message: dashboardSession ? 'Owner role required' : 'Dashboard sign-in required' });
+    }
+    if (
+      view === 'dashboard-users'
+      && (!dashboardSession || !['owner', 'branch_manager'].includes(dashboardSession.role))
+    ) {
+      return res.status(dashboardSession ? 403 : 401).json({ message: dashboardSession ? 'Owner or branch manager role required' : 'Dashboard sign-in required' });
     }
     if (view === 'reassign-therapist' &&
         !['owner', 'branch_manager', 'branch_receptionist'].includes(dashboardSession?.role)) {
@@ -5061,12 +5067,16 @@ export default async function handler(req, res) {
       const [rows] = await bigquery.query({
         query: `SELECT id, email, name, role, branch_ids, status, created_at, updated_at FROM ${dashboardUsersTableRef()} ORDER BY email`,
       });
-      return res.status(200).json({
-        users: rows.map((row) => ({
+      const users = rows.map((row) => ({
           id: row.id, email: row.email, name: row.name, role: row.role,
           branchIds: JSON.parse(row.branch_ids || '[]'), status: row.status,
           createdAt: row.created_at, updatedAt: row.updated_at,
-        })),
+        }));
+      return res.status(200).json({
+        users: dashboardSession.role === 'owner'
+          ? users
+          : users.filter((user) => user.role === 'branch_receptionist'
+            && user.branchIds.some((id) => dashboardSession.branchIds.includes(String(id)))),
       });
     }
 
@@ -5084,6 +5094,70 @@ export default async function handler(req, res) {
         params: { id, status, updated_at: new Date().toISOString() },
       });
       return res.status(200).json({ status });
+    }
+    if (req.method === 'POST' && view === 'dashboard-user-password') {
+      if (!isSameOriginRequest(req)) return res.status(403).json({ message: 'Dashboard user request origin is not allowed' });
+      const id = String(req.body?.id || '');
+      const password = String(req.body?.password || '');
+      if (!/^[0-9a-f-]{36}$/i.test(id) || password.length < 12 || password.length > 1024) {
+        return res.status(400).json({ message: 'Choose a valid account and a password of at least 12 characters.' });
+      }
+      const bigquery = getBigQueryClient();
+      await ensureDashboardAuthTables(bigquery);
+      const [targetRows] = await bigquery.query({
+        query: `SELECT role FROM ${dashboardUsersTableRef()} WHERE id = @id LIMIT 1`,
+        params: { id },
+      });
+      if (!targetRows.length) return res.status(404).json({ message: 'Dashboard account not found.' });
+      await bigquery.query({
+        query: `UPDATE ${dashboardUsersTableRef()} SET password_hash = @password_hash, updated_at = @updated_at WHERE id = @id`,
+        params: { id, password_hash: hashPassword(password), updated_at: new Date().toISOString() },
+      });
+      return res.status(200).json({ updated: true });
+    }
+    if (req.method === 'POST' && view === 'dashboard-user-role') {
+      if (!dashboardSession || !['owner', 'branch_manager'].includes(dashboardSession.role)) {
+        return res.status(dashboardSession ? 403 : 401).json({ message: dashboardSession ? 'Owner or branch manager role required' : 'Dashboard sign-in required' });
+      }
+      if (!isSameOriginRequest(req)) return res.status(403).json({ message: 'Dashboard user request origin is not allowed' });
+      const id = String(req.body?.id || '');
+      const targetRole = String(req.body?.role || '');
+      if (!/^[0-9a-f-]{36}$/i.test(id) || !['owner', 'branch_manager'].includes(targetRole)) {
+        return res.status(400).json({ message: 'Choose a valid account and role.' });
+      }
+      const bigquery = getBigQueryClient();
+      await ensureDashboardAuthTables(bigquery);
+      const [targetRows] = await bigquery.query({
+        query: `SELECT role, branch_ids FROM ${dashboardUsersTableRef()} WHERE id = @id LIMIT 1`,
+        params: { id },
+      });
+      const target = targetRows[0];
+      if (!target) return res.status(404).json({ message: 'Dashboard account not found.' });
+      let targetBranchIds;
+      try {
+        targetBranchIds = JSON.parse(target.branch_ids || '[]').map(String);
+      } catch {
+        return res.status(500).json({ message: 'Dashboard account has invalid branch assignments.' });
+      }
+      const ownerPromotion = dashboardSession.role === 'owner'
+        && target.role === 'branch_manager'
+        && targetRole === 'owner';
+      const managerPromotion = dashboardSession.role === 'branch_manager'
+        && target.role === 'branch_receptionist'
+        && targetRole === 'branch_manager'
+        && targetBranchIds.length > 0
+        && targetBranchIds.every((branchId) => dashboardSession.branchIds.includes(branchId));
+      if (!ownerPromotion && !managerPromotion) {
+        return res.status(403).json({ message: 'This role promotion is not allowed.' });
+      }
+      await bigquery.query({
+        query: `UPDATE ${dashboardUsersTableRef()} SET role = @role, branch_ids = @branch_ids, updated_at = @updated_at WHERE id = @id`,
+        params: {
+          id, role: targetRole, branch_ids: JSON.stringify(targetRole === 'owner' ? [] : targetBranchIds),
+          updated_at: new Date().toISOString(),
+        },
+      });
+      return res.status(200).json({ role: targetRole, branchIds: targetRole === 'owner' ? [] : targetBranchIds });
     }
     if (historyViews.includes(view)) {
       if (req.method !== 'POST') return res.status(405).json({ message: 'Method Not Allowed' });

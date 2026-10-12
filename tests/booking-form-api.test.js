@@ -235,6 +235,12 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
       if (query.startsWith('SELECT id FROM') && query.includes('LOWER(email)')) {
         return [dashboardUsers.filter((user) => user.email === params.email).map(({ id }) => ({ id }))];
       }
+      if (query.startsWith('SELECT role, branch_ids')) {
+        return [dashboardUsers.filter((user) => user.id === params.id)];
+      }
+      if (query.startsWith('SELECT role FROM')) {
+        return [dashboardUsers.filter((user) => user.id === params.id)];
+      }
       if (query.startsWith('INSERT INTO')) {
         dashboardUsers.push({
           ...params,
@@ -247,7 +253,12 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
       if (query.startsWith('SELECT id, email, name, role')) return [dashboardUsers];
       if (query.startsWith('UPDATE')) {
         const user = dashboardUsers.find((entry) => entry.id === params.id);
-        if (user) user.status = params.status;
+        if (user) {
+          if (params.status) user.status = params.status;
+          if (params.role) user.role = params.role;
+          if (params.branch_ids) user.branch_ids = params.branch_ids;
+          if (params.password_hash) user.password_hash = params.password_hash;
+        }
         return [[]];
       }
     }
@@ -548,7 +559,9 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   assert.equal(managerVerified.code, 200);
   const managerCookie = cookie;
   assert.equal((await request('patient-history', null, { method: 'GET' })).code, 403);
-  assert.equal((await request('dashboard-users', null, { method: 'GET' })).code, 403);
+  const managerUsers = await request('dashboard-users', null, { method: 'GET' });
+  assert.equal(managerUsers.code, 200, JSON.stringify(managerUsers.data));
+  assert.deepEqual(managerUsers.data.users, []);
   assert.equal((await request('mark-paid', { bookingId: 'MTT-not-found' })).code, 404);
 
   const ownerLoginAgain = await request('owner-login', {
@@ -576,6 +589,34 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   assert.equal((await request('dashboard-users', null, { method: 'GET' })).code, 403);
 
   const receptionistCookie = cookie;
+  cookie = managerCookie;
+  const managerReceptionistUsers = await request('dashboard-users', null, { method: 'GET' });
+  assert.equal(managerReceptionistUsers.code, 200, JSON.stringify(managerReceptionistUsers.data));
+  assert.deepEqual(managerReceptionistUsers.data.users.map((user) => user.email), ['reception@example.com']);
+  const promotedReceptionist = await request('dashboard-user-role', {
+    id: receptionistCreated.data.user.id, role: 'branch_manager',
+  });
+  assert.equal(promotedReceptionist.code, 200, JSON.stringify(promotedReceptionist.data));
+  assert.equal(promotedReceptionist.data.role, 'branch_manager');
+  cookie = ownerCookie;
+  const promotedManager = await request('dashboard-user-role', {
+    id: managerCreated.data.user.id, role: 'owner',
+  });
+  assert.equal(promotedManager.code, 200, JSON.stringify(promotedManager.data));
+  assert.equal(promotedManager.data.role, 'owner');
+  const resetPassword = await request('dashboard-user-password', {
+    id: managerCreated.data.user.id, password: 'synthetic-promoted-password',
+  });
+  assert.equal(resetPassword.code, 200, JSON.stringify(resetPassword.data));
+  cookie = receptionistCookie;
+  assert.equal((await request('dashboard-user-password', {
+    id: managerCreated.data.user.id, password: 'synthetic-rejected-password',
+  })).code, 403);
+  const restoredManager = dashboardUsers.find((user) => user.id === managerCreated.data.user.id);
+  restoredManager.role = 'branch_manager';
+  restoredManager.branch_ids = '["1"]';
+  const restoredReceptionist = dashboardUsers.find((user) => user.id === receptionistCreated.data.user.id);
+  restoredReceptionist.role = 'branch_receptionist';
   records.length = 0;
   const manual = {
     customerName: '  Walk-in Client  ', contact: '+1 (437) 898-7424',

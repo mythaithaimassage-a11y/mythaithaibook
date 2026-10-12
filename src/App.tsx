@@ -5251,6 +5251,48 @@ function AdminPortal({
     }
   };
 
+  const updateDashboardUserPassword = async (account) => {
+    const password = window.prompt(tr("Enter a new password of at least 12 characters for {value0}.", { value0: account.email }));
+    if (password === null) return;
+    if (password.length < 12) {
+      setDashboardUserError(tr("The password must be at least 12 characters."));
+      return;
+    }
+    setDashboardUserError('');
+    try {
+      const response = await fetch('/api/booking?view=dashboard-user-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: account.id, password }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Unable to update dashboard account password.');
+      setDashboardUserMessage(tr("Password updated for {value0}.", { value0: account.email }));
+    } catch (error) {
+      setDashboardUserError(error.message || 'Unable to update dashboard account password.');
+    }
+  };
+
+  const promoteDashboardUser = async (account) => {
+    const role = account.role === 'branch_manager' ? 'owner' : 'branch_manager';
+    if (!window.confirm(tr("Promote {value0} to {value1}?", { value0: account.email, value1: tr(role.replaceAll('_', ' ')) }))) return;
+    setDashboardUserError('');
+    try {
+      const response = await fetch('/api/booking?view=dashboard-user-role', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: account.id, role }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Unable to promote dashboard account.');
+      setDashboardUsers((current) => current.map((user) => user.id === account.id
+        ? { ...user, role: data.role, branchIds: data.branchIds }
+        : user));
+    } catch (error) {
+      setDashboardUserError(error.message || 'Unable to promote dashboard account.');
+    }
+  };
+
   const t = TRANSLATIONS[lang];
 
   const assignedBranchIds = new Set((dashboardUser.branchIds || []).map(String));
@@ -6330,6 +6372,7 @@ function AdminPortal({
     if (dashboardUser.role === 'owner') return true;
     if (item.id === 'schedule' || item.id === 'calendar' || item.id === 'work-schedule') return true;
     if (dashboardUser.role === 'branch_manager' && item.id === 'reports') return true;
+    if (dashboardUser.role === 'branch_manager' && item.id === 'dashboard-users') return true;
     return false;
   });
   const navigationSections = [...new Set(visibleAdminNavigation.map((item) => item.section))];
@@ -6545,9 +6588,9 @@ function AdminPortal({
       {activeTab === 'wix-bookings' && <WixBookings onViewBookings={() => setActiveTab('schedule')} />}
       {activeTab === 'packages' && <PackageTracking onViewBookings={() => setActiveTab('schedule')} />}
 
-      {activeTab === 'dashboard-users' && dashboardUser.role === 'owner' && (
+      {activeTab === 'dashboard-users' && ['owner', 'branch_manager'].includes(dashboardUser.role) && (
         <section className="space-y-5">
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          {dashboardUser.role === 'owner' && <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <h2 className="text-lg font-bold text-slate-950">{tr("Dashboard access")}</h2>
             <p className="mt-1 text-sm text-slate-600">{tr("Create role-limited accounts. Every account must verify sign-in with a one-time code sent to its email address.")}</p>
             <form onSubmit={createDashboardUser} className="mt-4 grid gap-3 sm:grid-cols-2">
@@ -6581,7 +6624,7 @@ function AdminPortal({
             <p className="mt-3 text-xs leading-5 text-slate-500">{tr("The owner sets the initial password. Share it separately through a secure channel; the account’s email is used for sign-in and OTP delivery.")}</p>
             {dashboardUserMessage && <p role="status" className="mt-3 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-900">{tr(dashboardUserMessage)}</p>}
             {dashboardUserError && <p role="alert" className="mt-3 rounded-lg bg-rose-50 p-3 text-sm text-rose-800">{tr(dashboardUserError)}</p>}
-          </div>
+          </div>}
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex items-center justify-between gap-3">
               <h3 className="text-sm font-bold text-slate-900">{tr("Staff accounts")}</h3>
@@ -6594,10 +6637,15 @@ function AdminPortal({
                     <p className="truncate text-sm font-semibold text-slate-900">{account.name} · {account.email}</p>
                     <p className="mt-1 text-xs capitalize text-slate-500">{tr(account.role.replaceAll('_', ' '))} · {account.branchIds.map((id) => branches.find((branch) => String(branch.id) === String(id))?.name).filter(Boolean).join(', ') || tr("All branches")} · {tr(account.status)}</p>
                   </div>
-                  <button type="button" onClick={() => updateDashboardUserStatus(account)} className={`rounded-lg px-3 py-2 text-xs font-bold ${account.status === 'active' ? 'border border-rose-200 text-rose-700 hover:bg-rose-50' : 'border border-emerald-200 text-emerald-800 hover:bg-emerald-50'}`}>{account.status === 'active' ? tr("Disable access") : tr("Restore access")}</button>
+                  <div className="flex flex-wrap justify-end gap-2">
+                    {dashboardUser.role === 'owner' && <button type="button" onClick={() => updateDashboardUserPassword(account)} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50">{tr("Reset password")}</button>}
+                    {((dashboardUser.role === 'owner' && account.role === 'branch_manager') || (dashboardUser.role === 'branch_manager' && account.role === 'branch_receptionist')) && <button type="button" onClick={() => promoteDashboardUser(account)} className="rounded-lg border border-emerald-200 px-3 py-2 text-xs font-bold text-emerald-800 hover:bg-emerald-50">{tr("Promote")}</button>}
+                    {dashboardUser.role === 'owner' && <button type="button" onClick={() => updateDashboardUserStatus(account)} className={`rounded-lg px-3 py-2 text-xs font-bold ${account.status === 'active' ? 'border border-rose-200 text-rose-700 hover:bg-rose-50' : 'border border-emerald-200 text-emerald-800 hover:bg-emerald-50'}`}>{account.status === 'active' ? tr("Disable access") : tr("Restore access")}</button>}
+                  </div>
                 </div>
               )) : <p className="py-4 text-sm text-slate-500">{tr("No staff accounts have been created.")}</p>}
             </div>
+            <p className="mt-3 text-xs leading-5 text-slate-500">{tr("Passwords are stored securely and cannot be viewed. Only the owner can reset a password.")}</p>
           </div>
         </section>
       )}
