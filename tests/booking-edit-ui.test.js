@@ -7,7 +7,7 @@ import { defaultBusinessHours } from '../lib/booking-options.js';
 
 const editorPath = new URL('../src/EditBooking.tsx', import.meta.url).pathname;
 const load = createTsLoader();
-const EditBooking = load(editorPath).default;
+const { default: EditBooking, parseCoupleCustomerNames } = load(editorPath);
 const { LanguageProvider } = load(new URL('../src/localization.tsx', import.meta.url).pathname);
 const booking = { id: 'MTT-EDIT', customerName: 'Customer name', email: 'client@example.com', phone: '4375550101',
   branchName: 'Central', serviceName: 'Massage', therapistName: 'Tanya', date: '2026-12-01', time: '10:00 AM',
@@ -169,4 +169,68 @@ test('editor submits changes with a version, prevents duplicate saves and report
   assert.match(JSON.stringify(nodes(shallow()).find((node) => node.props?.role === 'status').props.children), /No HST \(cash payment\)/);
   paymentSelect().props.onChange({ target: { value: 'Card' } });
   assert.equal(totalInput().props.value, '113.00', 'Switching back to card adds HST');
+});
+
+test('editor supports couple massage with Person 1, Guest 2, and dual therapist selection', async () => {
+  const coupleBooking = {
+    id: 'MTT-COUPLE-1',
+    customerName: 'Abhishek Walia & Manib Eram',
+    email: 'couple@example.com',
+    phone: '4375550102',
+    branchName: 'Central',
+    serviceName: 'Thai Combo Swedish + Hot Stone - Couple (60 min)',
+    therapistName: 'NOI',
+    date: '2026-12-01',
+    time: '10:00 AM',
+    paymentOption: 'Card',
+    total: 240,
+    paidAmount: 240,
+    bookingNote: '',
+    editVersion: 'version-couple-1',
+  };
+  const coupleProps = {
+    booking: coupleBooking,
+    services: [
+      { id: 10, name: 'Thai Combo Swedish - Couple (60 min)', duration: 60, price: 200, taxRate: .13 },
+      { id: 11, name: 'Hot Stone Add-on', duration: 15, price: 40, taxRate: .13 },
+    ],
+    therapists: [
+      { id: 1, name: 'NOI', active: true },
+      { id: 2, name: 'TINA', active: true },
+      { id: 3, name: 'SARAH', active: true },
+    ],
+    times: ['10:00 AM', '11:00 AM'],
+    isScheduled: () => true,
+    onClose() {},
+    async onSaved() {},
+  };
+  const html = renderToStaticMarkup(React.createElement(LanguageProvider, { language: 'en' },
+    React.createElement(EditBooking, coupleProps)));
+  assert.match(html, /Client name \(Person 1\)/);
+  assert.match(html, /Second person \(Guest 2\)/);
+  assert.match(html, /value="Abhishek Walia"/);
+  assert.match(html, /value="Manib Eram"/);
+  assert.match(html, /First therapist/);
+  assert.match(html, /Second therapist/);
+
+  // Thai localization
+  const htmlTh = renderToStaticMarkup(React.createElement(LanguageProvider, { language: 'th' },
+    React.createElement(EditBooking, coupleProps)));
+  assert.match(htmlTh, /ชื่อลูกค้า \(คนที่ 1\)/);
+  assert.match(htmlTh, /ผู้รับบริการคนที่สอง \(คนที่ 2\)/);
+  assert.match(htmlTh, /ผู้ให้บริการคนที่ 1/);
+  assert.match(htmlTh, /ผู้ให้บริการคนที่ 2/);
+
+  const parsed1 = parseCoupleCustomerNames('Abhishek Walia & Manib Eram');
+  assert.equal(parsed1.person1, 'Abhishek Walia');
+  assert.equal(parsed1.person2, 'Manib Eram');
+  const parsed2 = parseCoupleCustomerNames('Abhishek Walia and Manib Eram');
+  assert.equal(parsed2.person1, 'Abhishek Walia');
+  assert.equal(parsed2.person2, 'Manib Eram');
+  const parsed3 = parseCoupleCustomerNames('Abhishek Walia + Manib Eram');
+  assert.equal(parsed3.person1, 'Abhishek Walia');
+  assert.equal(parsed3.person2, 'Manib Eram');
+  const parsed4 = parseCoupleCustomerNames('Single Person');
+  assert.equal(parsed4.person1, 'Single Person');
+  assert.equal(parsed4.person2, '');
 });

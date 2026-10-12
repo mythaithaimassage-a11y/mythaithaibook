@@ -23,11 +23,46 @@ type Props = {
   onClose: () => void; onSaved: (booking: EditableBooking, notification?: { emailSent: boolean; emailError?: string }) => Promise<void>;
 };
 
+export function parseCoupleCustomerNames(combinedName: string): { person1: string; person2: string } {
+  const text = String(combinedName || '').trim();
+  if (!text) return { person1: '', person2: '' };
+  if (text.includes(' & ')) {
+    const idx = text.indexOf(' & ');
+    return {
+      person1: text.slice(0, idx).trim(),
+      person2: text.slice(idx + 3).trim(),
+    };
+  }
+  const andMatch = text.match(/\s+(?:and|\+)\s+/i);
+  if (andMatch && andMatch.index !== undefined) {
+    return {
+      person1: text.slice(0, andMatch.index).trim(),
+      person2: text.slice(andMatch.index + andMatch[0].length).trim(),
+    };
+  }
+  if (text.includes(',')) {
+    const parts = text.split(',');
+    return {
+      person1: parts[0].trim(),
+      person2: parts.slice(1).join(',').trim(),
+    };
+  }
+  return { person1: text, person2: '' };
+}
+
 export default function EditBooking({ booking, services, therapists, times, branch, branchId, isScheduled, onClose, onSaved }: Props) {
   const { translate: tr, formatTime } = useTranslation();
   const hotStoneAddOnService = services.find((item) => /hot stone add-?on/i.test(item.name)) || null;
-  const bookedBaseService = services.find((item) => booking.serviceName === item.name ||
-    booking.serviceName.startsWith(`${item.name} + `));
+  const bookedBaseService = services.find((item) => {
+    if (booking.serviceName === item.name) return true;
+    if (booking.serviceName.startsWith(`${item.name} + `)) return true;
+    const cleanBooking = booking.serviceName.replace(/\s*\+\s*Hot Stone(?:\s*Add-?on)?/i, '').replace(/\s{2,}/g, ' ').trim();
+    const cleanItem = item.name.replace(/\s*\+\s*Hot Stone(?:\s*Add-?on)?/i, '').replace(/\s{2,}/g, ' ').trim();
+    return Boolean(cleanBooking && cleanBooking === cleanItem);
+  });
+  const initialNames = parseCoupleCustomerNames(booking.customerName);
+  const [person1, setPerson1] = useState(initialNames.person1);
+  const [person2, setPerson2] = useState(initialNames.person2);
   const [form, setForm] = useState(() => ({
     customerName: booking.customerName, email: booking.email, phone: booking.phone,
     bookingNote: booking.bookingNote || '', date: booking.date, time: booking.time,
@@ -38,11 +73,13 @@ export default function EditBooking({ booking, services, therapists, times, bran
     serviceId: String(bookedBaseService?.id || '__existing__'),
     hotStoneAddOn: Boolean(hotStoneAddOnService && booking.serviceName.includes(hotStoneAddOnService.name)),
   }));
-  const exactTherapist = therapists.find((therapist) => booking.therapistName === therapist.name);
-  const assigned = exactTherapist ? [exactTherapist] : therapists.filter((therapist) =>
-    booking.therapistName.split(',').map((name) => name.trim()).includes(therapist.name));
-  const [therapist1, setTherapist1] = useState(assigned[0]?.name || booking.therapistName);
-  const [therapist2, setTherapist2] = useState(assigned[1]?.name || '');
+  const initialTherapists = (booking.therapistName || '')
+    .split(',')
+    .map((name) => name.trim())
+    .filter(Boolean);
+  const assigned = therapists.filter((therapist) => initialTherapists.includes(therapist.name));
+  const [therapist1, setTherapist1] = useState(initialTherapists[0] || (booking.therapistName && booking.therapistName !== 'Any Available' ? booking.therapistName : ''));
+  const [therapist2, setTherapist2] = useState(initialTherapists[1] || '');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [confirmed, setConfirmed] = useState(false);
@@ -65,9 +102,16 @@ export default function EditBooking({ booking, services, therapists, times, bran
   const preservingSchedule = form.date === booking.date && serviceName === booking.serviceName;
   const timeChoices = [...new Set([...(locked || preservingSchedule || form.serviceId === '__existing__' && form.date === booking.date ? [booking.time] : []), ...availableTimes])];
   const validTime = timeChoices.includes(form.time) ? form.time : '';
-  const couple = /couple/i.test(service?.name || booking.serviceName) && (assigned.length > 0 || form.serviceId !== '__existing__');
+  const couple = /couple/i.test(service?.name || booking.serviceName);
+  const currentAssignedTherapistNames = (booking.therapistName || '')
+    .split(',')
+    .map((name) => name.trim())
+    .filter(Boolean);
+  const selectedTherapistNames = (couple ? [therapist1, therapist2] : [therapist1])
+    .map((name) => name.trim())
+    .filter(Boolean);
   const schedulingChanged = form.date !== booking.date || form.time !== booking.time || serviceName !== booking.serviceName ||
-    (couple ? [therapist1, therapist2] : [therapist1]).join(', ') !== booking.therapistName;
+    selectedTherapistNames.join(', ') !== currentAssignedTherapistNames.join(', ');
   const eligible = therapists.filter((item) => item.active !== false && isScheduled(item, form.date) &&
     (!service?.isRmt || item.rmtCertified) && availability.therapistIds.has(String(item.id)));
   const choices = therapists.filter((item) => eligible.includes(item) || (assigned.includes(item) && !schedulingChanged));
@@ -128,9 +172,21 @@ export default function EditBooking({ booking, services, therapists, times, bran
     setSaving(true);
     setError('');
     try {
+      const combinedName = locked
+        ? booking.customerName
+        : (couple && person2.trim() ? `${person1.trim()} & ${person2.trim()}` : person1.trim());
+      const therapistNames = couple ? [therapist1, therapist2] : [therapist1];
       const response = await fetch('/api/booking?view=edit-booking', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...form, confirmReconciliation: confirmed, notifyClient, bookingId: booking.id, expectedVersion: booking.editVersion, therapistNames: couple ? [therapist1, therapist2] : [therapist1] }),
+        body: JSON.stringify({
+          ...form,
+          customerName: combinedName,
+          confirmReconciliation: confirmed,
+          notifyClient,
+          bookingId: booking.id,
+          expectedVersion: booking.editVersion,
+          therapistNames,
+        }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || 'Unable to save this booking.');
@@ -150,15 +206,22 @@ export default function EditBooking({ booking, services, therapists, times, bran
         <p className="text-xs text-slate-600">{tr('Changes update the database and linked calendar appointment. No payment or refund is sent automatically.')}</p>
         {locked && <p role="status" className="rounded-lg bg-amber-50 p-3 text-xs text-amber-900">{tr('Issued receipts, prepaid packages and membership records lock customer, service, schedule and payment details. You can still edit the shared note and therapist.')}</p>}
         <fieldset disabled={saving} className="grid gap-3 sm:grid-cols-2">
-          <label className="text-xs font-semibold">{tr('Client name')}<input required maxLength={150} disabled={locked} value={form.customerName} onChange={(event) => update('customerName', event.target.value)} className={inputClass} /></label>
+          {couple ? (
+            <>
+              <label className="text-xs font-semibold">{tr('Client name (Person 1)')}<input required maxLength={150} disabled={locked} value={person1} onChange={(event) => { setPerson1(event.target.value); update('customerName', person2.trim() ? `${event.target.value.trim()} & ${person2.trim()}` : event.target.value); }} className={inputClass} /></label>
+              <label className="text-xs font-semibold">{tr('Second person (Guest 2)')}<input required maxLength={150} disabled={locked} value={person2} placeholder={tr('Guest 2 full name')} onChange={(event) => { setPerson2(event.target.value); update('customerName', event.target.value.trim() ? `${person1.trim()} & ${event.target.value.trim()}` : person1.trim()); }} className={inputClass} /></label>
+            </>
+          ) : (
+            <label className="text-xs font-semibold">{tr('Client name')}<input required maxLength={150} disabled={locked} value={person1} onChange={(event) => { setPerson1(event.target.value); update('customerName', event.target.value); }} className={inputClass} /></label>
+          )}
           <label className="text-xs font-semibold">{tr('Email')}<input type="email" maxLength={254} disabled={locked} value={form.email} onChange={(event) => update('email', event.target.value)} className={inputClass} /></label>
           <label className="text-xs font-semibold">{tr('Phone')}<input type="tel" maxLength={40} disabled={locked} value={form.phone} onChange={(event) => update('phone', event.target.value)} className={inputClass} /></label>
           <label className="text-xs font-semibold">{tr('Service')}<select required disabled={locked} value={form.serviceId} onChange={(event) => update('serviceId', event.target.value)} className={inputClass}><option value="">{tr('Choose service')}</option>{!bookedBaseService && <option value="__existing__">{tr(booking.serviceName)}</option>}{services.filter((item) => (item.active !== false || item.name === bookedBaseService?.name) && (!/hot stone add-?on/i.test(item.name) || item.name === bookedBaseService?.name)).map((item) => <option key={item.id} value={item.id}>{tr(item.name)}</option>)}</select></label>
           {hotStoneAddOnService && service && !/package/i.test(service.name) && <label className="flex items-center gap-2 text-xs font-semibold sm:col-span-2"><input type="checkbox" disabled={locked} checked={form.hotStoneAddOn} onChange={(event) => toggleHotStoneAddOn(event.target.checked)} />{tr('Add Hot Stone add-on')} · ${hotStoneAddOnService.price}</label>}
           <label className="text-xs font-semibold">{tr('Date')}<input type="date" required disabled={locked} value={form.date} onChange={(event) => update('date', event.target.value)} className={inputClass} /></label>
           <label className="text-xs font-semibold">{tr('Time')}<select required disabled={locked} value={validTime} onChange={(event) => update('time', event.target.value)} className={inputClass}><option value="">{tr('Choose time')}</option>{timeChoices.map((time) => <option key={time} value={time}>{formatTime(time)}</option>)}</select></label>
-          <label className="text-xs font-semibold">{tr('Therapist')}<select required value={therapist1} onChange={(event) => { setTherapist1(event.target.value); setNotifyClient(false); }} className={inputClass}><option value="">{tr('Choose therapist')}</option>{!choices.some((item) => item.name === therapist1) && therapist1 && <option value={therapist1}>{therapist1}</option>}{choices.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}</select></label>
-          {couple && <label className="text-xs font-semibold">{tr('Second therapist')}<select required value={therapist2} onChange={(event) => { setTherapist2(event.target.value); setNotifyClient(false); }} className={inputClass}><option value="">{tr('Choose a different therapist')}</option>{choices.filter((item) => item.name !== therapist1).map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}</select></label>}
+          <label className="text-xs font-semibold">{couple ? tr('First therapist') : tr('Therapist')}<select required value={therapist1} onChange={(event) => { setTherapist1(event.target.value); setNotifyClient(false); }} className={inputClass}><option value="">{tr('Choose therapist')}</option>{!choices.some((item) => item.name === therapist1) && therapist1 && <option value={therapist1}>{therapist1}</option>}{choices.filter((item) => !couple || item.name !== therapist2).map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}</select></label>
+          {couple && <label className="text-xs font-semibold">{tr('Second therapist')}<select required value={therapist2} onChange={(event) => { setTherapist2(event.target.value); setNotifyClient(false); }} className={inputClass}><option value="">{tr('Choose second therapist')}</option>{!choices.some((item) => item.name === therapist2) && therapist2 && <option value={therapist2}>{therapist2}</option>}{choices.filter((item) => item.name !== therapist1).map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}</select></label>}
           <label className="text-xs font-semibold">{tr('Payment method')}<select required disabled={locked} value={form.paymentOption} onChange={(event) => update('paymentOption', event.target.value)} className={inputClass}>{[...new Set([form.paymentOption, 'Cash', 'Card', 'E-transfer', 'Other'])].map((value) => <option key={value} value={value}>{tr(value)}</option>)}</select></label>
           <label className="text-xs font-semibold">{tr('Appointment total ($)')}<input type="number" required min="0" step="0.01" disabled={locked} value={form.total} onChange={(event) => update('total', event.target.value)} className={inputClass} /></label>
           <label className="text-xs font-semibold">{tr('Manual discount ($) — optional')}<input type="number" min="0" max={subtotal} step="0.01" disabled={locked} value={form.manualDiscount} onChange={(event) => update('manualDiscount', event.target.value)} className={inputClass} /></label>

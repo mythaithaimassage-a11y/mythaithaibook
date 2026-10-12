@@ -8673,7 +8673,7 @@ export default async function handler(req, res) {
       const calendarId = row[15] || PRIMARY_CALENDAR_ID;
       const eventId = row[16] || '';
       if (schedulingChanged) {
-        if (req.body.serviceId === '__existing__' || service.active === false || branch.active === false) return res.status(400).json({ message: 'Choose an active service with a valid duration.' });
+        if ((req.body.serviceId === '__existing__' && (edited.date !== row[7] || edited.time !== row[8])) || service.active === false || branch.active === false) return res.status(400).json({ message: 'Choose an active service with a valid duration.' });
         validateAppointmentTime(edited.time, branch, edited.date, durationMinutes);
         const overrides = await getStaffWorkScheduleRows(sheets);
         const startTime = time24FromMinutes(appointmentTimeMinutes(normalizeBookingTime(edited.time)));

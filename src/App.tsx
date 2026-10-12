@@ -4482,6 +4482,7 @@ function AdminPortal({
   const [receiptError, setReceiptError] = useState('');
   const [receiptNotice, setReceiptNotice] = useState('');
   const [therapistReassignTo, setTherapistReassignTo] = useState('');
+  const [therapistReassignTo2, setTherapistReassignTo2] = useState('');
   const [isReassigningTherapist, setIsReassigningTherapist] = useState(false);
   const [notifyClientOnReassign, setNotifyClientOnReassign] = useState(false);
   const [couplePartnerSelection, setCouplePartnerSelection] = useState('');
@@ -4534,6 +4535,7 @@ function AdminPortal({
   useEffect(() => {
     setNotifyClientOnReassign(false);
     setTherapistReassignTo('');
+    setTherapistReassignTo2('');
   }, [selectedCalendarEvent?.booking?.id]);
   const [googleAdsStartDate, setGoogleAdsStartDate] = useState(() => {
     const date = new Date();
@@ -5815,7 +5817,20 @@ function AdminPortal({
 
   const reassignTherapist = async () => {
     const booking = selectedCalendarEvent?.booking;
-    if (!booking || !therapistReassignTo) return;
+    if (!booking) return;
+    const isCouple = /couple/i.test(booking.serviceName || '');
+    const currentTherapist = booking.therapistName || selectedCalendarEvent.therapistName || '';
+    const coupleTherapists = (currentTherapist || '').split(',').map((s) => s.trim()).filter(Boolean);
+    const target1 = therapistReassignTo || (isCouple ? coupleTherapists[0] || '' : currentTherapist);
+    const target2 = isCouple ? (therapistReassignTo2 || coupleTherapists[1] || '') : '';
+    const newTherapistName = isCouple
+      ? [target1, target2].filter(Boolean).join(', ')
+      : (therapistReassignTo || target1);
+    if (!newTherapistName || newTherapistName === currentTherapist) return;
+    if (isCouple && target1 && target2 && target1 === target2) {
+      setReceiptError(tr("Choose a scheduled, qualified therapist (two different therapists for a couple session)."));
+      return;
+    }
     setIsReassigningTherapist(true);
     setReceiptError('');
     setReceiptNotice('');
@@ -5823,7 +5838,7 @@ function AdminPortal({
       const response = await fetch('/api/booking?view=reassign-therapist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ bookingId: booking.id, therapistName: therapistReassignTo, notifyClient: notifyClientOnReassign }),
+        body: JSON.stringify({ bookingId: booking.id, therapistName: newTherapistName, notifyClient: notifyClientOnReassign }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
@@ -5832,6 +5847,7 @@ function AdminPortal({
         : current);
       setBookings((current) => current.map((item) => item.id === booking.id ? { ...item, therapistName: data.therapistName } : item));
       setTherapistReassignTo('');
+      setTherapistReassignTo2('');
       setReceiptNotice(data.emailError
         ? message("Reassigned from {value0} to {value1}, but the client email could not be sent: {value2}", { value0: (data.previousTherapist || message("Unassigned")), value1: data.therapistName, value2: data.emailError })
         : data.emailSent
@@ -9317,43 +9333,111 @@ function AdminPortal({
                       const currentTherapist = booking.therapistName || selectedCalendarEvent.therapistName || '';
                       const isCancelled = String(booking.status || '') === 'Cancelled';
                       const isCompleted = String(booking.status || '') === 'Completed';
-                      const options = therapists
+                      const isCouple = /couple/i.test(booking.serviceName || '');
+                      const coupleTherapists = (currentTherapist || '').split(',').map((s) => s.trim()).filter(Boolean);
+                      const currentTherapist1 = isCouple ? (coupleTherapists[0] || '') : currentTherapist;
+                      const currentTherapist2 = isCouple ? (coupleTherapists[1] || '') : '';
+                      const availableTherapistNames = therapists
                         .filter((therapist) => therapist.active !== false)
                         .filter((therapist) => reassignAvailability.therapistIds.has(String(therapist.id)))
                         .map((therapist) => therapist.name)
-                        .filter((name) => name && name !== currentTherapist);
+                        .filter(Boolean);
+                      const options1 = isCouple
+                        ? availableTherapistNames.filter((name) => name !== currentTherapist1 && name !== (therapistReassignTo2 || currentTherapist2))
+                        : availableTherapistNames.filter((name) => name !== currentTherapist);
+                      const options2 = isCouple
+                        ? availableTherapistNames.filter((name) => name !== currentTherapist2 && name !== (therapistReassignTo || currentTherapist1))
+                        : [];
+                      const effectiveTarget1 = therapistReassignTo || currentTherapist1;
+                      const effectiveTarget2 = therapistReassignTo2 || currentTherapist2;
+                      const canAssign = isCouple
+                        ? (Boolean(therapistReassignTo) || Boolean(therapistReassignTo2)) &&
+                          !(effectiveTarget1 && effectiveTarget2 && effectiveTarget1 === effectiveTarget2)
+                        : Boolean(therapistReassignTo);
                       return (
                         <div className="rounded-xl border border-slate-200 px-3.5 py-3">
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div>
-                              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{tr("Therapist")}</p>
-                              <p className="mt-1 inline-flex items-center gap-1.5 break-words text-sm font-semibold text-slate-800"><UserRound className="h-3.5 w-3.5 shrink-0 text-slate-400" />{currentTherapist || tr("Unassigned")}</p>
-                            </div>
-                            {canManageTherapistAssignments && !isCancelled && (
-                              <div className="flex flex-wrap items-center gap-2">
-                                <select
-                                  value={therapistReassignTo}
-                                  onChange={(event) => { setTherapistReassignTo(event.target.value); setNotifyClientOnReassign(false); }}
-                                  aria-label={tr("Reassign this appointment to another therapist")}
-                                  className="rounded-lg border border-slate-300 px-2.5 py-2 text-xs text-slate-800"
-                                >
-                                  <option value="">{tr("Change therapist…")}</option>
-                                  {currentTherapist !== 'Any Available' && <option value="Any Available">{tr("Any Available")}</option>}
-                                  {options.map((name) => <option key={name} value={name}>{name}</option>)}
-                                </select>
-                                <button
-                                  type="button"
-                                  onClick={reassignTherapist}
-                                  disabled={!therapistReassignTo || isReassigningTherapist}
-                                  className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-900 px-3 py-2 text-xs font-bold text-white transition hover:bg-emerald-800 disabled:opacity-50"
-                                >
-                                  {isReassigningTherapist ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
-                                  {isReassigningTherapist ? tr("Saving…") : tr("Assign")}
-                                </button>
+                          {!isCouple ? (
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div>
+                                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{tr("Therapist")}</p>
+                                <p className="mt-1 inline-flex items-center gap-1.5 break-words text-sm font-semibold text-slate-800"><UserRound className="h-3.5 w-3.5 shrink-0 text-slate-400" />{currentTherapist || tr("Unassigned")}</p>
                               </div>
-                            )}
-                          </div>
-                          {canManageTherapistAssignments && !isCancelled && therapistReassignTo && (
+                              {canManageTherapistAssignments && !isCancelled && (
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <select
+                                    value={therapistReassignTo}
+                                    onChange={(event) => { setTherapistReassignTo(event.target.value); setNotifyClientOnReassign(false); }}
+                                    aria-label={tr("Reassign this appointment to another therapist")}
+                                    className="rounded-lg border border-slate-300 px-2.5 py-2 text-xs text-slate-800"
+                                  >
+                                    <option value="">{tr("Change therapist…")}</option>
+                                    {currentTherapist !== 'Any Available' && <option value="Any Available">{tr("Any Available")}</option>}
+                                    {options1.map((name) => <option key={name} value={name}>{name}</option>)}
+                                  </select>
+                                  <button
+                                    type="button"
+                                    onClick={reassignTherapist}
+                                    disabled={!therapistReassignTo || isReassigningTherapist}
+                                    className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-900 px-3 py-2 text-xs font-bold text-white transition hover:bg-emerald-800 disabled:opacity-50"
+                                  >
+                                    {isReassigningTherapist ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                                    {isReassigningTherapist ? tr("Saving…") : tr("Assign")}
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="space-y-3">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div>
+                                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{tr("First therapist")}</p>
+                                  <p className="mt-1 inline-flex items-center gap-1.5 break-words text-sm font-semibold text-slate-800"><UserRound className="h-3.5 w-3.5 shrink-0 text-slate-400" />{currentTherapist1 || tr("Unassigned")}</p>
+                                </div>
+                                {canManageTherapistAssignments && !isCancelled && (
+                                  <select
+                                    value={therapistReassignTo}
+                                    onChange={(event) => { setTherapistReassignTo(event.target.value); setNotifyClientOnReassign(false); }}
+                                    aria-label={tr("Reassign this appointment to another therapist")}
+                                    className="rounded-lg border border-slate-300 px-2.5 py-2 text-xs text-slate-800"
+                                  >
+                                    <option value="">{tr("Change therapist…")}</option>
+                                    {options1.map((name) => <option key={name} value={name}>{name}</option>)}
+                                  </select>
+                                )}
+                              </div>
+                              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3">
+                                <div>
+                                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{tr("Second therapist")}</p>
+                                  <p className="mt-1 inline-flex items-center gap-1.5 break-words text-sm font-semibold text-slate-800"><UserRound className="h-3.5 w-3.5 shrink-0 text-slate-400" />{currentTherapist2 || tr("Unassigned")}</p>
+                                </div>
+                                {canManageTherapistAssignments && !isCancelled && (
+                                  <select
+                                    value={therapistReassignTo2}
+                                    onChange={(event) => { setTherapistReassignTo2(event.target.value); setNotifyClientOnReassign(false); }}
+                                    aria-label={tr("Reassign second therapist for this appointment")}
+                                    className="rounded-lg border border-slate-300 px-2.5 py-2 text-xs text-slate-800"
+                                  >
+                                    <option value="">{tr("Change second therapist…")}</option>
+                                    {options2.map((name) => <option key={name} value={name}>{name}</option>)}
+                                  </select>
+                                )}
+                              </div>
+                              {canManageTherapistAssignments && !isCancelled && (
+                                <div className="flex justify-end pt-1">
+                                  <button
+                                    type="button"
+                                    onClick={reassignTherapist}
+                                    disabled={!canAssign || isReassigningTherapist}
+                                    className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-900 px-3 py-2 text-xs font-bold text-white transition hover:bg-emerald-800 disabled:opacity-50"
+                                  >
+                                    {isReassigningTherapist ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                                    {isReassigningTherapist ? tr("Saving…") : tr("Assign")}
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                          {canManageTherapistAssignments && !isCancelled && (therapistReassignTo || (isCouple && therapistReassignTo2)) && (
                             <label className="mt-3 flex items-start gap-2 text-xs text-slate-700">
                               <input type="checkbox" checked={notifyClientOnReassign} disabled={isReassigningTherapist} onChange={(event) => setNotifyClientOnReassign(event.target.checked)} />
                               <span>{tr('Email client about this therapist change (optional)')}</span>
