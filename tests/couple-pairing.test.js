@@ -5,6 +5,9 @@ import {
   coupleTimeMinutes,
   isCoupleCandidate,
   couplePairCandidates,
+  isCoupleAppointment,
+  isUnpairedCoupleAppointment,
+  filterCoupleCalendarEvents,
 } from '../lib/couple-pairing.js';
 
 const base = {
@@ -68,4 +71,36 @@ test('couplePairCandidates filters and sorts by start time then name', () => {
     couplePairCandidates(base, bookings, 30).map((item) => item.id),
     ['b-early-a', 'b-early-b'],
   );
+});
+
+test('couple calendar filter keeps couple services and paired appointments', () => {
+  const single = { id: 'e-single', isCouple: false, booking: { id: 'b1' } };
+  const coupleService = { id: 'e-couple', isCouple: true, booking: { id: 'b2' } };
+  const pairedSingle = { id: 'e-paired', isCouple: false, booking: { id: 'b3', couplePartnerBookingId: 'b4' } };
+  const pairedCouple = { id: 'e-both', isCouple: true, booking: { id: 'b4', couplePartnerBookingId: 'b3' } };
+  const events = [single, coupleService, pairedSingle, pairedCouple];
+
+  assert.equal(isCoupleAppointment(single), false);
+  assert.equal(isCoupleAppointment(coupleService), true);
+  assert.equal(isCoupleAppointment(pairedSingle), true);
+  assert.equal(isCoupleAppointment(undefined), false);
+
+  assert.equal(isUnpairedCoupleAppointment(coupleService), true);
+  assert.equal(isUnpairedCoupleAppointment(pairedCouple), false);
+  assert.equal(isUnpairedCoupleAppointment(pairedSingle), false);
+
+  assert.deepEqual(filterCoupleCalendarEvents(events, 'all').map((event) => event.id),
+    ['e-single', 'e-couple', 'e-paired', 'e-both']);
+  assert.deepEqual(filterCoupleCalendarEvents(events, 'couple').map((event) => event.id),
+    ['e-couple', 'e-paired', 'e-both']);
+  assert.deepEqual(filterCoupleCalendarEvents(events, 'unpaired').map((event) => event.id), ['e-couple']);
+  assert.deepEqual(filterCoupleCalendarEvents(undefined, 'all'), []);
+  assert.deepEqual(filterCoupleCalendarEvents(events, 'unknown').map((event) => event.id),
+    ['e-single', 'e-couple', 'e-paired', 'e-both']);
+});
+
+test('blank partner ids do not count as paired appointments', () => {
+  const blank = { id: 'e-blank', isCouple: false, booking: { id: 'b5', couplePartnerBookingId: '   ' } };
+  assert.equal(isCoupleAppointment(blank), false);
+  assert.deepEqual(filterCoupleCalendarEvents([blank], 'couple'), []);
 });

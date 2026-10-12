@@ -31,7 +31,7 @@ import { anatomicalBodyParts } from '../lib/body-map.js';
 import { portalEntry } from '../lib/portal-entry.js';
 import { bookingTaxTreatment } from '../lib/booking-tax.js';
 import { isTherapistScheduledAtBranch } from '../lib/work-schedule.js';
-import { COUPLE_PAIR_WINDOW_MINUTES, couplePairCandidates } from '../lib/couple-pairing.js';
+import { COUPLE_PAIR_WINDOW_MINUTES, couplePairCandidates, filterCoupleCalendarEvents } from '../lib/couple-pairing.js';
 import useTherapistAvailability, { useBookingSlotAvailability, useNextAvailableBookingSlot } from './useTherapistAvailability';
 import WorkSchedule from './WorkSchedule';
 import TodayWorkSchedule from './TodayWorkSchedule';
@@ -4608,6 +4608,7 @@ function AdminPortal({
   const calendarPanelRef = useRef(null);
   const [calendarNextAvailability, setCalendarNextAvailability] = useState(null);
   const [calendarSearch, setCalendarSearch] = useState('');
+  const [calendarCoupleFilter, setCalendarCoupleFilter] = useState('all');
   const [calendarFiltersOpen, setCalendarFiltersOpen] = useState(false);
   const [calendarAutoRefresh, setCalendarAutoRefresh] = useState(true);
   const [calendarShowLegend, setCalendarShowLegend] = useState(true);
@@ -6045,7 +6046,7 @@ function AdminPortal({
     }
   };
 
-  const visibleCalendarEvents = calendarEvents.filter((event) => {
+  const visibleCalendarEvents = filterCoupleCalendarEvents(calendarEvents, calendarCoupleFilter).filter((event) => {
     const search = calendarSearch.trim().toLowerCase();
     return !search || [event.summary, event.therapistName, event.location, event.booking?.customerName, event.booking?.email, event.booking?.phone]
       .some((value) => String(value || '').toLowerCase().includes(search));
@@ -6863,13 +6864,19 @@ function AdminPortal({
                   {therapists.map((therapist) => <option key={therapist.id} value={therapist.id}>{therapist.name}</option>)}
                 </select>
               </label>}
+              {calendarFiltersOpen && <label className="text-xs font-semibold text-stone-600">{tr("Couple massage")}<select value={calendarCoupleFilter} onChange={(event) => setCalendarCoupleFilter(event.target.value)} className="block mt-1 p-2 rounded-lg border border-stone-300">
+                  <option value="all">{tr("All appointments")}</option>
+                  <option value="couple">{tr("Couple massage only")}</option>
+                  <option value="unpaired">{tr("Couple massage without a partner")}</option>
+                </select>
+              </label>}
               <button onClick={loadCalendar} disabled={isLoadingCalendar} className="h-9 px-3 bg-emerald-800 text-white rounded-lg text-xs font-bold disabled:opacity-50">
                 {isLoadingCalendar ? tr("Loading...") : tr("Refresh")}
               </button>
               {!calendarFullscreen && <button type="button" aria-expanded={showTodayAvailability} onClick={() => setShowTodayAvailability((visible) => !visible)} className="inline-flex h-9 items-center gap-2 rounded-lg border border-blue-200 bg-white px-3 text-xs font-semibold text-blue-700 hover:bg-blue-50">
                 <CalendarDays className="h-4 w-4" />{tr(showTodayAvailability ? "Hide today's availability" : "Set therapist availability today")}
               </button>}
-              {!calendarFiltersOpen && (calendarBranch !== 'all' || calendarTherapist !== 'all') && <button type="button" onClick={() => setCalendarFiltersOpen(true)} className="h-9 rounded-lg border border-blue-200 px-3 text-xs text-blue-700">{tr("Filters:")}{branches.find((item) => String(item.id) === calendarBranch)?.name || tr("All branches")} · {therapists.find((item) => String(item.id) === calendarTherapist)?.name || tr("All therapists")}
+              {!calendarFiltersOpen && (calendarBranch !== 'all' || calendarTherapist !== 'all' || calendarCoupleFilter !== 'all') && <button type="button" onClick={() => setCalendarFiltersOpen(true)} className="h-9 rounded-lg border border-blue-200 px-3 text-xs text-blue-700">{tr("Filters:")}{branches.find((item) => String(item.id) === calendarBranch)?.name || tr("All branches")} · {therapists.find((item) => String(item.id) === calendarTherapist)?.name || tr("All therapists")}{calendarCoupleFilter !== 'all' && ` · ${tr(calendarCoupleFilter === 'couple' ? "Couple massage only" : "Couple massage without a partner")}`}
               </button>}
           </div>
           {calendarFullscreenError && <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-2 text-xs text-red-800">{tr(calendarFullscreenError)}</p>}
@@ -7123,7 +7130,7 @@ function AdminPortal({
             )}
           </div>}
           {calendarViewMode === 'agenda' && (visibleCalendarEvents.length === 0 && !isLoadingCalendar ? (
-            <p className="py-8 text-center text-sm text-stone-500">{tr("No appointments match this date, search, branch and therapist. Adjust your filters or add an appointment.")}</p>
+            <p className="py-8 text-center text-sm text-stone-500">{tr("No appointments match this date, search, branch, therapist and couple massage filters. Adjust your filters or add an appointment.")}</p>
           ) : (
             <div className={calendarFullscreen ? 'min-h-0 flex-1 space-y-3 overflow-y-auto' : 'space-y-3'}>
               {visibleCalendarEvents.map((event) => (

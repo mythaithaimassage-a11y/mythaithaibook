@@ -454,3 +454,15 @@ test('booking note editor displays saved notes, a length limit and internal-only
   assert.match(html, /not customers/);
   assert.match(html, /<button[^>]*disabled=""[^>]*>Save booking note/);
 });
+
+test('calendar offers a couple massage filter that narrows the visible appointments', () => {
+  const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  assert.match(app, /filterCoupleCalendarEvents/);
+  assert.match(app, /const \[calendarCoupleFilter, setCalendarCoupleFilter\] = useState\('all'\)/);
+  assert.match(app, /const visibleCalendarEvents = filterCoupleCalendarEvents\(calendarEvents, calendarCoupleFilter\)/);
+  const toolbar = app.slice(app.indexOf('{calendarFiltersOpen && <label'), app.indexOf('{calendarFullscreenError'));
+  assert.match(toolbar, /tr\("Couple massage"\)/);
+  assert.match(toolbar, /<option value="couple">\{tr\("Couple massage only"\)\}<\/option>/);
+  assert.match(toolbar, /<option value="unpaired">\{tr\("Couple massage without a partner"\)\}<\/option>/);
+  assert.match(toolbar, /calendarCoupleFilter !== 'all'/);
+});
