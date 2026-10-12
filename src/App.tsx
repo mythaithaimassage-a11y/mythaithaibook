@@ -31,6 +31,7 @@ import { anatomicalBodyParts } from '../lib/body-map.js';
 import { portalEntry } from '../lib/portal-entry.js';
 import { bookingTaxTreatment } from '../lib/booking-tax.js';
 import { isTherapistScheduledAtBranch } from '../lib/work-schedule.js';
+import { COUPLE_PAIR_WINDOW_MINUTES, couplePairCandidates } from '../lib/couple-pairing.js';
 import useTherapistAvailability, { useBookingSlotAvailability, useNextAvailableBookingSlot } from './useTherapistAvailability';
 import WorkSchedule from './WorkSchedule';
 import TodayWorkSchedule from './TodayWorkSchedule';
@@ -4453,6 +4454,8 @@ function AdminPortal({
   const [therapistReassignTo, setTherapistReassignTo] = useState('');
   const [isReassigningTherapist, setIsReassigningTherapist] = useState(false);
   const [notifyClientOnReassign, setNotifyClientOnReassign] = useState(false);
+  const [couplePartnerSelection, setCouplePartnerSelection] = useState('');
+  const [isPairingCouple, setIsPairingCouple] = useState(false);
   const canManageTherapistAssignments = ['owner', 'branch_manager', 'branch_receptionist'].includes(dashboardUser?.role);
   const reassignBooking = selectedCalendarEvent?.booking;
   const reassignBranchId = branches.find((branch) => branch.name === reassignBooking?.branchName || branch.address === reassignBooking?.branchName)?.id;
@@ -5729,6 +5732,42 @@ function AdminPortal({
       setReceiptError(error.message || 'Unable to change the therapist for this appointment.');
     } finally {
       setIsReassigningTherapist(false);
+    }
+  };
+
+  const saveCouplePairing = async (partnerBookingId) => {
+    const booking = selectedCalendarEvent?.booking;
+    if (!booking) return;
+    setIsPairingCouple(true);
+    setReceiptError('');
+    setReceiptNotice('');
+    try {
+      const response = await fetch('/api/booking?view=couple-pair', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bookingId: booking.id, partnerBookingId }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+      const linkedId = data.couplePartnerBookingId || '';
+      setSelectedCalendarEvent((current) => current
+        ? { ...current, booking: { ...current.booking, couplePartnerBookingId: linkedId } }
+        : current);
+      setCalendarEvents((current) => current.map((event) => {
+        if (!event.booking?.id) return event;
+        if (event.booking.id === booking.id) return { ...event, booking: { ...event.booking, couplePartnerBookingId: linkedId } };
+        if (event.booking.id === linkedId) return { ...event, booking: { ...event.booking, couplePartnerBookingId: booking.id } };
+        if (event.booking.couplePartnerBookingId === booking.id) return { ...event, booking: { ...event.booking, couplePartnerBookingId: '' } };
+        return event;
+      }));
+      setCouplePartnerSelection('');
+      setReceiptNotice(linkedId
+        ? message("Paired as a couple massage with {value0}.", { value0: data.partner?.customerName || linkedId })
+        : message("Couple pairing removed."));
+    } catch (error) {
+      setReceiptError(error.message || 'Unable to update the couple pairing for this appointment.');
+    } finally {
+      setIsPairingCouple(false);
     }
   };
 
@@ -8929,6 +8968,60 @@ function AdminPortal({
                               ? "Completed appointments can be corrected without checking past therapist availability."
                               : "Only therapists who are free at this date and time can be assigned. The calendar event is updated to match.")}</p>
                           )}
+                        </div>
+                      );
+                    })()}
+                    {(() => {
+                      const candidateBookings = calendarEvents.map((event) => event.booking).filter((item) => item?.id);
+                      const partnerId = String(booking.couplePartnerBookingId || '');
+                      const partner = candidateBookings.find((item) => item.id === partnerId);
+                      const candidates = couplePairCandidates(booking, candidateBookings, COUPLE_PAIR_WINDOW_MINUTES);
+                      const isCancelled = String(booking.status || '') === 'Cancelled';
+                      const canPair = canManageTherapistAssignments && !isCancelled;
+                      if (!canPair && !partnerId) return null;
+                      return (
+                        <div className="rounded-xl border border-slate-200 px-3.5 py-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                              <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{tr("Couple massage")}</p>
+                              <p className="mt-1 inline-flex items-center gap-1.5 break-words text-sm font-semibold text-slate-800"><Users className="h-3.5 w-3.5 shrink-0 text-slate-400" />{partnerId ? (partner?.customerName || partnerId) : tr("Not paired")}</p>
+                            </div>
+                            {canPair && (partnerId ? (
+                              <button
+                                type="button"
+                                onClick={() => saveCouplePairing('')}
+                                disabled={isPairingCouple}
+                                className="rounded-lg border border-rose-200 px-3 py-2 text-xs font-bold text-rose-700 transition hover:bg-rose-50 disabled:opacity-50"
+                              >
+                                {isPairingCouple ? tr("Saving…") : tr("Unpair")}
+                              </button>
+                            ) : (
+                              <div className="flex flex-wrap items-center gap-2">
+                                <select
+                                  value={couplePartnerSelection}
+                                  onChange={(event) => setCouplePartnerSelection(event.target.value)}
+                                  aria-label={tr("Pair this appointment with another client as a couple massage")}
+                                  className="rounded-lg border border-slate-300 px-2.5 py-2 text-xs text-slate-800"
+                                >
+                                  <option value="">{tr("Pair with client…")}</option>
+                                  {candidates.map((item) => <option key={item.id} value={item.id}>{`${item.customerName || tr("Walk-in customer")} · ${formatTime(item.time)}`}</option>)}
+                                </select>
+                                <button
+                                  type="button"
+                                  onClick={() => saveCouplePairing(couplePartnerSelection)}
+                                  disabled={!couplePartnerSelection || isPairingCouple}
+                                  className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-900 px-3 py-2 text-xs font-bold text-white transition hover:bg-emerald-800 disabled:opacity-50"
+                                >
+                                  {isPairingCouple ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+                                  {isPairingCouple ? tr("Saving…") : tr("Pair")}
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                          {partnerId && partner && <p className="mt-2 text-[11px] text-slate-500">{tr(partner.serviceName || "Not recorded")} · {formatTime(partner.time || "")} · {partner.therapistName || tr("Unassigned")}</p>}
+                          {canPair && !partnerId && <p className="mt-2 text-[11px] leading-4 text-slate-500">{tr(candidates.length
+                            ? "Pair two separately booked clients who are treated together. Only same-branch appointments on this date starting within {value0} minutes are listed."
+                            : "No other appointment at this branch starts within {value0} minutes of this one.", { value0: COUPLE_PAIR_WINDOW_MINUTES })}</p>}
                         </div>
                       );
                     })()}

@@ -12,6 +12,7 @@ import { createBookingHistoryStore } from '../lib/booking-history.js';
 import { syncWixCalendarBatch } from '../lib/wix-calendar.js';
 import { searchBookingCustomers } from '../lib/customer-search.js';
 import { customerTypeForBooking } from '../lib/customer-type.js';
+import { COUPLE_PAIR_WINDOW_MINUTES, coupleTimeMinutes } from '../lib/couple-pairing.js';
 import { applySavedTherapistAliases, parseTherapistAliases, planTherapistRename, readTherapistAliases, renameTherapistBookingBatch, renameTherapistLabel, saveTherapistAlias } from '../lib/therapist-rename.js';
 import { sendGmailMessage } from '../lib/gmail.js';
 import { BOOKING_DEPOSIT_AMOUNT, validateBranchPaymentOptions, validateAppointmentTime, validateBusinessHours, appointmentTimeMinutes } from '../lib/booking-options.js';
@@ -5038,7 +5039,7 @@ export default async function handler(req, res) {
     ) {
       return res.status(dashboardSession ? 403 : 401).json({ message: dashboardSession ? 'Owner or branch manager role required' : 'Dashboard sign-in required' });
     }
-    if (view === 'reassign-therapist' &&
+    if (['reassign-therapist', 'couple-pair'].includes(view) &&
         !['owner', 'branch_manager', 'branch_receptionist'].includes(dashboardSession?.role)) {
       return res.status(dashboardSession ? 403 : 401).json({ message: 'A branch manager, receptionist or owner sign-in is required.' });
     }
@@ -5323,7 +5324,7 @@ export default async function handler(req, res) {
       const imported = await store.importContacts(prepared.contacts);
       return res.status(200).json({ ...prepared.summary, imported, existing: prepared.contacts.length - imported });
     }
-    if (['business-profile', 'appointment-config-migrate', 'branches', 'services', 'therapists', 'therapist-account-status', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-clear-ledger', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-signup', 'company-portal-bulk-signup', 'company-join-signup', 'company-portal-link', 'square-create-checkout', 'cancel-booking', 'reschedule-booking', 'unavailability', 'unavailability-delete', 'review-request-send', 'reassign-therapist'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
+    if (['business-profile', 'appointment-config-migrate', 'branches', 'services', 'therapists', 'therapist-account-status', 'mark-paid', 'issue-receipt', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-clear-ledger', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'loyalty-set-primary-contact', 'company-portal-signup', 'company-portal-bulk-signup', 'company-join-signup', 'company-portal-link', 'square-create-checkout', 'cancel-booking', 'reschedule-booking', 'unavailability', 'unavailability-delete', 'review-request-send', 'reassign-therapist', 'couple-pair'].includes(view) && req.method === 'POST' && !isSameOriginRequest(req)) {
       return res.status(403).json({ message: 'Profile update origin is not allowed' });
     }
 
@@ -8217,6 +8218,7 @@ export default async function handler(req, res) {
                   bookingNote: bookingRow[28] || '',
                   checkedInAt: bookingRow[29] || '',
                   checkedInBy: bookingRow[30] || '',
+                  couplePartnerBookingId: bookingRow[31] || '',
                   status: bookingRow[24] || '',
                   statusNotes: bookingRow[25] || '',
                   paymentLocked: staffBooking(bookingRow).paymentLocked,
@@ -8385,6 +8387,7 @@ export default async function handler(req, res) {
           bookingNote: row[28] || '',
           checkedInAt: row[29] || '',
           checkedInBy: row[30] || '',
+          couplePartnerBookingId: row[31] || '',
         })),
       });
     }
@@ -9442,6 +9445,103 @@ export default async function handler(req, res) {
         time: newTime,
         wasWithinPolicyWindow,
         emailSent,
+      });
+    }
+
+    if (req.method === 'POST' && req.query?.view === 'couple-pair') {
+      const bookingId = String(req.body?.bookingId || '').trim();
+      const partnerBookingId = String(req.body?.partnerBookingId || '').trim();
+      if (!bookingId || bookingId.length > 100 || partnerBookingId.length > 100) {
+        return res.status(400).json({ message: 'A booking reference is required.' });
+      }
+      const bigquery = getBigQueryClient();
+      const result = await bqFetchBookingRows(bigquery);
+      const rows = result.data.values || [];
+      const startIndex = rows[0]?.[0] === 'Booking ID' ? 1 : 0;
+      const dataRows = rows.slice(startIndex);
+      const row = dataRows.find((candidate) => String(candidate[0] || '') === bookingId);
+      if (!row) return res.status(404).json({ message: 'Booking was not found.' });
+      const allowedBranches = await getDashboardBranchNames(sheets, dashboardSession);
+      const branchAllowed = (candidate) => !allowedBranches ||
+        allowedBranches.has(String(candidate[4] || '').trim().toLowerCase());
+      if (!branchAllowed(row)) {
+        return res.status(403).json({ message: 'This booking is outside your assigned branch access.' });
+      }
+      const timestamp = new Date().toISOString();
+      const clearPartner = async (id) => {
+        const target = dataRows.find((candidate) => String(candidate[0] || '') === id);
+        if (!target) return;
+        await bqUpdateBookingFields(bigquery, id, {
+          couplePartnerBookingId: '',
+          statusNotes: `Couple pairing removed ${timestamp} by ${dashboardSession.email}.`,
+        });
+      };
+
+      if (!partnerBookingId) {
+        const previousPartnerId = String(row[31] || '');
+        if (!previousPartnerId) {
+          return res.status(400).json({ message: 'This appointment is not paired as a couple massage.' });
+        }
+        await bqUpdateBookingFields(bigquery, bookingId, {
+          couplePartnerBookingId: '',
+          statusNotes: `Couple pairing removed ${timestamp} by ${dashboardSession.email}.`,
+        });
+        await clearPartner(previousPartnerId);
+        return res.status(200).json({ bookingId, couplePartnerBookingId: '', partner: null });
+      }
+
+      if (partnerBookingId === bookingId) {
+        return res.status(400).json({ message: 'Choose a different appointment to pair as a couple massage.' });
+      }
+      const partnerRow = dataRows.find((candidate) => String(candidate[0] || '') === partnerBookingId);
+      if (!partnerRow) return res.status(404).json({ message: 'The selected appointment was not found.' });
+      if (!branchAllowed(partnerRow)) {
+        return res.status(403).json({ message: 'The selected appointment is outside your assigned branch access.' });
+      }
+      if (['Cancelled', 'No Show'].includes(String(row[24] || '')) ||
+          ['Cancelled', 'No Show'].includes(String(partnerRow[24] || ''))) {
+        return res.status(409).json({ message: 'Cancelled appointments cannot be paired as a couple massage.' });
+      }
+      if (String(row[4] || '').trim().toLowerCase() !== String(partnerRow[4] || '').trim().toLowerCase()) {
+        return res.status(409).json({ message: 'Couple appointments must be at the same branch.' });
+      }
+      if (String(row[7] || '') !== String(partnerRow[7] || '')) {
+        return res.status(409).json({ message: 'Couple appointments must be on the same date.' });
+      }
+      const minutesOf = (value) => coupleTimeMinutes(normalizeBookingTime(String(value || '')));
+      const bookingMinutes = minutesOf(row[8]);
+      const partnerMinutes = minutesOf(partnerRow[8]);
+      if (bookingMinutes === null || partnerMinutes === null) {
+        return res.status(400).json({ message: 'These appointments have no valid time, so they cannot be paired.' });
+      }
+      if (Math.abs(bookingMinutes - partnerMinutes) > COUPLE_PAIR_WINDOW_MINUTES) {
+        return res.status(409).json({ message: `Couple appointments must start within ${COUPLE_PAIR_WINDOW_MINUTES} minutes of each other.` });
+      }
+      const partnerExistingPartnerId = String(partnerRow[31] || '');
+      if (partnerExistingPartnerId && partnerExistingPartnerId !== bookingId) {
+        return res.status(409).json({ message: 'The selected appointment is already paired with another client.' });
+      }
+
+      const previousPartnerId = String(row[31] || '');
+      if (previousPartnerId && previousPartnerId !== partnerBookingId) await clearPartner(previousPartnerId);
+      const pairNote = `Couple massage paired ${timestamp} by ${dashboardSession.email}.`;
+      await bqUpdateBookingFields(bigquery, bookingId, {
+        couplePartnerBookingId: partnerBookingId, statusNotes: pairNote,
+      });
+      await bqUpdateBookingFields(bigquery, partnerBookingId, {
+        couplePartnerBookingId: bookingId, statusNotes: pairNote,
+      });
+      return res.status(200).json({
+        bookingId,
+        couplePartnerBookingId: partnerBookingId,
+        partner: {
+          id: partnerBookingId,
+          customerName: partnerRow[1] || '',
+          serviceName: partnerRow[5] || '',
+          therapistName: partnerRow[6] || '',
+          date: partnerRow[7] || '',
+          time: partnerRow[8] || '',
+        },
       });
     }
 

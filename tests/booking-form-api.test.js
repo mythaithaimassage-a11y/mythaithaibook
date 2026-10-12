@@ -818,6 +818,56 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   assert.equal(reassignedAddOn.code, 200, JSON.stringify(reassignedAddOn.data));
   assert.equal(upcomingCorrection.therapist_name, 'Second Therapist',
     'Therapist reassignment recognizes bookings whose saved service includes the Hot Stone add-on');
+  const recordsBeforeCouplePairing = records.length;
+  const coupleBooking = (id, time, customerName) => ({
+    ...upcomingCorrection, booking_id: id, time, customer_name: customerName,
+    status: 'Confirmed', receipt_number: '', calendar_event_id: '', couple_partner_booking_id: '',
+  });
+  const coupleA = coupleBooking('couple-pair-a', '11:00 AM', 'Couple A');
+  const coupleB = coupleBooking('couple-pair-b', '11:30 AM', 'Couple B');
+  const coupleC = coupleBooking('couple-pair-c', '11:15 AM', 'Couple C');
+  const coupleFar = coupleBooking('couple-pair-far', '03:00 PM', 'Couple Far');
+  const coupleCancelled = { ...coupleBooking('couple-pair-cancelled', '11:05 AM', 'Couple X'), status: 'Cancelled' };
+  records.push(coupleA, coupleB, coupleC, coupleFar, coupleCancelled);
+  const pairRequest = (bookingId, partnerBookingId) => request('couple-pair', { bookingId, partnerBookingId });
+  assert.equal((await pairRequest(coupleA.booking_id, coupleFar.booking_id)).code, 409,
+    'Couple pairing rejects appointments outside the start-time window');
+  assert.equal((await pairRequest(coupleA.booking_id, coupleCancelled.booking_id)).code, 409,
+    'Cancelled appointments cannot be paired');
+  assert.equal((await pairRequest(coupleA.booking_id, coupleA.booking_id)).code, 400,
+    'An appointment cannot be paired with itself');
+  assert.equal((await pairRequest(coupleA.booking_id, 'missing-booking')).code, 404,
+    'Pairing requires an existing partner appointment');
+  assert.equal((await pairRequest('', coupleB.booking_id)).code, 400,
+    'Pairing requires a booking reference');
+  const pairedCouple = await pairRequest(coupleA.booking_id, coupleB.booking_id);
+  assert.equal(pairedCouple.code, 200, JSON.stringify(pairedCouple.data));
+  assert.equal(pairedCouple.data.partner.customerName, 'Couple B');
+  assert.equal(coupleA.couple_partner_booking_id, coupleB.booking_id);
+  assert.equal(coupleB.couple_partner_booking_id, coupleA.booking_id,
+    'Couple pairing is written to both appointments');
+  assert.equal((await pairRequest(coupleC.booking_id, coupleB.booking_id)).code, 409,
+    'An appointment already paired with another client cannot be re-paired');
+  const repairedCouple = await pairRequest(coupleA.booking_id, coupleC.booking_id);
+  assert.equal(repairedCouple.code, 200, JSON.stringify(repairedCouple.data));
+  assert.equal(coupleB.couple_partner_booking_id, '', 'Re-pairing releases the previous partner');
+  assert.equal(coupleC.couple_partner_booking_id, coupleA.booking_id);
+  const unpairedCouple = await pairRequest(coupleA.booking_id, '');
+  assert.equal(unpairedCouple.code, 200, JSON.stringify(unpairedCouple.data));
+  assert.equal(unpairedCouple.data.couplePartnerBookingId, '');
+  assert.equal(coupleA.couple_partner_booking_id, '');
+  assert.equal(coupleC.couple_partner_booking_id, '', 'Unpairing clears both appointments');
+  assert.equal((await pairRequest(coupleA.booking_id, '')).code, 400,
+    'Unpairing an unpaired appointment reports a clear error');
+  cookie = receptionistCookie;
+  assert.equal((await pairRequest(coupleA.booking_id, coupleB.booking_id)).code, 200,
+    'Receptionists can pair couple appointments at their branch');
+  assert.equal((await pairRequest(coupleA.booking_id, '')).code, 200);
+  cookie = '';
+  assert.equal((await pairRequest(coupleA.booking_id, coupleB.booking_id)).code, 401,
+    'Couple pairing requires a dashboard sign-in');
+  cookie = managerCookie;
+  records.length = recordsBeforeCouplePairing;
   const version = () => bookingEditVersion(BOOKING_TABLE_FIELDS.map((field) => editable[field.name]));
   const editBody = () => ({
     bookingId: editable.booking_id, expectedVersion: version(), customerName: 'Updated client',
