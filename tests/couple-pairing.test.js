@@ -24,6 +24,9 @@ const candidate = (overrides) => ({ ...base, id: 'booking-2', customerName: 'Ben
 
 test('coupleTimeMinutes parses 12-hour and 24-hour times and rejects junk', () => {
   assert.equal(coupleTimeMinutes('11:00 AM'), 660);
+  assert.equal(coupleTimeMinutes('11:15:00'), 675);
+  assert.equal(coupleTimeMinutes('11:15:00 AM'), 675);
+  assert.equal(coupleTimeMinutes('11:15:00 PM'), 1395);
   assert.equal(coupleTimeMinutes('12:15 AM'), 15);
   assert.equal(coupleTimeMinutes('12:30 PM'), 750);
   assert.equal(coupleTimeMinutes('23:45'), 1425);
@@ -31,6 +34,39 @@ test('coupleTimeMinutes parses 12-hour and 24-hour times and rejects junk', () =
   assert.equal(coupleTimeMinutes('24:00'), null);
   assert.equal(coupleTimeMinutes(''), null);
   assert.equal(coupleTimeMinutes(undefined), null);
+});
+
+test('candidates match across branch names and addresses, and support timeRange and service duration', () => {
+  const mississaugaBase = {
+    id: 'b-1',
+    customerName: 'Sarina',
+    branchName: 'Mississauga Central',
+    date: '2026-10-12',
+    time: '11:15:00',
+    durationMinutes: 0,
+    serviceName: 'Thai Traditional Massage (60 min)',
+    status: 'Confirmed',
+  };
+  const mississaugaCandidate = {
+    id: 'b-2',
+    customerName: 'Fir',
+    branchName: '4310 Sherwoodtowne Blvd',
+    date: '2026-10-12',
+    timeRange: '11:15 AM - 12:15 PM',
+    status: 'Confirmed',
+  };
+  assert.ok(isCoupleCandidate(mississaugaBase, mississaugaCandidate), 'Matches same slot across branch address and timeRange');
+
+  const calendarCandidate = {
+    id: 'b-3',
+    customerName: 'Alex',
+    branchName: 'Mississauga Central',
+    date: '2026-10-12',
+    calendarStart: '2026-10-12T11:15:00-04:00',
+    calendarEnd: '2026-10-12T12:15:00-04:00',
+    status: 'Confirmed',
+  };
+  assert.ok(isCoupleCandidate(mississaugaBase, calendarCandidate), 'Matches calendar ISO range to service duration');
 });
 
 test('candidates must share the branch, date, start time and end time', () => {

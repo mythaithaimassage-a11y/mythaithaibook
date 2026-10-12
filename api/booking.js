@@ -12,7 +12,7 @@ import { createBookingHistoryStore } from '../lib/booking-history.js';
 import { syncWixCalendarBatch } from '../lib/wix-calendar.js';
 import { searchBookingCustomers } from '../lib/customer-search.js';
 import { customerTypeForBooking } from '../lib/customer-type.js';
-import { isCoupleCandidate } from '../lib/couple-pairing.js';
+import { isCoupleCandidate, branchesMatch } from '../lib/couple-pairing.js';
 import { applySavedTherapistAliases, parseTherapistAliases, planTherapistRename, readTherapistAliases, renameTherapistBookingBatch, renameTherapistLabel, saveTherapistAlias } from '../lib/therapist-rename.js';
 import { sendGmailMessage } from '../lib/gmail.js';
 import { BOOKING_DEPOSIT_AMOUNT, validateBranchPaymentOptions, validateAppointmentTime, validateBusinessHours, appointmentTimeMinutes } from '../lib/booking-options.js';
@@ -8203,11 +8203,11 @@ export default async function handler(req, res) {
                   customerName: bookingRow[1] || '',
                   phone: bookingRow[2] || '',
                   email: bookingRow[3] || '',
-                  branchName: bookingRow[4] || '',
+                  branchName: bookingRow[4] || location,
                   serviceName: bookingRow[5] || '',
                   therapistName: bookingRow[6] || '',
                   date: bookingRow[7] || localStart.date,
-                  time: bookingRow[8] || localStart.time,
+                  time: normalizeBookingTime(bookingRow[8] || localStart.time),
                   paymentOption: bookingRow[9] || '',
                   paidAmount: Number(bookingRow[10]) || 0,
                   total: Number(bookingRow[11]) || 0,
@@ -8223,6 +8223,7 @@ export default async function handler(req, res) {
                   statusNotes: bookingRow[25] || '',
                   calendarStart: start,
                   calendarEnd: end,
+                  timeRange: getCalendarTimeRange(start, end),
                   paymentLocked: staffBooking(bookingRow).paymentLocked,
                   manualBookingDiscount: staffBooking(bookingRow).manualBookingDiscount,
                   originalBookingTotal: staffBooking(bookingRow).originalBookingTotal,
@@ -8278,6 +8279,7 @@ export default async function handler(req, res) {
                     durationMinutes: autoDurationMinutes,
                     calendarStart: start,
                     calendarEnd: end,
+                    timeRange: getCalendarTimeRange(start, end),
                     receiptNumber: '',
                     receiptEmailStatus: '',
                     checkedInAt: '',
@@ -9506,7 +9508,7 @@ export default async function handler(req, res) {
           ['Cancelled', 'No Show'].includes(String(partnerRow[24] || ''))) {
         return res.status(409).json({ message: 'Cancelled appointments cannot be paired as a couple massage.' });
       }
-      if (String(row[4] || '').trim().toLowerCase() !== String(partnerRow[4] || '').trim().toLowerCase()) {
+      if (!branchesMatch(row[4], partnerRow[4])) {
         return res.status(409).json({ message: 'Couple appointments must be at the same branch.' });
       }
       if (String(row[7] || '') !== String(partnerRow[7] || '')) {
@@ -9514,27 +9516,32 @@ export default async function handler(req, res) {
       }
       const readAppointmentRange = async (candidate) => {
         const eventId = String(candidate[16] || '').trim();
-        if (!eventId) {
-          return {
-            time: normalizeBookingTime(String(candidate[8] || '')),
-            durationMinutes: Number(candidate[12]),
-          };
-        }
-        const event = (await calendarApi.events.get({
-          calendarId: candidate[15] || PRIMARY_CALENDAR_ID,
-          eventId,
-        })).data;
-        return {
-          calendarStart: event.start?.dateTime || '',
-          calendarEnd: event.end?.dateTime || '',
+        const fallback = {
+          time: normalizeBookingTime(String(candidate[8] || '')),
+          durationMinutes: Number(candidate[12]) || 0,
+          serviceName: candidate[5] || '',
         };
+        if (!eventId) return fallback;
+        try {
+          const event = (await calendarApi.events.get({
+            calendarId: candidate[15] || PRIMARY_CALENDAR_ID,
+            eventId,
+          })).data;
+          return {
+            ...fallback,
+            calendarStart: event.start?.dateTime || event.start?.date || '',
+            calendarEnd: event.end?.dateTime || event.end?.date || '',
+          };
+        } catch {
+          return fallback;
+        }
       };
       const [bookingRange, partnerRange] = await Promise.all([
         readAppointmentRange(row), readAppointmentRange(partnerRow),
       ]);
       if (!isCoupleCandidate(
-        { id: bookingId, branchName: row[4], date: row[7], ...bookingRange },
-        { id: partnerBookingId, branchName: partnerRow[4], date: partnerRow[7], ...partnerRange },
+        { id: bookingId, branchName: row[4], date: row[7], serviceName: row[5], ...bookingRange },
+        { id: partnerBookingId, branchName: partnerRow[4], date: partnerRow[7], serviceName: partnerRow[5], ...partnerRange },
       )) {
         return res.status(409).json({ message: 'Couple appointments must have the same start and end time.' });
       }

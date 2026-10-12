@@ -8979,11 +8979,27 @@ function AdminPortal({
                       );
                     })()}
                     {(() => {
-                      const candidateBookings = calendarEvents.map((event) => event.booking).filter((item) => item?.id);
-                      const partnerId = String(booking.couplePartnerBookingId || '');
+                      const currentBooking = {
+                        ...booking,
+                        calendarStart: selectedCalendarEvent.start || booking.calendarStart,
+                        calendarEnd: selectedCalendarEvent.end || booking.calendarEnd,
+                        timeRange: selectedCalendarEvent.timeRange || booking.timeRange,
+                        branchName: booking.branchName || selectedCalendarEvent.location,
+                      };
+                      const candidateBookings = calendarEvents.map((event) => {
+                        if (!event.booking?.id) return null;
+                        return {
+                          ...event.booking,
+                          calendarStart: event.start || event.booking.calendarStart,
+                          calendarEnd: event.end || event.booking.calendarEnd,
+                          timeRange: event.timeRange || event.booking.timeRange,
+                          branchName: event.booking.branchName || event.location,
+                        };
+                      }).filter(Boolean);
+                      const partnerId = String(currentBooking.couplePartnerBookingId || '');
                       const partner = candidateBookings.find((item) => item.id === partnerId);
-                      const candidates = couplePairCandidates(booking, candidateBookings);
-                      const isCancelled = String(booking.status || '') === 'Cancelled';
+                      const candidates = couplePairCandidates(currentBooking, candidateBookings);
+                      const isCancelled = String(currentBooking.status || '') === 'Cancelled';
                       const canPair = canManageTherapistAssignments && !isCancelled;
                       if (!canPair && !partnerId) return null;
                       return (
@@ -9011,7 +9027,7 @@ function AdminPortal({
                                   className="rounded-lg border border-slate-300 px-2.5 py-2 text-xs text-slate-800"
                                 >
                                   <option value="">{tr("Pair with client…")}</option>
-                                  {candidates.map((item) => <option key={item.id} value={item.id}>{`${item.customerName || tr("Walk-in customer")} · ${formatTime(item.time)}`}</option>)}
+                                  {candidates.map((item) => <option key={item.id} value={item.id}>{`${item.customerName || tr("Walk-in customer")} · ${formatTime(item.timeRange || item.time)}`}</option>)}
                                 </select>
                                 <button
                                   type="button"
@@ -9025,7 +9041,7 @@ function AdminPortal({
                               </div>
                             ))}
                           </div>
-                          {partnerId && partner && <p className="mt-2 text-[11px] text-slate-500">{tr(partner.serviceName || "Not recorded")} · {formatTime(partner.time || "")} · {partner.therapistName || tr("Unassigned")}</p>}
+                          {partnerId && partner && <p className="mt-2 text-[11px] text-slate-500">{tr(partner.serviceName || "Not recorded")} · {formatTime(partner.timeRange || partner.time || "")} · {partner.therapistName || tr("Unassigned")}</p>}
                           {canPair && !partnerId && <p className="mt-2 text-[11px] leading-4 text-slate-500">{tr(candidates.length
                             ? "Pair separately booked clients who are treated together. Only same-branch appointments on this date with the same start and end time are listed."
                             : "No other appointment at this branch has the same start and end time.")}</p>}
