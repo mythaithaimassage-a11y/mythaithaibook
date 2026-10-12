@@ -127,6 +127,33 @@ export default function TodayWorkSchedule({ branches, therapists, initialBranchI
     }
   };
 
+  const savePublicVisibility = async (therapist: Therapist, shift: TherapistWorkShift, showToPublic: boolean) => {
+    setSaving(true);
+    setError('');
+    setNotice('');
+    try {
+      const response = await fetch('/api/booking?view=staff-work-schedule', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          date,
+          branchId: Number(branchId),
+          therapistId: Number(therapist.id),
+          override: { ...shift, therapistId: Number(therapist.id), date, branchId: Number(branchId), showToPublic },
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+      if (!data.override) throw new Error('Public visibility could not be saved. Refresh and try again.');
+      setOverrides((current) => ({ ...current, [shiftKey(therapist.id)]: { ...data.override, isOverride: true } }));
+      setNotice('Therapist public visibility was saved for this date.');
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'Unable to save therapist public visibility.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const saveEditedShift = () => {
     if (!editingTherapist || !editShift) return;
     if (editShift.isWorking && (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(editShift.startTime) ||
@@ -168,6 +195,7 @@ export default function TodayWorkSchedule({ branches, therapists, initialBranchI
                 <thead className="bg-slate-50 text-slate-600"><tr>
                   <th className="min-w-40 border-b border-r p-3">{tr('Staff member')}</th>
                   <th className="min-w-44 border-b p-3 text-center"><span className="inline-flex items-center justify-center gap-1.5"><CalendarDays className="h-3.5 w-3.5" />{selectedDateLabel}</span></th>
+                  <th className="min-w-48 border-b p-3 text-center">{tr('Public visibility')}</th>
                 </tr></thead>
                 <tbody className="divide-y divide-slate-100">
                   {branchTherapists.map((therapist) => {
@@ -179,6 +207,15 @@ export default function TodayWorkSchedule({ branches, therapists, initialBranchI
                           <span className="block font-semibold">{shift.isWorking ? `${shift.startTime}–${shift.endTime}` : tr('Off')}</span>
                           {shift.isOverride && <span className="mt-0.5 block text-[10px] text-blue-600">{tr('Custom')}</span>}
                         </button>
+                      </td>
+                      <td className="p-2 text-center">
+                        <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700">
+                          <input type="checkbox" checked={shift.showToPublic === true}
+                            disabled={!shift.isWorking || saving || loading}
+                            aria-label={tr('Show {value0} to customers (with consent)', { value0: therapist.name })}
+                            onChange={(event) => void savePublicVisibility(therapist, shift, event.target.checked)} />
+                          {tr(shift.showToPublic ? 'Name visible to customers' : 'Availability kept anonymous')}
+                        </label>
                       </td>
                     </tr>;
                   })}
@@ -197,6 +234,13 @@ export default function TodayWorkSchedule({ branches, therapists, initialBranchI
           startTime: event.target.checked && !editShift.startTime ? DEFAULT_THERAPIST_START : editShift.startTime,
           endTime: event.target.checked && !editShift.endTime ? DEFAULT_THERAPIST_END : editShift.endTime,
         })} />{tr('Working this day')}</label>
+        <label className="mt-3 flex items-start gap-2 text-sm font-semibold text-slate-700">
+          <input type="checkbox" checked={editShift.showToPublic === true} disabled={!editShift.isWorking || saving}
+            onChange={(event) => setEditShift({ ...editShift, showToPublic: event.target.checked })} />
+          <span>{tr('Show this therapist’s name to customers (with consent)')}
+            <span className="mt-0.5 block text-xs font-normal text-slate-500">{tr('If unchecked, customers may book the available time without seeing the therapist’s name; staff can assign the therapist.')}</span>
+          </span>
+        </label>
         <div className="mt-3 grid grid-cols-2 gap-3">
           <label className="text-xs font-semibold text-slate-600">{tr('Starts')}<input type="time" disabled={!editShift.isWorking || saving} value={editShift.startTime} onChange={(event) => setEditShift({ ...editShift, startTime: event.target.value })} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100" /></label>
           <label className="text-xs font-semibold text-slate-600">{tr('Ends')}<input type="time" disabled={!editShift.isWorking || saving} value={editShift.endTime} onChange={(event) => setEditShift({ ...editShift, endTime: event.target.value })} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100" /></label>

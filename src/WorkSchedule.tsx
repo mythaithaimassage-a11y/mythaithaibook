@@ -196,6 +196,7 @@ export default function WorkSchedule({ branches, therapists, initialBranchId = '
                     <button type="button" onClick={() => openEditor(therapist, date)} className={`min-h-11 w-full rounded-md px-2 py-2 text-left transition hover:ring-2 hover:ring-blue-300 ${shift.isWorking ? 'bg-blue-50 text-blue-900' : 'text-slate-400 hover:bg-slate-50'}`}>
                       <span className="block font-semibold">{shift.isWorking ? `${shift.startTime}–${shift.endTime}` : tr('Off')}</span>
                       {shift.isOverride && <span className="mt-0.5 block text-[10px] text-blue-600">{tr('Custom')}</span>}
+                      {shift.isWorking && <span className="mt-0.5 block text-[10px]">{tr(shift.showToPublic ? 'Name visible to customers' : 'Availability kept anonymous')}</span>}
                     </button>
                   </td>;
                 })}
@@ -216,6 +217,13 @@ export default function WorkSchedule({ branches, therapists, initialBranchId = '
           startTime: event.target.checked && !editShift.startTime ? DEFAULT_THERAPIST_START : editShift.startTime,
           endTime: event.target.checked && !editShift.endTime ? DEFAULT_THERAPIST_END : editShift.endTime,
         })} />{tr('Working this day')}</label>
+        <label className="mt-3 flex items-start gap-2 text-sm font-semibold text-slate-700">
+          <input type="checkbox" checked={editShift.showToPublic === true} disabled={!editShift.isWorking}
+            onChange={(event) => setEditShift({ ...editShift, showToPublic: event.target.checked })} />
+          <span>{tr('Show this therapist’s name to customers (with consent)')}
+            <span className="mt-0.5 block text-xs font-normal text-slate-500">{tr('If unchecked, customers may book the available time without seeing the therapist’s name; staff can assign the therapist.')}</span>
+          </span>
+        </label>
         <div className="mt-3 grid grid-cols-2 gap-3">
           <label className="text-xs font-semibold text-slate-600">{tr('Starts')}<input type="time" disabled={!editShift.isWorking} value={editShift.startTime} onChange={(event) => setEditShift({ ...editShift, startTime: event.target.value })} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100" /></label>
           <label className="text-xs font-semibold text-slate-600">{tr('Ends')}<input type="time" disabled={!editShift.isWorking} value={editShift.endTime} onChange={(event) => setEditShift({ ...editShift, endTime: event.target.value })} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100" /></label>

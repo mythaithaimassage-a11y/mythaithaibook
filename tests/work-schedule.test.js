@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import {
   defaultTherapistShift,
@@ -14,11 +15,20 @@ test('weekly branch schedules fall back to a default ten-to-eight shift', () => 
   const shift = defaultTherapistShift(therapist, 2, '2026-11-02');
   assert.deepEqual(shift, {
     therapistId: 7, branchId: 2, date: '2026-11-02', isWorking: true,
-    startTime: '10:00', endTime: '20:00', isOverride: false,
+    startTime: '10:00', endTime: '20:00', showToPublic: true, isOverride: false,
   });
   assert.equal(isTherapistScheduledAtBranch(therapist, 2, '2026-11-02'), true);
   assert.equal(isTherapistScheduledAtBranch(therapist, 3, '2026-11-02'), false);
   assert.equal(defaultTherapistShift(therapist, 2, 'invalid').isWorking, false);
+});
+
+test('public visibility defaults to on and can be managed from both schedule screens', () => {
+  const todaySchedule = readFileSync(new URL('../src/TodayWorkSchedule.tsx', import.meta.url), 'utf8');
+  const monthSchedule = readFileSync(new URL('../src/WorkSchedule.tsx', import.meta.url), 'utf8');
+  assert.equal(defaultTherapistShift({ id: 7, branches: [2] }, 2, '2026-11-02').showToPublic, true);
+  assert.match(todaySchedule, /checked=\{shift\.showToPublic === true\}/);
+  assert.match(todaySchedule, /savePublicVisibility\(therapist, shift, event\.target\.checked\)/);
+  assert.match(monthSchedule, /Show this therapist’s name to customers \(with consent\)/);
 });
 
 test('an explicit weekly rotation takes precedence over static branch assignments', () => {

@@ -5,7 +5,7 @@ import { branchAppointmentTimes, type WeeklyBusinessHours } from '../lib/booking
 import useTherapistAvailability from './useTherapistAvailability';
 
 type Branch = { id: number; name: string; active?: boolean; businessHours?: WeeklyBusinessHours };
-type Service = { id: number; name: string; active?: boolean; isRmt?: boolean; duration?: number };
+type Service = { id: number; name: string; active?: boolean; isRmt?: boolean; duration?: number; price?: number };
 type Therapist = { id: number; name: string; active?: boolean; rmtCertified?: boolean };
 type Customer = { name: string; email: string; phone: string };
 type Props = {
@@ -24,12 +24,17 @@ type Props = {
 
 export default function QuickBooking(props: Props) {
   const { translate: tr, formatTime } = useTranslation();
+  const activeServices = props.services.filter((item) => item.active !== false);
+  const couplePackages = activeServices.filter((item) => /couple/i.test(item.name) && [60, 90].includes(item.duration ?? 0));
+  const singleServices = activeServices.filter((item) => !/couple/i.test(item.name));
+  const initialService = activeServices.find((item) => singleServices.includes(item) || couplePackages.includes(item));
   const [name, setName] = useState('');
   const [contact, setContact] = useState('');
   const [bookingNote, setBookingNote] = useState('');
   const [date, setDate] = useState(props.date);
   const [branchId, setBranchId] = useState(props.branchId === 'all' ? String(props.branches.find((branch) => branch.active !== false)?.id || '') : props.branchId);
-  const [serviceId, setServiceId] = useState(String(props.services.find((service) => service.active !== false)?.id || ''));
+  const [serviceId, setServiceId] = useState(String(initialService?.id || ''));
+  const [couplePackage, setCouplePackage] = useState(Boolean(initialService && couplePackages.includes(initialService)));
   const [therapistId, setTherapistId] = useState(props.therapistId === 'all' ? '' : props.therapistId);
   const [therapistId2, setTherapistId2] = useState('');
   const [time, setTime] = useState(props.time || props.times[0] || '');
@@ -43,11 +48,12 @@ export default function QuickBooking(props: Props) {
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const dialog = useRef<HTMLDialogElement>(null);
   const submitting = useRef(false);
-  const service = props.services.find((item) => String(item.id) === serviceId);
+  const selectableServices = couplePackage ? couplePackages : singleServices;
+  const service = selectableServices.find((item) => String(item.id) === serviceId);
   const branch = props.branches.find((item) => String(item.id) === branchId);
   const availableTimes = date && branch ? branchAppointmentTimes(branch, date, service?.duration ?? 60) : [];
   const validTime = availableTimes.includes(time) ? time : '';
-  const couple = /couple/i.test(service?.name || '');
+  const couple = couplePackage;
   const availability = useTherapistAvailability({
     branchId, date, time: validTime, durationMinutes: service?.duration ?? 60, isRmt: Boolean(service?.isRmt),
   });
@@ -95,6 +101,15 @@ export default function QuickBooking(props: Props) {
     setActiveCustomer(-1);
   };
 
+  const toggleCouplePackage = (checked: boolean) => {
+    const choices = checked ? couplePackages : singleServices;
+    const nextService = choices.find((item) => item.duration === service?.duration) || choices[0];
+    setCouplePackage(checked);
+    setServiceId(nextService ? String(nextService.id) : '');
+    setTherapistId2('');
+    setError('');
+  };
+
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (submitting.current) return;
@@ -102,6 +117,7 @@ export default function QuickBooking(props: Props) {
     setSaving(true);
     setError('');
     try {
+      if (!service) throw new Error('Choose an available service or couple package.');
       const response = await fetch('/api/booking?view=manual-booking', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -183,20 +199,30 @@ export default function QuickBooking(props: Props) {
           setSelectedCustomer(null);
         }} placeholder={tr('client@example.com or +1 437 898 7424')} className={inputClass} /></label>
         {selectedCustomer?.email && selectedCustomer.phone && <p className="text-xs text-stone-500">{selectedCustomer.email} / {selectedCustomer.phone}</p>}
+        <label className="flex items-start gap-3 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm font-semibold text-stone-800">
+          <input type="checkbox" checked={couplePackage} disabled={saving} onChange={(event) => toggleCouplePackage(event.target.checked)}
+            className="mt-0.5 h-4 w-4 accent-blue-600" />
+          <span>{tr('Couple massage (2 people)')}<span className="mt-1 block text-xs font-normal text-stone-600">{tr('Two massages at the same start time, both 60 or both 90 minutes. Uses the existing couple package price.')}</span></span>
+        </label>
         <div className="grid grid-cols-2 gap-3">
           <label className="text-xs font-bold text-stone-700">{tr('Therapist')}<select required value={validTherapistId} onChange={(event) => setTherapistId(event.target.value)} className={inputClass}><option value="">{tr('Choose therapist')}</option>{therapists.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
           <label className="text-xs font-bold text-stone-700">{tr('Time')}<select required value={validTime} onChange={(event) => setTime(event.target.value)} className={inputClass}><option value="">{tr('Choose time')}</option>{availableTimes.map((value) => <option key={value} value={value}>{formatTime(value)}</option>)}</select></label>
           {couple && <label className="col-span-2 text-xs font-bold text-stone-700">{tr('Second therapist')}<select required value={validTherapistId2} onChange={(event) => setTherapistId2(event.target.value)} className={inputClass}><option value="">{tr('Choose a different therapist')}</option>{therapists.filter((item) => String(item.id) !== validTherapistId).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>}
           <label className="text-xs font-bold text-stone-700">{tr('Date')}<input type="date" required value={date} onChange={(event) => setDate(event.target.value)} className={inputClass} /></label>
           <label className="text-xs font-bold text-stone-700">{tr('Branch')}<select required value={branchId} onChange={(event) => setBranchId(event.target.value)} className={inputClass}>{props.branches.filter((item) => item.active !== false).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
-          <label className="col-span-2 text-xs font-bold text-stone-700">{tr('Service')}<select required value={serviceId} onChange={(event) => setServiceId(event.target.value)} className={inputClass}>{props.services.filter((item) => item.active !== false).map((item) => <option key={item.id} value={item.id}>{tr(item.name)}</option>)}</select></label>
+          <label className="col-span-2 text-xs font-bold text-stone-700">{tr(couplePackage ? 'Couple package' : 'Service')}<select required value={service ? serviceId : ''} onChange={(event) => { setServiceId(event.target.value); setTherapistId2(''); }} className={inputClass}>
+            <option value="">{tr(couplePackage ? 'Choose a couple package' : 'Choose a service')}</option>
+            {selectableServices.map((item) => <option key={item.id} value={item.id}>{tr(item.name)}{couplePackage && item.price !== undefined ? ` - $${item.price.toFixed(2)}` : ''}</option>)}
+          </select></label>
         </div>
+        {couplePackage && couplePackages.length === 0 && <p role="alert" className="text-xs text-amber-800">{tr('No active 60- or 90-minute couple packages are available. Configure a couple package in Services or turn off couple booking.')}</p>}
+        {couple && validTime && !availability.loading && !availability.error && therapists.length < 2 && <p role="alert" className="text-xs text-amber-800">{tr('Two different therapists must be available at the same time for a couple massage. Choose another time.')}</p>}
         {availableTimes.length === 0 && <p role="alert" className="text-xs text-amber-800">{tr('No appointment times fit the business hours for this branch, date and service.')}</p>}
         {availability.loading && <p role="status" className="text-xs text-stone-600">{tr('Checking therapist availability…')}</p>}
         {availability.error && <p role="alert" className="text-xs text-red-800">{tr(availability.error)}</p>}
         {!availability.loading && !availability.error && validTime && therapists.length === 0 && <p role="alert" className="text-xs text-amber-800">{tr('No eligible therapists are available for this branch, date, time, and service. Choose different appointment details.')}</p>}
         {error && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-800">{tr(error)}</p>}
-        <div className="flex justify-end gap-2"><button type="button" disabled={saving} onClick={props.onClose} className="rounded-lg border border-stone-300 px-4 py-2 text-sm">{tr('Cancel')}</button><button type="submit" disabled={saving || availability.loading || Boolean(availability.error) || !therapists.length || !validTime} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-50">{tr(saving ? 'Saving...' : 'Save appointment')}</button></div>
+        <div className="flex justify-end gap-2"><button type="button" disabled={saving} onClick={props.onClose} className="rounded-lg border border-stone-300 px-4 py-2 text-sm">{tr('Cancel')}</button><button type="submit" disabled={saving || availability.loading || Boolean(availability.error) || !therapists.length || !validTime || !service || (couple && !validTherapistId2)} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-50">{tr(saving ? 'Saving...' : 'Save appointment')}</button></div>
       </form>
     </dialog>
   );

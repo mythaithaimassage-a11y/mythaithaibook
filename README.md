@@ -76,6 +76,24 @@ the primary calendar with `GOOGLE_PRIMARY_CALENDAR_ID`.
 
 ## Staff calendar and quick booking
 
+In **Business profile**, **Minimum booking notice (minutes)** controls how far
+ahead customers must book (default: 15 minutes; whole minutes from 0 to 1440).
+Customer availability and booking/rescheduling requests enforce this notice in
+the configured calendar time zone, not the customer's browser time zone. Past
+slots are never available, even with notice set to 0. Staff manual bookings and
+historical corrections retain their existing behavior.
+
+Therapist names are visible to customers by default. Staff can turn off public
+visibility per shift in today's availability or the monthly Work Schedule.
+Explicit opt-outs are preserved; private shifts still contribute anonymous
+capacity and their appointments stay unassigned until staff assigns them.
+
+Calendar quick booking includes a **Couple massage (2 people)** checkbox.
+When enabled, select an existing active 60- or 90-minute couple package and
+two different therapists available at the same start time. Both guests receive
+the package's duration; pricing comes from the saved couple package, not two
+individual service prices.
+
 On the **owner dashboard only**, screens below 1024px have sticky Home,
 Booking Calendar, and Sales & reports shortcuts. **All sections** opens a
 scrollable menu grouped by Workspace, Manage, and Grow; selecting a section

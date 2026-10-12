@@ -5,6 +5,7 @@ export type TherapistWorkShift = {
   isWorking: boolean;
   startTime: string;
   endTime: string;
+  showToPublic: boolean;
   isOverride: boolean;
 };
 

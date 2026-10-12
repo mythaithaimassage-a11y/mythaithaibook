@@ -11,6 +11,7 @@ import { createPackageStore, historicalPackageVisit, readPackageUsage, packageRe
 import { createBookingHistoryStore } from '../lib/booking-history.js';
 import { syncWixCalendarBatch } from '../lib/wix-calendar.js';
 import { searchBookingCustomers } from '../lib/customer-search.js';
+import { customerTypeForBooking } from '../lib/customer-type.js';
 import { applySavedTherapistAliases, parseTherapistAliases, planTherapistRename, readTherapistAliases, renameTherapistBookingBatch, renameTherapistLabel, saveTherapistAlias } from '../lib/therapist-rename.js';
 import { sendGmailMessage } from '../lib/gmail.js';
 import { BOOKING_DEPOSIT_AMOUNT, validateBranchPaymentOptions, validateAppointmentTime, validateBusinessHours, appointmentTimeMinutes } from '../lib/booking-options.js';
@@ -76,7 +77,7 @@ const SQUARE_WEBHOOK_NOTIFICATION_URL = process.env.SQUARE_WEBHOOK_NOTIFICATION_
 const SQUARE_API_VERSION = '2024-08-21';
 const GOOGLE_PLACES_API_KEY = process.env.GOOGLE_PLACES_API_KEY || '';
 const GOOGLE_PLACE_ID = process.env.GOOGLE_PLACE_ID || '';
-const BUSINESS_PROFILE_FIELDS = ['businessName', 'legalName', 'tagline', 'email', 'phone', 'website', 'address', 'taxRegistrationNumber', 'photoUrl', 'therapistBufferMinutes'];
+const BUSINESS_PROFILE_FIELDS = ['businessName', 'legalName', 'tagline', 'email', 'phone', 'website', 'address', 'taxRegistrationNumber', 'photoUrl', 'therapistBufferMinutes', 'minimumBookingNoticeMinutes'];
 const LEGACY_BUSINESS_PROFILE_FIELDS = ['businessName', 'tagline', 'email', 'phone', 'website', 'address'];
 const DEFAULT_BUSINESS_PROFILE = {
   businessName: 'MY THAI THAI',
@@ -89,6 +90,7 @@ const DEFAULT_BUSINESS_PROFILE = {
   taxRegistrationNumber: '',
   photoUrl: '',
   therapistBufferMinutes: '15',
+  minimumBookingNoticeMinutes: '15',
 };
 const BRANCH_FIELDS = ['ID', 'Name', 'Address', 'City', 'Phone', 'Active', 'Updated At', 'Collects Deposit', 'Allow Clinic Payment', 'Allow Deposit Payment', 'Allow Full Payment', 'Business Hours'];
 const DEFAULT_BRANCHES = [
@@ -2052,13 +2054,13 @@ async function ensureBusinessProfileSheet(sheets) {
   }
   const header = await sheets.spreadsheets.values.get({
     spreadsheetId,
-    range: 'BusinessProfile!A1:J1',
+    range: 'BusinessProfile!A1:K1',
   });
   const headerRow = header.data.values?.[0] || [];
   if (BUSINESS_PROFILE_FIELDS.some((field, index) => headerRow[index] !== field) || headerRow.length !== BUSINESS_PROFILE_FIELDS.length) {
     const previousValues = await sheets.spreadsheets.values.get({
       spreadsheetId,
-      range: 'BusinessProfile!A2:J2',
+      range: 'BusinessProfile!A2:K2',
     });
     const previousRow = previousValues.data.values?.[0] || [];
     const previousProfile = Object.fromEntries(headerRow.map((field, index) => [field, previousRow[index]]));
@@ -2071,14 +2073,14 @@ async function ensureBusinessProfileSheet(sheets) {
     ));
     await sheets.spreadsheets.values.update({
       spreadsheetId,
-      range: 'BusinessProfile!A1:J1',
+      range: 'BusinessProfile!A1:K1',
       valueInputOption: 'RAW',
       requestBody: { values: [BUSINESS_PROFILE_FIELDS] },
     });
     if (hasKnownProfileHeader || previousRow.some((value) => value !== undefined && value !== '')) {
       await sheets.spreadsheets.values.update({
         spreadsheetId,
-        range: 'BusinessProfile!A2:J2',
+        range: 'BusinessProfile!A2:K2',
         valueInputOption: 'RAW',
         requestBody: { values: [migratedProfile] },
       });
@@ -2091,7 +2093,7 @@ async function getBusinessProfile(sheets) {
     await ensureBusinessProfileSheet(sheets);
     const result = await sheets.spreadsheets.values.get({
       spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-      range: 'BusinessProfile!A1:J2',
+      range: 'BusinessProfile!A1:K2',
     });
     const row = result.data.values?.[1] || [];
     return Object.fromEntries(BUSINESS_PROFILE_FIELDS.map((field, index) => [
@@ -2099,7 +2101,7 @@ async function getBusinessProfile(sheets) {
       row[index] === undefined ? DEFAULT_BUSINESS_PROFILE[field] : row[index],
     ]));
   });
-  return profile;
+  return { ...DEFAULT_BUSINESS_PROFILE, ...profile };
 }
 
 function therapistBufferMinutes(profile) {
@@ -2108,6 +2110,23 @@ function therapistBufferMinutes(profile) {
     throw new Error('Configured therapist appointment gap must be from 0 to 120 minutes in 15-minute increments.');
   }
   return minutes;
+}
+
+function minimumBookingNoticeMinutes(profile) {
+  const value = profile?.minimumBookingNoticeMinutes ?? DEFAULT_BUSINESS_PROFILE.minimumBookingNoticeMinutes;
+  const minutes = Number(value);
+  if (!['number', 'string'].includes(typeof value) || String(value).trim() === '' ||
+      !Number.isInteger(minutes) || minutes < 0 || minutes > 1440) {
+    throw Object.assign(new Error('Minimum booking notice must be a whole number from 0 to 1440 minutes.'), { statusCode: 400 });
+  }
+  return minutes;
+}
+
+function validateBookingNotice(startInstant, profile) {
+  const minutes = minimumBookingNoticeMinutes(profile);
+  if (Date.parse(startInstant) < Date.now() + minutes * 60000) {
+    throw Object.assign(new Error(`Choose an appointment at least ${minutes} minutes from now.`), { statusCode: 409 });
+  }
 }
 
 // --- Therapist / business unavailability blocks ----------------------------
@@ -2197,7 +2216,7 @@ function blockOverlapsWindow(block, date, startInstant, endInstant) {
   return hasTimeOverlap(startInstant, endInstant, blockStart, blockEnd);
 }
 
-const STAFF_WORK_SCHEDULE_HEADERS = ['Therapist ID', 'Date', 'Branch ID', 'Working', 'Start Time', 'End Time', 'Updated By', 'Updated At'];
+const STAFF_WORK_SCHEDULE_HEADERS = ['Therapist ID', 'Date', 'Branch ID', 'Working', 'Start Time', 'End Time', 'Updated By', 'Updated At', 'Public Visibility'];
 
 async function ensureStaffWorkScheduleSheet(sheets) {
   const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
@@ -2215,23 +2234,30 @@ async function ensureStaffWorkScheduleSheet(sheets) {
       if (!(refreshed.data.sheets || []).some((sheet) => sheet.properties?.title === 'StaffWorkSchedule')) throw error;
     }
   }
-  const header = await sheets.spreadsheets.values.get({ spreadsheetId, range: 'StaffWorkSchedule!A1:H1' });
+  const header = await sheets.spreadsheets.values.get({ spreadsheetId, range: 'StaffWorkSchedule!A1:I1' });
   if (!header.data.values?.[0]?.length) {
     await sheets.spreadsheets.values.update({
       spreadsheetId,
-      range: 'StaffWorkSchedule!A1:H1',
+      range: 'StaffWorkSchedule!A1:I1',
       valueInputOption: 'RAW',
       requestBody: { values: [STAFF_WORK_SCHEDULE_HEADERS] },
+    });
+  } else if (header.data.values[0][8] !== 'Public Visibility') {
+    await sheets.spreadsheets.values.update({
+      spreadsheetId,
+      range: 'StaffWorkSchedule!I1',
+      valueInputOption: 'RAW',
+      requestBody: { values: [['Public Visibility']] },
     });
   }
 }
 
 async function getStaffWorkScheduleRows(sheets) {
-  return getAppointmentConfigOrSheets(sheets, 'work_schedule', async () => {
+  const schedules = await getAppointmentConfigOrSheets(sheets, 'work_schedule', async () => {
     await ensureStaffWorkScheduleSheet(sheets);
     const result = await sheets.spreadsheets.values.get({
       spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-      range: 'StaffWorkSchedule!A:H',
+      range: 'StaffWorkSchedule!A:I',
     });
     const rows = result.data.values || [];
     const startIndex = rows[0]?.[0] === 'Therapist ID' ? 1 : 0;
@@ -2246,16 +2272,21 @@ async function getStaffWorkScheduleRows(sheets) {
           (isWorking && (minutesOfDay(startTime) === null || minutesOfDay(endTime) === null || minutesOfDay(startTime) >= minutesOfDay(endTime)))) {
         throw new Error('A saved therapist work schedule entry is invalid. Correct the StaffWorkSchedule sheet before continuing.');
       }
-      return { therapistId, date, branchId, isWorking, startTime, endTime, updatedBy: String(row[6] || ''), updatedAt: String(row[7] || '') };
+      return {
+        therapistId, date, branchId, isWorking, startTime, endTime,
+        updatedBy: String(row[6] || ''), updatedAt: String(row[7] || ''),
+        showToPublic: String(row[8] || 'TRUE').toUpperCase() !== 'FALSE',
+      };
     });
   });
+  return schedules.map((shift) => ({ ...shift, showToPublic: shift.showToPublic ?? true }));
 }
 
 function therapistShiftForDate(therapist, branchId, date, overrides) {
   const override = overrides.find((item) => item.therapistId === Number(therapist.id) &&
     item.date === date && item.branchId === Number(branchId));
   return override
-    ? { ...override, isOverride: true }
+    ? { ...override, showToPublic: override.showToPublic ?? true, isOverride: true }
     : defaultTherapistShift(therapist, branchId, date);
 }
 
@@ -2265,7 +2296,8 @@ function time24FromMinutes(minutes) {
 
 function workScheduleRowValues(entry) {
   return [entry.therapistId, entry.date, entry.branchId, entry.isWorking ? 'TRUE' : 'FALSE',
-    entry.isWorking ? entry.startTime : '', entry.isWorking ? entry.endTime : '', entry.updatedBy, entry.updatedAt];
+    entry.isWorking ? entry.startTime : '', entry.isWorking ? entry.endTime : '', entry.updatedBy, entry.updatedAt,
+    entry.isWorking && entry.showToPublic === true ? 'TRUE' : 'FALSE'];
 }
 
 async function writeStaffWorkScheduleRows(sheets, currentRows, nextRows) {
@@ -2283,7 +2315,7 @@ async function writeStaffWorkScheduleRows(sheets, currentRows, nextRows) {
   const rowCount = Math.max(currentRows.length, nextRows.length);
   if (!rowCount) return;
   const rows = Array.from({ length: rowCount }, (_, index) => {
-    const values = nextRows[index] ? workScheduleRowValues(nextRows[index]) : Array(8).fill('');
+    const values = nextRows[index] ? workScheduleRowValues(nextRows[index]) : Array(9).fill('');
     return { values: values.map((value) => value === '' ? {} : typeof value === 'number'
       ? { userEnteredValue: { numberValue: value } }
       : { userEnteredValue: { stringValue: String(value) } }) };
@@ -2292,7 +2324,7 @@ async function writeStaffWorkScheduleRows(sheets, currentRows, nextRows) {
     spreadsheetId,
     requestBody: { requests: [{
       updateCells: {
-        range: { sheetId: scheduleSheetId, startRowIndex: 1, startColumnIndex: 0, endRowIndex: rowCount + 1, endColumnIndex: 8 },
+        range: { sheetId: scheduleSheetId, startRowIndex: 1, startColumnIndex: 0, endRowIndex: rowCount + 1, endColumnIndex: 9 },
         rows,
         fields: 'userEnteredValue',
       },
@@ -2705,10 +2737,10 @@ async function readAppointmentConfigFromSheets(sheets) {
   const hasTherapistAliases = (metadata.data.sheets || [])
     .some((sheet) => sheet.properties?.title === 'TherapistAliases');
   const ranges = [
-    'BusinessProfile!A1:J2',
+    'BusinessProfile!A1:K2',
     'Services!A2:K',
     'Therapists!A2:J',
-    'StaffWorkSchedule!A:H',
+    'StaffWorkSchedule!A:I',
     'Unavailability!A:J',
     ...(hasTherapistAliases ? ['TherapistAliases!A:E'] : []),
   ];
@@ -2772,7 +2804,11 @@ async function readAppointmentConfigFromSheets(sheets) {
         (isWorking && (minutesOfDay(startTime) === null || minutesOfDay(endTime) === null || minutesOfDay(startTime) >= minutesOfDay(endTime)))) {
       throw new Error('A saved therapist work schedule entry is invalid. Correct the StaffWorkSchedule sheet before continuing.');
     }
-    return { therapistId, date, branchId, isWorking, startTime, endTime, updatedBy: String(row[6] || ''), updatedAt: String(row[7] || '') };
+    return {
+      therapistId, date, branchId, isWorking, startTime, endTime,
+      updatedBy: String(row[6] || ''), updatedAt: String(row[7] || ''),
+      showToPublic: String(row[8] || 'TRUE').toUpperCase() !== 'FALSE',
+    };
   });
   const unavailabilityStartIndex = unavailabilityRows[0]?.[0] === 'Block ID' ? 1 : 0;
   const unavailability = unavailabilityRows.slice(unavailabilityStartIndex).filter((row) => row[0]).map((row) => ({
@@ -4407,7 +4443,7 @@ function validateBusinessProfile(input) {
     throw new Error('Business name is required and must be 100 characters or fewer');
   }
   for (const field of BUSINESS_PROFILE_FIELDS.slice(1)) {
-    if (field === 'therapistBufferMinutes') continue;
+    if (field === 'therapistBufferMinutes' || field === 'minimumBookingNoticeMinutes') continue;
     const maxLength = field === 'photoUrl' ? 2048 : 250;
     if (profile[field].length > maxLength) {
       throw new Error(`${field} must be ${maxLength} characters or fewer`);
@@ -4418,6 +4454,9 @@ function validateBusinessProfile(input) {
     throw new Error('Therapist appointment gap must be from 0 to 120 minutes in 15-minute increments.');
   }
   profile.therapistBufferMinutes = String(therapistBufferMinutes);
+  profile.minimumBookingNoticeMinutes = String(minimumBookingNoticeMinutes({
+    minimumBookingNoticeMinutes: input?.minimumBookingNoticeMinutes ?? DEFAULT_BUSINESS_PROFILE.minimumBookingNoticeMinutes,
+  }));
   if (profile.email && !/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(profile.email)) {
     throw new Error('Enter a valid business email address');
   }
@@ -5705,6 +5744,7 @@ export default async function handler(req, res) {
           const startTime = String(raw?.startTime || '');
           const endTime = String(raw?.endTime || '');
           if (Number(raw?.therapistId) !== therapistId || raw?.date !== dayDate || typeof isWorking !== 'boolean' ||
+              (raw?.showToPublic !== undefined && typeof raw.showToPublic !== 'boolean') ||
               (isWorking && (minutesOfDay(startTime) === null || minutesOfDay(endTime) === null ||
                 minutesOfDay(startTime) >= minutesOfDay(endTime)))) {
             return res.status(400).json({ message: 'The therapist and work hours must be valid for the selected date.' });
@@ -5713,6 +5753,7 @@ export default async function handler(req, res) {
             therapistId, date: dayDate, branchId, isWorking,
             startTime: isWorking ? startTime : '',
             endTime: isWorking ? endTime : '',
+            showToPublic: raw.showToPublic ?? true,
             updatedBy: dashboardSession.email, updatedAt: new Date().toISOString(),
           };
         }
@@ -5739,6 +5780,7 @@ export default async function handler(req, res) {
         const key = `${therapistId}:${date}`;
         if (!Number.isInteger(therapistId) || !therapists.some((item) => Number(item.id) === therapistId) ||
             !validDate(date) || !date.startsWith(`${month}-`) || seen.has(key) || typeof isWorking !== 'boolean' ||
+            (raw?.showToPublic !== undefined && typeof raw.showToPublic !== 'boolean') ||
             (isWorking && (minutesOfDay(startTime) === null || minutesOfDay(endTime) === null ||
               minutesOfDay(startTime) >= minutesOfDay(endTime)))) {
           return res.status(400).json({ message: 'Each schedule entry must have a valid staff member, date and work time.' });
@@ -5748,6 +5790,7 @@ export default async function handler(req, res) {
           therapistId, date, branchId, isWorking,
           startTime: isWorking ? startTime : '',
           endTime: isWorking ? endTime : '',
+          showToPublic: raw.showToPublic ?? true,
           updatedBy: dashboardSession.email, updatedAt,
         });
       }
@@ -5762,6 +5805,7 @@ export default async function handler(req, res) {
 
     if (req.method === 'GET' && view === 'available-therapists') {
       res.setHeader('Cache-Control', 'no-store');
+      const publicBooking = !dashboardSession || req.query?.publicBooking === 'true';
       const date = String(req.query?.date || '');
       const branchId = Number(req.query?.branchId);
       const durationMinutes = Number(req.query?.durationMinutes);
@@ -5798,6 +5842,9 @@ export default async function handler(req, res) {
         getBusinessProfile(sheets),
       ]);
       const appointmentGapMinutes = therapistBufferMinutes(profile);
+      const noticeMinutes = minimumBookingNoticeMinutes(profile);
+      const availabilityNow = Date.now();
+      const bookingCutoffsByTime = {};
       const branch = branches.find((item) => Number(item.id) === branchId && item.active !== false);
       if (!branch) return res.status(404).json({ message: 'Branch was not found or is inactive.' });
       const rows = result.data.values || [];
@@ -5829,9 +5876,10 @@ export default async function handler(req, res) {
         if (req.query?.times !== undefined) {
           return res.status(200).json({
             therapistIdsByTime: Object.fromEntries(timeWindows.map(({ time }) => [time, therapistIds])),
+            unassignedTherapistCountByTime: Object.fromEntries(timeWindows.map(({ time }) => [time, 0])),
           });
         }
-        return res.status(200).json({ therapistIds });
+        return res.status(200).json({ therapistIds, unassignedTherapistCount: 0 });
       }
       const startOfDay = zonedBookingInstant(`${date}T00:00:00`, CALENDAR_TIME_ZONE);
       const endOfDay = zonedBookingInstant(`${shiftDate(date, 1)}T00:00:00`, CALENDAR_TIME_ZONE);
@@ -5855,7 +5903,9 @@ export default async function handler(req, res) {
         return Number.isInteger(hour) && Number.isInteger(minute) ? hour * 60 + minute : null;
       };
       const calendarBusyWindows = calendarEvents.filter((event) => event.status !== 'cancelled').map((event) => ({
+        eventId: event.id,
         names: therapistAssignmentNames(getTherapistFromDescription(event.description), therapists.map((therapist) => therapist.name)),
+        assignment: getTherapistFromDescription(event.description),
         start: localMinutes(event.start?.dateTime),
         end: localMinutes(event.end?.dateTime),
         allDay: Boolean(event.start?.date),
@@ -5866,6 +5916,10 @@ export default async function handler(req, res) {
           `${date}T${String(Math.floor(start / 60)).padStart(2, '0')}:${String(start % 60).padStart(2, '0')}:00`,
           CALENDAR_TIME_ZONE,
         );
+        bookingCutoffsByTime[time] = Date.parse(windowStart) - noticeMinutes * 60000;
+        if (publicBooking && bookingCutoffsByTime[time] < availabilityNow) {
+          return [time, { ids: [], unassignedCount: 0 }];
+        }
         const windowEnd = zonedBookingInstant(
           `${date}T${String(Math.floor(end / 60)).padStart(2, '0')}:${String(end % 60).padStart(2, '0')}:00`,
           CALENDAR_TIME_ZONE,
@@ -5873,18 +5927,26 @@ export default async function handler(req, res) {
         const unavailability = blocks.filter((block) => blockOverlapsWindow(block, date, windowStart, windowEnd) &&
           ((block.scope === 'business' && (!block.branchName || block.branchName === branch.name)) || block.scope === 'therapist'));
         const busyNames = new Set(unavailability.filter((block) => block.scope === 'therapist').map((block) => block.therapistName));
+        let unassignedBookingCount = 0;
         rows.slice(startIndex).forEach((row) => {
           if (row[0] === excludeBookingId || row[7] !== date || ['Cancelled', 'No Show'].includes(String(row[24] || ''))) return;
           const bookingStart = appointmentTimeMinutes(normalizeBookingTime(row[8] || ''));
           const bookingEnd = bookingStart + (Number(row[12]) || 60);
           if (intervalsOverlap(start, end + appointmentGapMinutes, bookingStart, bookingEnd + appointmentGapMinutes)) {
-            therapistAssignmentNames(row[6], therapists.map((therapist) => therapist.name)).forEach((name) => busyNames.add(name));
+            const assignments = therapistAssignmentNames(row[6], [...therapists.map((therapist) => therapist.name), 'Any Available']);
+            assignments.filter((name) => name !== 'Any Available').forEach((name) => busyNames.add(name));
+            unassignedBookingCount += assignments.filter((name) => name === 'Any Available').length;
           }
         });
-        calendarBusyWindows.forEach(({ names, start: eventStart, end: eventEnd, allDay }) => {
+        calendarBusyWindows.forEach(({ eventId, names, assignment, start: eventStart, end: eventEnd, allDay }) => {
           if (allDay || eventStart === null || eventEnd === null ||
               intervalsOverlap(start, end + appointmentGapMinutes, eventStart, eventEnd + appointmentGapMinutes)) {
             names.forEach((name) => busyNames.add(name));
+            const linkedBooking = rows.slice(startIndex).some((row) => row[16] === eventId);
+            if (!linkedBooking && assignment) {
+              unassignedBookingCount += therapistAssignmentNames(assignment, ['Any Available'])
+                .filter((name) => name === 'Any Available').length;
+            }
           }
         });
         const scheduleEligible = therapists.filter((therapist) => {
@@ -5893,14 +5955,34 @@ export default async function handler(req, res) {
           return shiftCoversAppointment(shift, date, `${String(Math.floor(start / 60)).padStart(2, '0')}:${String(start % 60).padStart(2, '0')}`, durationMinutes);
         });
         const businessBlocked = unavailability.some((block) => block.scope === 'business');
-        const availableIds = businessBlocked ? [] : scheduleEligible
-          .filter((therapist) => !busyNames.has(therapist.name))
+        const availableTherapists = businessBlocked ? [] : scheduleEligible
+          .filter((therapist) => !busyNames.has(therapist.name));
+        let remainingUnassignedBookings = unassignedBookingCount;
+        const hiddenAvailable = availableTherapists.filter((therapist) =>
+          therapistShiftForDate(therapist, branchId, date, overrides).showToPublic !== true);
+        const unassignedCapacity = Math.max(0, hiddenAvailable.length - remainingUnassignedBookings);
+        remainingUnassignedBookings = Math.max(0, remainingUnassignedBookings - hiddenAvailable.length);
+        const publicAvailable = availableTherapists.filter((therapist) =>
+          therapistShiftForDate(therapist, branchId, date, overrides).showToPublic === true);
+        const publicAvailableIds = publicAvailable
+          .slice(Math.min(remainingUnassignedBookings, publicAvailable.length))
           .map((therapist) => therapist.id);
-        return [time, availableIds];
+        return [time, {
+          ids: publicBooking ? publicAvailableIds : availableTherapists.map((therapist) => therapist.id),
+          unassignedCount: publicBooking ? unassignedCapacity : 0,
+        }];
       }));
+      const publicAvailability = Object.fromEntries(Object.entries(therapistIdsByTime).map(([time, result]) => [time, result.ids]));
+      const unassignedTherapistCountByTime = Object.fromEntries(Object.entries(therapistIdsByTime).map(([time, result]) => [time, result.unassignedCount]));
       return req.query?.times !== undefined
-        ? res.status(200).json({ therapistIdsByTime })
-        : res.status(200).json({ therapistIds: therapistIdsByTime[timeWindows[0].time] });
+        ? res.status(200).json({
+          therapistIdsByTime: publicAvailability, unassignedTherapistCountByTime,
+          ...(publicBooking ? { bookingCutoffsByTime } : {}),
+        })
+        : res.status(200).json({
+          therapistIds: publicAvailability[timeWindows[0].time],
+          unassignedTherapistCount: unassignedTherapistCountByTime[timeWindows[0].time],
+        });
     }
 
     if (req.method === 'GET' && view === 'availability') {
@@ -7987,6 +8069,11 @@ export default async function handler(req, res) {
         const sheetRows = sheetResult.data.values || [];
         const hasHeader = sheetRows[0]?.[0] === 'Booking ID';
         const dataRows = hasHeader ? sheetRows.slice(1) : sheetRows;
+        const customerIdentityBookings = dataRows.map((row) => ({
+          id: row[0] || '',
+          phone: row[2] || '',
+          email: row[3] || '',
+        }));
         const bookingByEventId = new Map(dataRows
           .map((row) => [row[16], row])
           .filter(([id]) => id));
@@ -8122,7 +8209,11 @@ export default async function handler(req, res) {
                   };
                 }
 
-                const calendarBooking = { ...booking, editVersion: bookingRow ? bookingEditVersion(bookingRow) : booking.editVersion };
+                const calendarBooking = {
+                  ...booking,
+                  customerType: customerTypeForBooking(booking, customerIdentityBookings),
+                  editVersion: bookingRow ? bookingEditVersion(bookingRow) : booking.editVersion,
+                };
                 events.push({
                   id: event.id,
                   calendarId,
@@ -9175,6 +9266,8 @@ export default async function handler(req, res) {
       if (!branch || branch.active === false) return res.status(400).json({ message: 'Choose an active branch.' });
       const normalizedTime = newTime.replace(/^(\d):/, '0$1:');
       validateAppointmentTime(normalizedTime, branch, newDate, durationMinutes);
+      const rescheduleProfile = await getBusinessProfile(sheets);
+      validateBookingNotice(zonedBookingInstant(newStartDateTime, CALENDAR_TIME_ZONE), rescheduleProfile);
       const newEndDateTime = addMinutes(newStartDateTime, durationMinutes);
       const calendarId = row[15] || PRIMARY_CALENDAR_ID;
       const calendarEventId = row[16] || '';
@@ -9185,7 +9278,7 @@ export default async function handler(req, res) {
       const therapistNames = therapistAssignmentNames(row[6], rescheduleTherapistNames)
         .filter((name) => name && name !== 'Any Available');
       if (therapistNames.length) {
-        const gapMinutes = therapistBufferMinutes(await getBusinessProfile(sheets));
+        const gapMinutes = therapistBufferMinutes(rescheduleProfile);
         const candidateStart = appointmentTimeMinutes(normalizedTime);
         const candidateEnd = candidateStart + durationMinutes;
         const hasBookingConflict = rows.slice(startIndex).some((candidate) => {
@@ -9226,6 +9319,7 @@ export default async function handler(req, res) {
           return res.status(502).json({ message: 'Therapist availability could not be checked right now. Please try again.' });
         }
       }
+      validateBookingNotice(zonedBookingInstant(newStartDateTime, CALENDAR_TIME_ZONE), rescheduleProfile);
       if (calendarEventId) {
         try {
           await calendarApi.events.patch({
@@ -9471,7 +9565,7 @@ export default async function handler(req, res) {
         await ensureBusinessProfileSheet(sheets);
         await sheets.spreadsheets.values.update({
           spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
-          range: 'BusinessProfile!A2:J2',
+          range: 'BusinessProfile!A2:K2',
           valueInputOption: 'RAW',
           requestBody: { values: [BUSINESS_PROFILE_FIELDS.map((field) => profile[field])] },
         });
@@ -9572,6 +9666,10 @@ export default async function handler(req, res) {
     const selectedBranch = (await getBranches(sheets)).find((branch) => branch.active !== false && branch.name === payload.branchName);
     if (!selectedBranch) return res.status(400).json({ message: 'Choose an active branch.' });
     validateAppointmentTime(payload.time, selectedBranch, payload.date, Number(payload.durationMinutes));
+    const bookingProfile = await getBusinessProfile(sheets);
+    if (view !== 'manual-booking') {
+      validateBookingNotice(zonedBookingInstant(parseBookingDateTime(payload.date, payload.time), CALENDAR_TIME_ZONE), bookingProfile);
+    }
     const [serviceCatalogue, scheduledTherapists, scheduleOverrides] = await Promise.all([
       getServices(sheets),
       getTherapists(sheets),
@@ -9588,7 +9686,11 @@ export default async function handler(req, res) {
         time24FromMinutes(appointmentStartMinutes),
         Number(payload.durationMinutes),
       ));
-    const availableByScheduleNames = new Set(availableBySchedule.map((therapist) => therapist.name));
+    const publicAvailableBySchedule = dashboardSession
+      ? availableBySchedule
+      : availableBySchedule.filter((therapist) =>
+        therapistShiftForDate(therapist, selectedBranch.id, payload.date, scheduleOverrides).showToPublic === true);
+    const availableByScheduleNames = new Set(publicAvailableBySchedule.map((therapist) => therapist.name));
     const requestedTherapists = [payload.therapistName || 'Any Available', payload.therapistName2 || 'Any Available'];
     if (requestedTherapists.some((name) => name !== 'Any Available' && !availableByScheduleNames.has(name))) {
       return res.status(409).json({ message: 'The selected therapist is not scheduled for this branch and appointment time. Choose another therapist.' });
@@ -9596,7 +9698,8 @@ export default async function handler(req, res) {
     if (!availableBySchedule.length) {
       return res.status(409).json({ message: 'No qualified therapist is scheduled for this branch and appointment time. Choose another slot.' });
     }
-    payload.therapistCandidates = availableBySchedule.map((therapist) => therapist.name);
+    const allCandidateNames = availableBySchedule.map((therapist) => therapist.name);
+    payload.therapistCandidates = publicAvailableBySchedule.map((therapist) => therapist.name);
     if (dashboardSession && dashboardSession.role !== 'owner' && !dashboardSession.branchIds.includes(String(selectedBranch.id))) {
       return res.status(403).json({ message: 'You can only create bookings for your assigned branches.' });
     }
@@ -9686,7 +9789,7 @@ export default async function handler(req, res) {
     const endDateTime = addMinutes(startDateTime, durationMinutes);
     const startInstant = zonedBookingInstant(startDateTime, CALENDAR_TIME_ZONE);
     const endInstant = zonedBookingInstant(endDateTime, CALENDAR_TIME_ZONE);
-    const appointmentGapMinutes = therapistBufferMinutes(await getBusinessProfile(sheets));
+    const appointmentGapMinutes = therapistBufferMinutes(bookingProfile);
 
     const unavailabilityBlocks = await getUnavailabilityBlocks(sheets);
     const overlappingBlocks = unavailabilityBlocks.filter((block) => blockOverlapsWindow(block, payload.date, startInstant, endInstant));
@@ -9710,9 +9813,7 @@ export default async function handler(req, res) {
     });
     const bookingRows = (await bqFetchBookingRows(getBigQueryClient())).data.values || [];
     const bookingStartIndex = bookingRows[0]?.[0] === 'Booking ID' ? 1 : 0;
-    const busyTherapists = new Set([
-      ...blockedTherapistNames,
-      ...bookingRows.slice(bookingStartIndex).filter((row) => {
+    const overlappingBookings = bookingRows.slice(bookingStartIndex).filter((row) => {
         if (row[7] !== payload.date || ['Cancelled', 'No Show'].includes(String(row[24] || ''))) return false;
         try {
           const existingStart = appointmentTimeMinutes(normalizeBookingTime(row[8] || ''));
@@ -9726,20 +9827,40 @@ export default async function handler(req, res) {
         } catch {
           return false;
         }
-      }).flatMap((row) => therapistAssignmentNames(row[6], payload.therapistCandidates || [])),
-      ...(dayEvents.data.items || [])
-        .filter((event) => {
+      });
+    let unassignedBookingCount = overlappingBookings.reduce((count, row) =>
+      count + therapistAssignmentNames(row[6] || 'Any Available', [...allCandidateNames, 'Any Available'])
+        .filter((name) => name === 'Any Available').length, 0);
+    const overlappingEvents = (dayEvents.data.items || []).filter((event) => {
           const eventStart = event.start?.dateTime || event.start?.date || '';
           const eventEnd = event.end?.dateTime || event.end?.date || '';
           return eventStart && eventEnd &&
             hasTimeOverlapWithTherapistBuffer(startInstant, endInstant, eventStart, eventEnd, appointmentGapMinutes);
-        })
-        .flatMap((event) => therapistAssignmentNames(getTherapistFromDescription(event.description), payload.therapistCandidates || [])),
+        });
+    overlappingEvents.forEach((event) => {
+      const linkedBooking = bookingRows.slice(bookingStartIndex).some((row) => row[16] === event.id);
+      if (!linkedBooking) {
+        unassignedBookingCount += therapistAssignmentNames(
+          getTherapistFromDescription(event.description) || 'Any Available',
+          ['Any Available'],
+        ).filter((name) => name === 'Any Available').length;
+      }
+    });
+    const busyTherapists = new Set([
+      ...blockedTherapistNames,
+      ...overlappingBookings.flatMap((row) => therapistAssignmentNames(row[6], [...allCandidateNames, 'Any Available']))
+        .filter((name) => name !== 'Any Available'),
+      ...overlappingEvents.flatMap((event) =>
+        therapistAssignmentNames(getTherapistFromDescription(event.description), allCandidateNames)),
     ]);
     const candidates = Array.isArray(payload.therapistCandidates) ? payload.therapistCandidates : [];
     const availableCandidates = candidates.filter((name) => !busyTherapists.has(name));
     const assignedNames = [];
     const remainingCandidates = [...availableCandidates];
+    let unassignedAppointments = 0;
+    const hiddenAvailableCount = dashboardSession ? 0 : availableBySchedule.filter((therapist) =>
+      therapistShiftForDate(therapist, selectedBranch.id, payload.date, scheduleOverrides).showToPublic !== true &&
+      !busyTherapists.has(therapist.name)).length;
     const assignTherapist = (requested) => {
       if (requested !== 'Any Available') {
         if (busyTherapists.has(requested) || assignedNames.includes(requested) || !remainingCandidates.includes(requested)) return '';
@@ -9748,7 +9869,13 @@ export default async function handler(req, res) {
         return requested;
       }
       const idx = remainingCandidates.findIndex((name) => !assignedNames.includes(name));
-      if (idx === -1) return '';
+      if (idx === -1) {
+        if (!dashboardSession && hiddenAvailableCount > unassignedBookingCount + unassignedAppointments) {
+          unassignedAppointments += 1;
+          return 'Any Available';
+        }
+        return '';
+      }
       const picked = remainingCandidates[idx];
       assignedNames.push(picked);
       remainingCandidates.splice(idx, 1);
@@ -9765,6 +9892,7 @@ export default async function handler(req, res) {
     }
     const therapistName = therapistName2 ? `${therapistName1}, ${therapistName2}` : therapistName1;
 
+    if (view !== 'manual-booking') validateBookingNotice(startInstant, bookingProfile);
     const calendarEvent = await calendarApi.events.insert({
       calendarId,
       sendUpdates: 'none',

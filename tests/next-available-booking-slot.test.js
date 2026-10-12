@@ -60,8 +60,36 @@ test('next available search skips closed dates and returns the earliest eligible
           '10:00 AM': [],
           '10:15 AM': ['therapist-1'],
         },
+        unassignedTherapistCountByTime: {
+          '10:00 AM': 0,
+          '10:15 AM': 0,
+        },
       }),
     };
+  });
+
+  test('next available search accepts anonymous therapist capacity without disclosing a therapist ID', async () => {
+    const { useNextAvailableBookingSlot } = loadAvailabilityHook(async () => ({
+      ok: true,
+      json: async () => ({
+        therapistIdsByTime: { '10:00 AM': [] },
+        unassignedTherapistCountByTime: { '10:00 AM': 1 },
+      }),
+    }));
+    const request = {
+      branch: { id: 1 },
+      date: '2026-10-11',
+      durationMinutes: 60,
+      isRmt: false,
+      therapistCount: 1,
+      enabled: true,
+      therapists: [{ id: 'therapist-1', branches: [1] }],
+    };
+    useNextAvailableBookingSlot(request);
+    await new Promise((resolve) => setImmediate(resolve));
+    const result = useNextAvailableBookingSlot(request);
+    assert.equal(result.slot.date, '2026-10-13');
+    assert.equal(result.slot.time, '10:00 AM');
   });
   const request = {
     branch: { id: 1 },

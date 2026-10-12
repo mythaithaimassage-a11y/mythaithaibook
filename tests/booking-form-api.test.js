@@ -10,6 +10,8 @@ import { defaultBusinessHours } from '../lib/booking-options.js';
 import { createDashboardChallengeStore, handleDashboardChallengeQuery, readDashboardOtp } from './helpers/dashboard-auth.js';
 
 test('booking choices persist, skipped history writes nothing, and standalone history only updates the matched patient record', async (t) => {
+  let now = Date.parse('2026-10-01T15:13:00Z');
+  t.mock.method(Date, 'now', () => now);
   Object.assign(process.env, {
     GOOGLE_SERVICE_ACCOUNT_EMAIL: 'test@example.com', GOOGLE_PRIVATE_KEY: 'synthetic-key',
     GOOGLE_SPREADSHEET_ID: 'test-sheet', BIGQUERY_PROJECT_ID: 'test-project',
@@ -29,12 +31,15 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   let appointmentConfigRows = [];
   let failAppointmentConfigSheetReads = false;
   let appointmentConfigBatchGets = 0;
+  let profileHeaders = ['businessName', 'legalName', 'tagline', 'email', 'phone', 'website', 'address', 'taxRegistrationNumber', 'photoUrl', 'therapistBufferMinutes'];
+  let profileValues = ['Test Clinic', '', '', '', '', '', '', '', '', '15'];
   let busyEvents = [];
   let blockRows = [['Block ID']];
   let scheduleRows = [
-    ['Therapist ID', 'Date', 'Branch ID', 'Working', 'Start Time', 'End Time', 'Updated By', 'Updated At'],
+    ['Therapist ID', 'Date', 'Branch ID', 'Working', 'Start Time', 'End Time', 'Updated By', 'Updated At', 'Public Visibility'],
     [2, '2026-10-12', 1, 'TRUE', '10:00', '20:00', 'scheduler@example.com', '2026-10-01T00:00:00.000Z'],
     [1, '2026-11-02', 1, 'TRUE', '10:00', '20:00', 'scheduler@example.com', '2026-10-01T00:00:00.000Z'],
+    [1, '2026-11-01', 1, 'TRUE', '08:00', '22:00', 'scheduler@example.com', '2026-10-01T00:00:00.000Z', 'TRUE'],
   ];
   const serviceRows = [
     [1, 'Massage', 'Thai', 60, 100, 10, 'FALSE', 0.13, '', 'TRUE'],
@@ -74,13 +79,10 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
             valueRanges: ranges.map((range) => ({
               range,
               values: ({
-                'BusinessProfile!A1:J2': [
-                  ['businessName', 'legalName', 'tagline', 'email', 'phone', 'website', 'address', 'taxRegistrationNumber', 'photoUrl', 'therapistBufferMinutes'],
-                  ['Test Clinic', '', '', '', '', '', '', '', '', '15'],
-                ],
+                'BusinessProfile!A1:K2': [profileHeaders, profileValues],
                 'Services!A2:K': serviceRows,
                 'Therapists!A2:J': therapistRows,
-                'StaffWorkSchedule!A:H': scheduleRows,
+                'StaffWorkSchedule!A:I': scheduleRows,
                 'Unavailability!A:J': blockRows,
                 'TherapistAliases!A:E': aliasRows,
               })[range] || [],
@@ -89,7 +91,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
         },
         get: async ({ range }) => {
           if (failAppointmentConfigSheetReads &&
-              /^(BusinessProfile!A1:J[12]|BusinessProfile!A2:J2|Services!A2:K|Therapists!A2:J|StaffWorkSchedule!A1:H1|StaffWorkSchedule!A:H|Unavailability!A1:J1|Unavailability!A:J|TherapistAliases!A:E)$/.test(range)) {
+              /^(BusinessProfile!A1:K[12]|BusinessProfile!A2:K2|Services!A2:K|Therapists!A2:J|StaffWorkSchedule!A1:I1|StaffWorkSchedule!A:I|Unavailability!A1:J1|Unavailability!A:J|TherapistAliases!A:E)$/.test(range)) {
             throw new Error('Synthetic appointment configuration Sheets read after migration');
           }
           if (range === 'TherapistAliases!A:E') return { data: { values: aliasRows } };
@@ -100,22 +102,21 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
           }
           if (range === 'Unavailability!A1:J1') return { data: { values: [['Block ID']] } };
           if (range === 'Unavailability!A:J') return { data: { values: blockRows } };
-          if (range === 'StaffWorkSchedule!A1:H1') return { data: { values: [['Therapist ID', 'Date', 'Branch ID', 'Working', 'Start Time', 'End Time', 'Updated By', 'Updated At']] } };
-          if (range === 'StaffWorkSchedule!A:H') return { data: { values: scheduleRows } };
+          if (range === 'StaffWorkSchedule!A1:I1') return { data: { values: [scheduleRows[0]] } };
+          if (range === 'StaffWorkSchedule!A:I') return { data: { values: scheduleRows } };
           if (range === 'Services!A2:K') return { data: { values: serviceRows } };
           if (range === 'Therapists!A2:J') return { data: { values: therapistRows } };
-          if (range === 'BusinessProfile!A1:J1') return { data: { values: [['businessName', 'legalName', 'tagline', 'email', 'phone', 'website', 'address', 'taxRegistrationNumber', 'photoUrl', 'therapistBufferMinutes']] } };
-          if (range === 'BusinessProfile!A2:J2') return { data: { values: [['Test Clinic', '', '', '', '', '', '', '', '', '15']] } };
-          if (range === 'BusinessProfile!A1:J2') return { data: { values: [
-            ['businessName', 'legalName', 'tagline', 'email', 'phone', 'website', 'address', 'taxRegistrationNumber', 'photoUrl', 'therapistBufferMinutes'],
-            ['Test Clinic', '', '', '', '', '', '', '', '', '15'],
-          ] } };
+          if (range === 'BusinessProfile!A1:K1') return { data: { values: [profileHeaders] } };
+          if (range === 'BusinessProfile!A2:K2') return { data: { values: [profileValues] } };
+          if (range === 'BusinessProfile!A1:K2') return { data: { values: [profileHeaders, profileValues] } };
           throw new Error(`Unexpected sheets read: ${range}`);
         },
         update: async ({ range, requestBody }) => {
           if (range === 'TherapistAliases!A1:E1') aliasRows = requestBody.values;
           else if (range === 'Branches!A1:L1') headers.push(requestBody.values[0]);
           else if (range.startsWith('Branches!A2:L')) branchRows = requestBody.values;
+          else if (range === 'BusinessProfile!A1:K1') profileHeaders = requestBody.values[0];
+          else if (range === 'BusinessProfile!A2:K2') profileValues = requestBody.values[0];
           else throw new Error(`Unexpected sheets update: ${range}`);
         },
         clear: async ({ range }) => { assert.equal(range, 'Branches!A2:L'); },
@@ -389,20 +390,27 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   const verified = await request('owner-verify', { challengeId: login.data.challengeId, code: ownerOtp });
   assert.equal(verified.code, 200);
   const initialOwnerCookie = cookie;
+  assert.equal(profileHeaders.at(-1), 'minimumBookingNoticeMinutes');
+  assert.equal(profileValues.at(-1), '15', 'Legacy business profiles acquire the 15-minute notice default');
   assert.equal((await request('owner-verify', { challengeId: login.data.challengeId, code: ownerOtp })).code, 401, 'OTP cannot be replayed');
 
   const todayAvailability = {
     date: '2026-10-11', branchId: 1, therapistId: 1,
-    override: { therapistId: 1, date: '2026-10-11', isWorking: true, startTime: '11:00', endTime: '18:00' },
+    override: { therapistId: 1, date: '2026-10-11', isWorking: true, startTime: '11:00', endTime: '18:00', showToPublic: true },
   };
   const savedTodayAvailability = await request('staff-work-schedule', todayAvailability);
   assert.equal(savedTodayAvailability.code, 200, JSON.stringify(savedTodayAvailability.data));
   assert.equal(savedTodayAvailability.data.override.startTime, '11:00');
+  assert.equal(savedTodayAvailability.data.override.showToPublic, true);
+  assert.equal(scheduleRows.find((row) => row[0] === 1 && row[1] === '2026-10-11')[8], 'TRUE');
   assert.ok(scheduleRows.some((row) => row[0] === 1 && row[1] === '2026-10-11'));
   assert.ok(scheduleRows.some((row) => row[0] === 2 && row[1] === '2026-10-12'), 'Saving today must preserve other dates');
   const invalidAvailabilityRows = structuredClone(scheduleRows);
   assert.equal((await request('staff-work-schedule', {
     ...todayAvailability, override: { ...todayAvailability.override, endTime: '09:00' },
+  })).code, 400);
+  assert.equal((await request('staff-work-schedule', {
+    ...todayAvailability, override: { ...todayAvailability.override, showToPublic: 'yes' },
   })).code, 400);
   assert.deepEqual(scheduleRows, invalidAvailabilityRows, 'Invalid hours must not change the saved schedule');
   const dayOverrides = await request('staff-work-schedule', null, {
@@ -410,6 +418,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   });
   assert.equal(dayOverrides.code, 200);
   assert.ok(dayOverrides.data.overrides.some((entry) => entry.therapistId === 1 && entry.date === '2026-10-11'));
+  assert.equal(dayOverrides.data.overrides.find((entry) => entry.therapistId === 1 && entry.date === '2026-10-11').showToPublic, true);
   assert.equal((await request('staff-work-schedule', { date: '2026-10-11', branchId: 1, therapistId: 1, override: null })).code, 200);
   assert.ok(!scheduleRows.some((row) => row[0] === 1 && row[1] === '2026-10-11'), 'Reset removes only that date’s override');
   assert.ok(scheduleRows.some((row) => row[0] === 2 && row[1] === '2026-10-12'), 'Reset must preserve other dates');
@@ -646,6 +655,12 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   assert.equal(emailBooking.data.emailSkipped, false);
   assert.equal(emailBooking.data.emailSent, true);
   assert.equal(emailBooking.data.therapistName, 'Test Therapist, Second Therapist');
+  assert.equal(records.at(-1).service_name, 'Couple Massage');
+  assert.equal(records.at(-1).duration_minutes, 60, 'Both therapists share the couple package duration');
+  assert.equal(records.at(-1).time, '11:15 AM');
+  assert.equal(Number(records.at(-1).total), 203.40, 'The existing $180 couple package plus HST is used');
+  assert.equal(events.at(-1).requestBody.start.dateTime, '2026-11-01T11:15:00');
+  assert.equal(events.at(-1).requestBody.end.dateTime, '2026-11-01T12:15:00');
   assert.equal(records.at(-1).email, 'client@example.com');
   assert.equal(records.at(-1).phone, manual.contact);
   const bookingRecord = records.at(-1);
@@ -1062,6 +1077,28 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
     'The therapist finishing at 6:45 remains unavailable during the configured gap');
   assert.ok(gapBoundaryAvailability.data.therapistIdsByTime['07:00 PM'].includes(1),
     'A new appointment is allowed exactly 15 minutes after the previous appointment ends');
+  scheduleRows.filter((row) => row[0] && row[1] === '2026-11-01').forEach((row) => { row[8] = 'FALSE'; });
+  cookie = '';
+  const anonymousSlot = await request('available-therapists', null, {
+    method: 'GET',
+    query: { date: '2026-11-01', branchId: '1', times: JSON.stringify(['07:00 PM']), durationMinutes: '60', isRmt: 'false' },
+  });
+  assert.equal(anonymousSlot.code, 200, JSON.stringify(anonymousSlot.data));
+  assert.deepEqual(anonymousSlot.data.therapistIdsByTime['07:00 PM'], [],
+    'Public slot results do not disclose therapists who opted out');
+  assert.equal(anonymousSlot.data.unassignedTherapistCountByTime['07:00 PM'], 2,
+    'Available anonymous therapists still contribute booking capacity');
+  const anonymousBooking = await request('', { ...base, id: 'MTT-anonymous', therapistName: 'Any Available', time: '07:00 PM', paymentOption: 'deposit' });
+  assert.equal(anonymousBooking.code, 200, JSON.stringify(anonymousBooking.data));
+  assert.equal(records.find((record) => record.booking_id === 'MTT-anonymous').therapist_name, 'Any Available',
+    'A booking that relies on anonymous availability stays unassigned for staff');
+  const reducedAnonymousCapacity = await request('available-therapists', null, {
+    method: 'GET',
+    query: { date: '2026-11-01', branchId: '1', time: '07:00 PM', durationMinutes: '60', isRmt: 'false' },
+  });
+  assert.equal(reducedAnonymousCapacity.data.unassignedTherapistCount, 1,
+    'Unassigned bookings consume anonymous capacity and do not allow overbooking');
+  cookie = initialOwnerCookie;
   const beforeHoursBookings = events.length;
   for (const change of [
     { time: '07:45 AM' }, { time: '09:15 PM' }, { date: '2026-11-02' },
@@ -1164,10 +1201,18 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   assert.equal((await request('appointment-config-status', null, { method: 'GET' })).code, 401);
   cookie = ownerCookie;
   assert.equal((await request('appointment-config-status', null, { method: 'GET' })).data.source, 'sheets');
+  const publicSchedule = await request('staff-work-schedule', {
+    date: '2026-11-02', branchId: 1, therapistId: 1,
+    override: { therapistId: 1, date: '2026-11-02', isWorking: true, startTime: '10:00', endTime: '20:00', showToPublic: true },
+  });
+  assert.equal(publicSchedule.code, 200, JSON.stringify(publicSchedule.data));
   assert.equal((await request('appointment-config-migrate', {}, { origin: 'https://untrusted.example' })).code, 403);
   const appointmentConfigImport = await request('appointment-config-migrate', {});
   assert.equal(appointmentConfigImport.code, 200, JSON.stringify(appointmentConfigImport.data));
   assert.equal(appointmentConfigBatchGets, 1, 'The one-time migration reads the source settings in a single Sheets batch request');
+  assert.ok(JSON.parse(appointmentConfigRows.find((row) => row.config_type === 'work_schedule').payload)
+    .some((entry) => entry.date === '2026-11-02' && entry.therapistId === 1 && entry.showToPublic === true),
+  'Consent state survives migration from Sheets to appointment settings');
   assert.deepEqual(appointmentConfigImport.data.importedCounts, {
     businessProfile: 1,
     services: serviceRows.length,
@@ -1247,4 +1292,87 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   const deletedUnavailable = await request('unavailability-delete', { id: unavailable.data.block.id });
   assert.equal(deletedUnavailable.code, 200, JSON.stringify(deletedUnavailable.data));
   assert.match(override.data.message, /conflicts with a saved/);
+
+  await t.test('public booking notice rejects past and too-soon appointments and persists configuration', async () => {
+    const originalNow = now;
+    const profile = migratedProfile.data.profile;
+    assert.equal(profile.minimumBookingNoticeMinutes, '15');
+    for (const value of ['-1', '1.5', '1441', 'invalid', '']) {
+      const invalid = await request('business-profile', { profile: { ...profile, minimumBookingNoticeMinutes: value } });
+      assert.equal(invalid.code, 400, JSON.stringify(invalid.data));
+    }
+    const noticeDate = '2026-11-10';
+    now = Date.parse(`${noticeDate}T16:13:00Z`); // 11:13 AM in Toronto after DST.
+    cookie = '';
+    const slots = async (times) => request('available-therapists', null, {
+      method: 'GET', query: {
+        date: noticeDate, branchId: '1', times: JSON.stringify(times), durationMinutes: '60', isRmt: 'false', publicBooking: 'true',
+      },
+    });
+    const availability = await slots(['10:00 AM', '11:15 AM', '11:30 AM']);
+    assert.equal(availability.code, 200, JSON.stringify(availability.data));
+    assert.deepEqual(availability.data.therapistIdsByTime['10:00 AM'], []);
+    assert.deepEqual(availability.data.therapistIdsByTime['11:15 AM'], []);
+    assert.ok(availability.data.therapistIdsByTime['11:30 AM'].includes(1),
+      'Default public visibility includes therapists without an explicit opt-out');
+    assert.equal(availability.data.bookingCutoffsByTime['11:30 AM'], Date.parse(`${noticeDate}T16:15:00Z`));
+    const eventCount = events.length;
+    for (const time of ['10:00 AM', '11:15 AM']) {
+      const rejected = await request('', { ...base, id: `MTT-notice-${time}`, date: noticeDate, time });
+      assert.equal(rejected.code, 409, JSON.stringify(rejected.data));
+      assert.match(rejected.data.message, /at least 15 minutes from now/);
+    }
+    assert.equal(events.length, eventCount, 'Rejected bookings do not create calendar events');
+    now = Date.parse(`${noticeDate}T16:15:00Z`);
+    assert.ok((await slots(['11:30 AM'])).data.therapistIdsByTime['11:30 AM'].includes(1));
+    const accepted = await request('', { ...base, id: 'MTT-notice-boundary', date: noticeDate, time: '11:30 AM', paymentOption: 'deposit' });
+    assert.equal(accepted.code, 200, JSON.stringify(accepted.data));
+    now += 1;
+    assert.deepEqual((await slots(['11:30 AM'])).data.therapistIdsByTime['11:30 AM'], []);
+    const rejectedReschedule = await request('reschedule-booking', {
+      bookingId: 'MTT-notice-boundary', email: base.email, date: noticeDate, time: '10:00 AM',
+    });
+    assert.equal(rejectedReschedule.code, 409, JSON.stringify(rejectedReschedule.data));
+
+    now = originalNow;
+    cookie = initialOwnerCookie;
+    const configured = await request('business-profile', { profile: { ...profile, minimumBookingNoticeMinutes: '45' } });
+    assert.equal(configured.code, 200, JSON.stringify(configured.data));
+    assert.equal((await request('business-profile', null, { method: 'GET' })).data.profile.minimumBookingNoticeMinutes, '45');
+    now = Date.parse(`${noticeDate}T16:13:00Z`);
+    cookie = '';
+    const longerNotice = await slots(['11:45 AM', '12:00 PM']);
+    assert.deepEqual(longerNotice.data.therapistIdsByTime['11:45 AM'], []);
+    assert.ok(longerNotice.data.therapistIdsByTime['12:00 PM'].length > 0);
+
+    now = originalNow;
+    cookie = initialOwnerCookie;
+    assert.equal((await request('business-profile', { profile: { ...profile, minimumBookingNoticeMinutes: '0' } })).code, 200);
+    now = Date.parse(`${noticeDate}T16:13:00Z`);
+    cookie = '';
+    const zeroNotice = await slots(['11:00 AM', '11:15 AM']);
+    assert.deepEqual(zeroNotice.data.therapistIdsByTime['11:00 AM'], []);
+    assert.ok(zeroNotice.data.therapistIdsByTime['11:15 AM'].length > 0, 'Zero notice still excludes the past');
+    const pastWithZeroNotice = await request('', { ...base, id: 'MTT-zero-notice-past', date: noticeDate, time: '11:00 AM' });
+    assert.equal(pastWithZeroNotice.code, 409, JSON.stringify(pastWithZeroNotice.data));
+    const freshLogin = await request('owner-login', { email: ownerEmail, password: ownerPassword });
+    assert.equal(freshLogin.code, 200, JSON.stringify(freshLogin.data));
+    assert.equal((await request('owner-verify', { challengeId: freshLogin.data.challengeId, code: readDashboardOtp(emails.at(-1)) })).code, 200);
+    assert.deepEqual((await slots(['11:00 AM'])).data.therapistIdsByTime['11:00 AM'], [],
+      'Being signed in to the dashboard does not bypass notice in the public portal');
+    const staffAvailability = await request('available-therapists', null, {
+      method: 'GET', query: { date: noticeDate, branchId: '1', time: '10:00 AM', durationMinutes: '60', isRmt: 'false' },
+    });
+    assert.ok(staffAvailability.data.therapistIds.includes(1), 'Staff availability retains historical correction support');
+    now = Date.parse('2026-10-13T15:13:00Z');
+    cookie = '';
+    const summerAvailability = await request('available-therapists', null, {
+      method: 'GET', query: { date: '2026-10-13', branchId: '1', times: JSON.stringify(['11:00 AM', '11:15 AM']), durationMinutes: '60', isRmt: 'false' },
+    });
+    assert.deepEqual(summerAvailability.data.therapistIdsByTime['11:00 AM'], []);
+    assert.equal(summerAvailability.data.bookingCutoffsByTime['11:15 AM'], Date.parse('2026-10-13T15:15:00Z'),
+      'The cutoff follows Toronto daylight saving time rather than the server or browser time zone');
+    now = originalNow;
+    cookie = initialOwnerCookie;
+  });
 });

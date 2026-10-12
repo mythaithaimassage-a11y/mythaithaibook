@@ -73,6 +73,7 @@ export function useNextAvailableBookingSlot({
             times: JSON.stringify(times),
             durationMinutes: String(durationMinutes),
             isRmt: String(isRmt),
+            publicBooking: 'true',
           });
           const response = await fetch(`/api/booking?view=available-therapists&${query}`, {
             signal: controller.signal, cache: 'no-store',
@@ -82,9 +83,15 @@ export function useNextAvailableBookingSlot({
           if (!data.therapistIdsByTime || typeof data.therapistIdsByTime !== 'object' || Array.isArray(data.therapistIdsByTime)) {
             throw new Error('Therapist availability could not be verified. Refresh and try again.');
           }
+          if (!data.unassignedTherapistCountByTime || typeof data.unassignedTherapistCountByTime !== 'object' ||
+              Array.isArray(data.unassignedTherapistCountByTime)) {
+            throw new Error('Therapist availability could not be verified. Refresh and try again.');
+          }
           for (const time of times) {
             const ids = data.therapistIdsByTime[time];
-            if (!Array.isArray(ids) || !ids.every((id: unknown) => typeof id === 'string' || typeof id === 'number')) {
+            const unassignedCount = data.unassignedTherapistCountByTime[time];
+            if (!Array.isArray(ids) || !ids.every((id: unknown) => typeof id === 'string' || typeof id === 'number') ||
+                !Number.isInteger(unassignedCount) || unassignedCount < 0) {
               throw new Error('Therapist availability could not be verified. Refresh and try again.');
             }
             const availableIds = new Set(ids.map(String));
@@ -92,7 +99,7 @@ export function useNextAvailableBookingSlot({
               therapist.active !== false && (!isRmt || therapist.rmtCertified) &&
               isTherapistScheduledAtBranch(therapist, branchId, candidateDate) &&
               availableIds.has(String(therapist.id))).length;
-            if (eligibleCount >= therapistCount) {
+            if (eligibleCount + unassignedCount >= therapistCount) {
               if (!controller.signal.aborted) {
                 setState({ key: requestKey, slot: { date: candidateDate, time }, loading: false, error: '' });
               }
@@ -130,23 +137,34 @@ export function useBookingSlotAvailability({ branchId, date, times, durationMinu
   const [state, setState] = useState<{
     key: string;
     therapistIdsByTime: Record<string, string[]>;
+    unassignedTherapistCountByTime: Record<string, number>;
+    bookingCutoffsByTime: Record<string, number>;
     loading: boolean;
     error: string;
-  }>({ key: '', therapistIdsByTime: {}, loading: false, error: '' });
+  }>({ key: '', therapistIdsByTime: {}, unassignedTherapistCountByTime: {}, bookingCutoffsByTime: {}, loading: false, error: '' });
+  const [now, setNow] = useState(Date.now);
+
+  useEffect(() => {
+    const nextCutoff = Math.min(...Object.values(state.bookingCutoffsByTime).filter((cutoff) => cutoff >= now));
+    if (!Number.isFinite(nextCutoff)) return;
+    const timer = setTimeout(() => setNow(Date.now()), Math.min(nextCutoff - Date.now() + 1, 2147483647));
+    return () => clearTimeout(timer);
+  }, [state.bookingCutoffsByTime, now]);
 
   useEffect(() => {
     if (!branchId || !date || !times.length || !Number.isInteger(durationMinutes) || durationMinutes <= 0) {
-      setState({ key: requestKey, therapistIdsByTime: {}, loading: false, error: '' });
+      setState({ key: requestKey, therapistIdsByTime: {}, unassignedTherapistCountByTime: {}, bookingCutoffsByTime: {}, loading: false, error: '' });
       return;
     }
     const controller = new AbortController();
-    setState({ key: requestKey, therapistIdsByTime: {}, loading: true, error: '' });
+    setState({ key: requestKey, therapistIdsByTime: {}, unassignedTherapistCountByTime: {}, bookingCutoffsByTime: {}, loading: true, error: '' });
     const query = new URLSearchParams({
       branchId: String(branchId),
       date,
       times: timesKey,
       durationMinutes: String(durationMinutes),
       isRmt: String(isRmt),
+      publicBooking: 'true',
     });
     fetch(`/api/booking?view=available-therapists&${query}`, { signal: controller.signal, cache: 'no-store' })
       .then(async (response) => {
@@ -155,20 +173,41 @@ export function useBookingSlotAvailability({ branchId, date, times, durationMinu
         if (!data.therapistIdsByTime || typeof data.therapistIdsByTime !== 'object' || Array.isArray(data.therapistIdsByTime)) {
           throw new Error('Therapist availability could not be verified. Refresh and try again.');
         }
+        if (!data.unassignedTherapistCountByTime || typeof data.unassignedTherapistCountByTime !== 'object' ||
+            Array.isArray(data.unassignedTherapistCountByTime)) {
+          throw new Error('Therapist availability could not be verified. Refresh and try again.');
+        }
         const therapistIdsByTime = Object.fromEntries(times.map((time) => {
           const ids = data.therapistIdsByTime[time];
-          if (!Array.isArray(ids) || !ids.every((id: unknown) => typeof id === 'string' || typeof id === 'number')) {
+          const unassignedCount = data.unassignedTherapistCountByTime[time];
+          if (!Array.isArray(ids) || !ids.every((id: unknown) => typeof id === 'string' || typeof id === 'number') ||
+              !Number.isInteger(unassignedCount) || unassignedCount < 0) {
             throw new Error('Therapist availability could not be verified. Refresh and try again.');
           }
           return [time, ids.map(String)];
         }));
-        if (!controller.signal.aborted) setState({ key: requestKey, therapistIdsByTime, loading: false, error: '' });
+        const unassignedTherapistCountByTime = Object.fromEntries(times.map((time) => [
+          time, data.unassignedTherapistCountByTime[time],
+        ]));
+        const bookingCutoffsByTime = Object.fromEntries(times.map((time) => {
+          const cutoff = data.bookingCutoffsByTime?.[time];
+          if (!Number.isFinite(cutoff)) {
+            throw new Error('Booking notice could not be verified. Refresh and try again.');
+          }
+          return [time, cutoff];
+        }));
+        if (!controller.signal.aborted) {
+          setNow(Date.now());
+          setState({ key: requestKey, therapistIdsByTime, unassignedTherapistCountByTime, bookingCutoffsByTime, loading: false, error: '' });
+        }
       })
       .catch((requestError: unknown) => {
         if (!controller.signal.aborted) {
           setState({
             key: requestKey,
             therapistIdsByTime: {},
+            unassignedTherapistCountByTime: {},
+            bookingCutoffsByTime: {},
             loading: false,
             error: requestError instanceof Error ? requestError.message : 'Therapist availability could not be verified. Refresh and try again.',
           });
@@ -179,7 +218,12 @@ export function useBookingSlotAvailability({ branchId, date, times, durationMinu
 
   const current = state.key === requestKey;
   return {
-    therapistIdsByTime: current ? state.therapistIdsByTime : {},
+    therapistIdsByTime: current ? Object.fromEntries(times.map((time) => [
+      time, state.bookingCutoffsByTime[time] >= now ? state.therapistIdsByTime[time] : [],
+    ])) : {},
+    unassignedTherapistCountByTime: current ? Object.fromEntries(times.map((time) => [
+      time, state.bookingCutoffsByTime[time] >= now ? state.unassignedTherapistCountByTime[time] : 0,
+    ])) : {},
     loading: !current || state.loading,
     error: current ? state.error : '',
   };

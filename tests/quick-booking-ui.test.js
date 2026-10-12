@@ -44,7 +44,7 @@ const props = {
 };
 const render = (overrides = {}) => renderToStaticMarkup(React.createElement(QuickBooking, { ...props, ...overrides }));
 
-function customerHarness(fetch) {
+function customerHarness(fetch, overrides = {}) {
   let stateIndex = 0, effectIndex = 0, refIndex = 0;
   const states = [], effects = [], refs = [], pendingEffects = [], timers = new Map();
   let timerId = 0;
@@ -91,7 +91,7 @@ function customerHarness(fetch) {
   const ui = {
     render() {
       stateIndex = effectIndex = refIndex = 0;
-      const tree = testModule.exports.default(props);
+      const tree = testModule.exports.default({ ...props, ...overrides });
       pendingEffects.splice(0).forEach((effect) => effect());
       return tree;
     },
@@ -214,7 +214,9 @@ test('quick booking renders name, one contact input, therapist and time dropdown
   assert.match(html, /<option value="02:15 PM" selected="">02:15 PM/);
   assert.match(html, /value="2026-11-01"/);
   assert.doesNotMatch(html, /Off Duty|Inactive Therapist|Inactive service/);
-  assert.doesNotMatch(html, /type="checkbox"|type="radio"|type="email"|type="tel"/);
+  assert.match(html, /type="checkbox"/);
+  assert.match(html, /Couple massage \(2 people\)/);
+  assert.doesNotMatch(html, /type="radio"|type="email"|type="tel"/);
   assert.match(html, /Internal booking note \(optional\)/);
   assert.match(html, /<textarea maxLength="2000"/);
   assert.match(html, /Save appointment/);
@@ -226,12 +228,71 @@ test('RMT and couple services restrict qualified staff and require a second ther
   assert.doesNotMatch(rmtHtml, /Scheduled Therapist/);
   assert.match(rmtHtml, /RMT Therapist/);
   assert.match(rmtHtml, /<option value="" selected="">Choose therapist/);
-  const coupleHtml = render({ services: [{ id: 5, name: 'Couple Massage' }] });
+  const coupleHtml = render({ services: [{ id: 5, name: 'Couple Massage', duration: 60 }] });
   assert.equal((coupleHtml.match(/<select/g) || []).length, 5);
   assert.match(coupleHtml, /Second therapist<select required=""/);
   const secondSelect = coupleHtml.split('Second therapist')[1].split('</select>')[0];
   assert.doesNotMatch(secondSelect, /Scheduled Therapist/);
   assert.match(secondSelect, /RMT Therapist/);
+});
+
+test('couple checkbox selects an existing package of matching duration and submits one shared appointment time', async () => {
+  const requests = [];
+  const ui = customerHarness(async (url, options) => {
+    requests.push({ url, options });
+    return { ok: true, json: async () => ({ bookingId: 'MTT-couple', emailSkipped: true }) };
+  }, {
+    services: [
+      { id: 1, name: 'Single massage (90 min)', duration: 90, price: 150 },
+      { id: 5, name: 'Couple massage (60 min)', duration: 60, price: 185 },
+      { id: 6, name: 'Couple massage (90 min)', duration: 90, price: 275 },
+      { id: 7, name: 'Couple massage (120 min)', duration: 120, price: 350 },
+      { id: 8, name: 'Inactive couple massage (60 min)', duration: 60, active: false },
+    ],
+  });
+  const checkbox = () => ui.find((node) => node.type === 'input' && node.props.type === 'checkbox');
+  const serviceSelect = () => ui.find((node) => node.type === 'select' && node.props.children?.some?.(
+    (child) => child?.type === 'option' && child.props.children === 'Choose a couple package'));
+  assert.equal(checkbox().props.checked, false);
+  checkbox().props.onChange({ target: { checked: true } });
+  let html = renderToStaticMarkup(ui.render());
+  assert.equal(checkbox().props.checked, true);
+  assert.match(html, /value="6" selected="">Couple massage \(90 min\) - \$275\.00/);
+  assert.match(html, /value="5">Couple massage \(60 min\) - \$185\.00/);
+  assert.doesNotMatch(html, /Single massage|120 min|Inactive couple/);
+  assert.match(html, /Second therapist<select required=""/);
+  const secondTherapist = () => ui.find((node) => node.type === 'select' && node.props.children?.some?.(
+    (child) => child?.type === 'option' && child.props.children === 'Choose a different therapist'));
+  secondTherapist().props.onChange({ target: { value: '4' } });
+  await ui.find((node) => node.type === 'form').props.onSubmit({ preventDefault() {} });
+  const payload = JSON.parse(requests.at(-1).options.body);
+  assert.equal(payload.serviceId, '6');
+  assert.equal(payload.therapistId, '1');
+  assert.equal(payload.therapistId2, '4');
+  assert.equal(payload.time, props.time);
+  assert.equal(payload.date, props.date);
+  assert.equal(payload.subtotalAmount, undefined, 'Package price is resolved by the server catalogue');
+  serviceSelect().props.onChange({ target: { value: '5' } });
+  assert.equal(secondTherapist().props.value, '', 'Changing the package clears the second therapist');
+  assert.match(renderToStaticMarkup(ui.render()), /<button type="submit" disabled=""/);
+  checkbox().props.onChange({ target: { checked: false } });
+  html = renderToStaticMarkup(ui.render());
+  assert.match(html, /Single massage \(90 min\)/);
+  assert.doesNotMatch(html, /Second therapist<select/);
+});
+
+test('couple booking reports missing packages and insufficient simultaneous therapists', () => {
+  const ui = customerHarness(async () => ({ ok: true, json: async () => ({}) }));
+  ui.find((node) => node.type === 'input' && node.props.type === 'checkbox').props.onChange({ target: { checked: true } });
+  const noPackages = renderToStaticMarkup(ui.render());
+  assert.match(noPackages, /No active 60- or 90-minute couple packages are available/);
+  assert.match(noPackages, /<button type="submit" disabled=""/);
+  const insufficientStaff = render({
+    services: [{ id: 5, name: 'Couple massage (60 min)', duration: 60, price: 185 }],
+    therapists: [props.therapists[0]],
+  });
+  assert.match(insufficientStaff, /Two different therapists must be available at the same time/);
+  assert.match(insufficientStaff, /<button type="submit" disabled=""/);
 });
 
 test('an empty scheduled roster displays an explicit error and disables booking', () => {
@@ -270,6 +331,27 @@ test('calendar toolbar opens manual booking with search applied to both calendar
   assert.match(app, /closest\('details'\)\.open = false; openQuickBooking\(\)/);
   assert.match(source, /view=manual-booking/);
   assert.match(source, /if \(!response\.ok\) throw new Error/);
+});
+
+test('booking calendar can be fitted to the viewport and exits on browser fullscreen changes', () => {
+  const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  assert.match(app, /ref=\{calendarPanelRef\} className=\{calendarFullscreen/);
+  assert.match(app, /calendarPanelRef\.current\?\.requestFullscreen\(\)/);
+  assert.match(app, /document\.exitFullscreen\(\)/);
+  assert.match(app, /document\.addEventListener\('fullscreenchange', syncFullscreenState\)/);
+  assert.match(app, /aria-label=\{tr\(calendarFullscreen \? 'Exit fullscreen calendar' : 'Fit calendar to screen'\)\}/);
+  assert.match(app, /h-dvh flex-col gap-3 overflow-hidden bg-white/);
+  assert.match(app, /calendarFullscreen \? 'min-h-0 flex-1 overflow-y-auto' : 'max-h-\[620px\] overflow-y-auto'/);
+  assert.match(app, /calendarFullscreen \? 'min-h-0 flex-1 overflow-auto' : 'max-h-\[680px\] overflow-auto'/);
+  assert.match(app, /calendarFullscreenError && <p role="alert"/);
+});
+
+test('saving a quick booking does not filter the calendar to the booked therapist', () => {
+  const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  const saveHandler = app.slice(app.indexOf('{quickBooking && <QuickBooking'), app.indexOf('{/* TAB CONTENT: SERVICES CATALOGUE MANAGER */}'));
+  assert.match(saveHandler, /setCalendarBranch\(branchId\)/);
+  assert.doesNotMatch(saveHandler, /setCalendarTherapist\(therapistId\)/);
+  assert.match(saveHandler, /date === calendarDate && branchId === calendarBranch\) await loadCalendar\(\)/);
 });
 
 test('schedule new-booking button navigates to the booking calendar and preserves the selected branch', () => {

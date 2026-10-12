@@ -7,7 +7,7 @@ import {
   Plus, Edit, Trash2, Building, FileText, Phone, Mail, Search, Filter, 
   TrendingUp, ChevronRight, AlertCircle, Sparkles, ShieldCheck, Check, X,
   DollarSign, Users, Award, Briefcase, RefreshCw, Layers, CheckSquare, Stethoscope, Database,
-  Menu, Home, CalendarDays, UserRound, BarChart3, ChevronRight as ChevronRightIcon,
+  Menu, Home, CalendarDays, UserRound, BarChart3, ChevronRight as ChevronRightIcon, Maximize2, Minimize2,
   Megaphone, ReceiptText, Download, Eye, MousePointerClick, Upload, Crown, Star, CalendarX, CalendarOff, Ban, Copy, UserCheck
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
@@ -120,6 +120,7 @@ const DEFAULT_BUSINESS_PROFILE = {
   taxRegistrationNumber: '',
   photoUrl: '',
   therapistBufferMinutes: '15',
+  minimumBookingNoticeMinutes: '15',
 };
 
 function useBusinessBranding() {
@@ -2582,7 +2583,8 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
     [appointmentTimes, slotAvailability.therapistIdsByTime, eligibleTherapists]
   );
   const selectableAppointmentTimes = appointmentTimes.filter((time) =>
-    (availableTherapistIdsByTime[time]?.length || 0) >= (isCoupleService ? 2 : 1));
+    (availableTherapistIdsByTime[time]?.length || 0) +
+      (slotAvailability.unassignedTherapistCountByTime[time] || 0) >= (isCoupleService ? 2 : 1));
   const nextAvailableSlot = useNextAvailableBookingSlot({
     branch: bookingData.branch,
     date: bookingData.date,
@@ -2594,10 +2596,13 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
     therapists,
   });
   const selectedTherapistIds = availableTherapistIdsByTime[bookingData.time] || [];
+  const unassignedTherapistCount = slotAvailability.unassignedTherapistCountByTime[bookingData.time] || 0;
+  const availableTherapistCount = selectedTherapistIds.length + unassignedTherapistCount;
   const therapistAvailability = {
     loading: slotAvailability.loading,
     error: slotAvailability.error,
     therapistIds: new Set(selectedTherapistIds),
+    unassignedTherapistCount,
   };
   const branchTherapists = useMemo(
     () => eligibleTherapists.filter((therapist) =>
@@ -3213,15 +3218,18 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
               {therapistAvailability.loading && <p role="status" className="mb-3 text-xs text-slate-600">Checking staff schedules and existing appointments…</p>}
               {therapistAvailability.error && <p role="alert" className="mb-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">{therapistAvailability.error}</p>}
               {!bookingData.time && <p role="status" className="mb-3 text-xs text-amber-700">Select a date and time above to see therapists who can take this appointment.</p>}
-              {!therapistAvailability.loading && !therapistAvailability.error && bookingData.time && branchTherapists.length === 0 && (
+              {!therapistAvailability.loading && !therapistAvailability.error && bookingData.time && availableTherapistCount === 0 && (
                 <p role="status" className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">No qualified therapist is available for this date, time and service. Choose another appointment slot.</p>
+              )}
+              {!therapistAvailability.loading && !therapistAvailability.error && bookingData.time && unassignedTherapistCount > 0 && (
+                <p role="status" className="mb-3 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-900">{tr('Some therapists keep their availability anonymous. If no listed therapist is available, staff will assign your appointment.')}</p>
               )}
 
               {isCoupleService && <p className="text-xs font-bold text-emerald-800 mb-2">Guest 1 therapist</p>}
               <div className="grid gap-3 sm:grid-cols-3">
                 <button
                   type="button"
-                  disabled={!bookingData.time || therapistAvailability.loading || Boolean(therapistAvailability.error) || branchTherapists.length === 0}
+                  disabled={!bookingData.time || therapistAvailability.loading || Boolean(therapistAvailability.error) || availableTherapistCount < (isCoupleService ? 2 : 1)}
                   onClick={() => updateBooking('therapist', null)}
                   className={`p-3.5 rounded-xl border text-center transition ${
                     bookingData.therapist === null 
@@ -3264,7 +3272,7 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
                   <div className="grid gap-3 sm:grid-cols-3">
                     <button
                       type="button"
-                      disabled={!bookingData.time || therapistAvailability.loading || Boolean(therapistAvailability.error) || branchTherapists.length < 2}
+                      disabled={!bookingData.time || therapistAvailability.loading || Boolean(therapistAvailability.error) || availableTherapistCount < 2}
                       onClick={() => updateBooking('therapist2', null)}
                       className={`p-3.5 rounded-xl border text-center transition ${
                         bookingData.therapist2 === null 
@@ -4591,6 +4599,9 @@ function AdminPortal({
   const [calendarWarnings, setCalendarWarnings] = useState([]);
   const [calendarUnavailability, setCalendarUnavailability] = useState([]);
   const [calendarViewMode, setCalendarViewMode] = useState('therapists');
+  const [calendarFullscreen, setCalendarFullscreen] = useState(false);
+  const [calendarFullscreenError, setCalendarFullscreenError] = useState('');
+  const calendarPanelRef = useRef(null);
   const [calendarNextAvailability, setCalendarNextAvailability] = useState(null);
   const [calendarSearch, setCalendarSearch] = useState('');
   const [calendarFiltersOpen, setCalendarFiltersOpen] = useState(false);
@@ -4606,6 +4617,27 @@ function AdminPortal({
   const [isLoadingUnavailability, setIsLoadingUnavailability] = useState(false);
   const [unavailabilityLoadError, setUnavailabilityLoadError] = useState('');
   const [unavailabilityForm, setUnavailabilityForm] = useState({ scope: 'business', branchName: '', therapistName: '', date: new Date().toISOString().slice(0, 10), startTime: '12:00', endTime: '13:00', reason: '' });
+
+  useEffect(() => {
+    const syncFullscreenState = () => {
+      setCalendarFullscreen(document.fullscreenElement === calendarPanelRef.current);
+    };
+    document.addEventListener('fullscreenchange', syncFullscreenState);
+    return () => document.removeEventListener('fullscreenchange', syncFullscreenState);
+  }, []);
+
+  const toggleCalendarFullscreen = async () => {
+    setCalendarFullscreenError('');
+    try {
+      if (document.fullscreenElement === calendarPanelRef.current) {
+        await document.exitFullscreen();
+      } else {
+        await calendarPanelRef.current?.requestFullscreen();
+      }
+    } catch (error) {
+      setCalendarFullscreenError(error instanceof Error ? error.message : 'Unable to change calendar fullscreen mode.');
+    }
+  };
   const [isSavingUnavailability, setIsSavingUnavailability] = useState(false);
   const [unavailabilitySaveError, setUnavailabilitySaveError] = useState('');
   const [patientHistory, setPatientHistory] = useState([]);
@@ -6674,15 +6706,23 @@ function AdminPortal({
       )}
 
       {activeTab === 'calendar' && (
-        <div className="bg-white rounded-2xl p-6 border border-stone-200 shadow-sm space-y-4">
-          <div className="flex flex-wrap items-end justify-between gap-3">
+        <div ref={calendarPanelRef} className={calendarFullscreen
+          ? 'fixed inset-0 z-[60] flex h-dvh flex-col gap-3 overflow-hidden bg-white p-3 sm:p-4'
+          : 'space-y-4 rounded-2xl border border-stone-200 bg-white p-6 shadow-sm'}>
+          <div className="flex shrink-0 flex-wrap items-end justify-between gap-3">
             <div>
               <h2 className="text-lg font-bold text-stone-900">{tr("Booking Calendar")}</h2>
-              <p className="text-xs text-stone-500">{tr("Live appointments and quick manual booking.")}</p>
+              {!calendarFullscreen && <p className="text-xs text-stone-500">{tr("Live appointments and quick manual booking.")}</p>}
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <label className="relative"><span className="sr-only">{tr("Search appointments")}</span><Search className="absolute left-3 top-2.5 h-4 w-4 text-blue-600" /><input type="search" value={calendarSearch} onChange={(event) => setCalendarSearch(event.target.value)} placeholder={tr("Search appointments")} className="h-9 w-48 rounded-full border border-blue-200 pl-9 pr-3 text-xs" /></label>
               <label><span className="sr-only">{tr("Calendar view")}</span><select value={calendarViewMode} onChange={(event) => setCalendarViewMode(event.target.value)} className="h-9 rounded-full border border-blue-200 bg-white px-4 text-xs text-blue-700"><option value="daily">{tr("Daily")}</option><option value="therapists">{tr("Therapist schedule")}</option><option value="agenda">{tr("Agenda")}</option></select></label>
+              <button type="button" onClick={toggleCalendarFullscreen} aria-label={tr(calendarFullscreen ? 'Exit fullscreen calendar' : 'Fit calendar to screen')}
+                title={tr(calendarFullscreen ? 'Exit fullscreen calendar' : 'Fit calendar to screen')}
+                className="inline-flex h-9 items-center gap-2 rounded-full border border-blue-200 bg-white px-3 text-xs font-semibold text-blue-700 hover:bg-blue-50">
+                {calendarFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+                <span className="hidden sm:inline">{tr(calendarFullscreen ? 'Exit fullscreen' : 'Fit to screen')}</span>
+              </button>
               <button type="button" aria-label={tr("Calendar filters")} aria-expanded={calendarFiltersOpen} onClick={() => setCalendarFiltersOpen(!calendarFiltersOpen)} className="rounded-full border border-blue-200 p-2 text-blue-600"><Filter className="h-4 w-4" /></button>
               <details className="relative">
                 <summary aria-label={tr("Calendar settings")} className="cursor-pointer list-none rounded-full border border-blue-200 p-2 text-blue-600"><Settings className="h-4 w-4" /></summary>
@@ -6722,7 +6762,7 @@ function AdminPortal({
               </details>
             </div>
           </div>
-          <div className="flex flex-wrap items-end gap-2 border-t-2 border-blue-600 pt-4">
+          <div className="flex shrink-0 flex-wrap items-end gap-2 border-t-2 border-blue-600 pt-4">
               <label className="text-xs font-semibold text-stone-600">{tr("Date")}<input type="date" value={calendarDate} onChange={(event) => setCalendarDate(event.target.value)} className="block mt-1 p-2 rounded-lg border border-stone-300" />
               </label>
               {calendarFiltersOpen && <label className="text-xs font-semibold text-stone-600">{tr("Branch")}<select value={calendarBranch} onChange={(event) => setCalendarBranch(event.target.value)} className="block mt-1 p-2 rounded-lg border border-stone-300">
@@ -6738,13 +6778,14 @@ function AdminPortal({
               <button onClick={loadCalendar} disabled={isLoadingCalendar} className="h-9 px-3 bg-emerald-800 text-white rounded-lg text-xs font-bold disabled:opacity-50">
                 {isLoadingCalendar ? tr("Loading...") : tr("Refresh")}
               </button>
-              <button type="button" aria-expanded={showTodayAvailability} onClick={() => setShowTodayAvailability((visible) => !visible)} className="inline-flex h-9 items-center gap-2 rounded-lg border border-blue-200 bg-white px-3 text-xs font-semibold text-blue-700 hover:bg-blue-50">
+              {!calendarFullscreen && <button type="button" aria-expanded={showTodayAvailability} onClick={() => setShowTodayAvailability((visible) => !visible)} className="inline-flex h-9 items-center gap-2 rounded-lg border border-blue-200 bg-white px-3 text-xs font-semibold text-blue-700 hover:bg-blue-50">
                 <CalendarDays className="h-4 w-4" />{tr(showTodayAvailability ? "Hide today's availability" : "Set therapist availability today")}
-              </button>
+              </button>}
               {!calendarFiltersOpen && (calendarBranch !== 'all' || calendarTherapist !== 'all') && <button type="button" onClick={() => setCalendarFiltersOpen(true)} className="h-9 rounded-lg border border-blue-200 px-3 text-xs text-blue-700">{tr("Filters:")}{branches.find((item) => String(item.id) === calendarBranch)?.name || tr("All branches")} · {therapists.find((item) => String(item.id) === calendarTherapist)?.name || tr("All therapists")}
               </button>}
           </div>
-          {showTodayAvailability && <TodayWorkSchedule
+          {calendarFullscreenError && <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-2 text-xs text-red-800">{tr(calendarFullscreenError)}</p>}
+          {showTodayAvailability && !calendarFullscreen && <TodayWorkSchedule
             branches={dashboardBranches.filter((branch) => branch.active !== false)}
             therapists={therapists.filter((therapist) => therapist.active !== false)}
             initialBranchId={calendarBranch}
@@ -6754,20 +6795,20 @@ function AdminPortal({
               setActiveTab('work-schedule');
             }}
           />}
-          {quickBookingNotice && <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">{tr(quickBookingNotice)}</p>}
+          {quickBookingNotice && !calendarFullscreen && <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">{tr(quickBookingNotice)}</p>}
           {deleteBookingError && <div role="alert" className="p-3 bg-red-50 border border-red-200 text-red-800 rounded-xl text-xs">{tr(deleteBookingError)}</div>}
           {calendarLoadError && <div className="p-3 bg-red-50 border border-red-200 text-red-800 rounded-xl text-xs">{tr(calendarLoadError)}</div>}
-          <div className="flex flex-wrap gap-3 text-xs text-stone-600">
+          {!calendarFullscreen && <div className="flex flex-wrap gap-3 text-xs text-stone-600">
             {calendarBusinessBranches.map((branch) => {
               const hours = businessHoursForDate(branch, calendarDate);
               return <span key={branch.id}><strong>{branch.name}</strong>: {hours.closed ? tr('Closed') : `${hours.open} - ${hours.close}`}</span>;
             })}
-          </div>
-          {calendarWarnings.length > 0 && (
+          </div>}
+          {!calendarFullscreen && calendarWarnings.length > 0 && (
             <div className="p-3 bg-amber-50 border border-amber-200 text-amber-900 rounded-xl text-xs">{tr("Calendar access warning:")}{calendarWarnings.join(' · ')}
             </div>
           )}
-          {calendarUnavailability.length > 0 && (
+          {!calendarFullscreen && calendarUnavailability.length > 0 && (
             <div className="p-3 bg-stone-100 border border-stone-300 text-stone-800 rounded-xl text-xs space-y-1.5">
               <p className="font-bold uppercase tracking-wide text-stone-600">{tr("Blocked / unavailable this day")}</p>
               {calendarUnavailability.map((block) => (
@@ -6779,10 +6820,10 @@ function AdminPortal({
               ))}
             </div>
           )}
-          {calendarUrl && (
+          {!calendarFullscreen && calendarUrl && (
             <a href={calendarUrl} target="_blank" rel="noreferrer" className="inline-flex text-xs font-semibold text-emerald-800 underline">{tr("Open the primary Google Calendar")}</a>
           )}
-          {calendarViewMode === 'daily' && <div className="rounded-xl overflow-hidden border border-stone-200 bg-white">
+          {calendarViewMode === 'daily' && <div className={`flex min-h-0 flex-col overflow-hidden rounded-xl border border-stone-200 bg-white${calendarFullscreen ? ' flex-1' : ''}`}>
             <div className="flex items-center justify-between px-4 py-3 bg-stone-50 border-b border-stone-200">
               <div>
                 <p className="font-bold text-stone-900">{new Date(`${calendarDate}T12:00:00`).toLocaleDateString(locale, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</p>
@@ -6790,7 +6831,7 @@ function AdminPortal({
               </div>
               <CalendarIcon className="w-5 h-5 text-emerald-700" />
             </div>
-            <div className="max-h-[620px] overflow-y-auto">
+            <div className={calendarFullscreen ? 'min-h-0 flex-1 overflow-y-auto' : 'max-h-[620px] overflow-y-auto'}>
               {calendarDisplayHours.map((hour) => {
                 const hourLabel = new Date(2000, 0, 1, hour).toLocaleTimeString(locale, { hour: 'numeric' });
                 const hourEvents = visibleCalendarEvents.filter((event) => Number(event.localTime?.split(':')[0]) === hour);
@@ -6836,12 +6877,12 @@ function AdminPortal({
               })}
             </div>
           </div>}
-          {calendarViewMode === 'therapists' && <div className="overflow-hidden rounded-xl border border-stone-200 bg-white">
+          {calendarViewMode === 'therapists' && <div className={`flex min-h-0 flex-col overflow-hidden rounded-xl border border-stone-200 bg-white${calendarFullscreen ? ' flex-1' : ''}`}>
             <div className="border-b border-stone-200 bg-stone-50 px-3 py-2">
               <p className="text-sm font-bold text-stone-900">{new Date(`${calendarDate}T12:00:00`).toLocaleDateString(locale, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</p>
-              <p className="text-xs text-stone-500">{tr("Appointments grouped by therapist. The gap after each appointment is reserved automatically.")}</p>
+              {!calendarFullscreen && <p className="text-xs text-stone-500">{tr("Appointments grouped by therapist. The gap after each appointment is reserved automatically.")}</p>}
             </div>
-            <div className="max-h-[680px] overflow-auto">
+            <div className={calendarFullscreen ? 'min-h-0 flex-1 overflow-auto' : 'max-h-[680px] overflow-auto'}>
               <div className="w-fit min-w-full">
                 <div className="sticky top-0 z-20 grid bg-stone-50" style={{ gridTemplateColumns: `56px repeat(${calendarColumnTherapists.length + Number(calendarHasUnassignedColumn)}, minmax(128px, 220px))` }}>
                   <div className="border-b border-r border-stone-200 p-1.5 text-[10px] font-semibold text-stone-500">{tr("Time")}</div>
@@ -6974,9 +7015,10 @@ function AdminPortal({
               </div>
             </div>
           </div>}
-          <p className="text-xs text-stone-500">
+          {!calendarFullscreen && <p className="text-xs text-stone-500">
             {calendarAutoRefresh ? tr("Updates automatically every 15 seconds while this tab is visible.") : tr("Auto-refresh is paused. Use Refresh to load current appointments.")}{tr("The daily view and appointment list use the same search, date, branch, and therapist filters.")}</p>
-          {calendarShowLegend && <div className="flex flex-wrap gap-3 items-center rounded-xl bg-stone-50 border border-stone-200 px-3 py-2">
+          }
+          {!calendarFullscreen && calendarShowLegend && <div className="flex flex-wrap gap-3 items-center rounded-xl bg-stone-50 border border-stone-200 px-3 py-2">
             <span className="text-xs font-bold text-stone-700">{tr("Therapists:")}</span>
             {(calendarTherapist === 'all' ? therapists : therapists.filter((therapist) => String(therapist.id) === calendarTherapist)).map((therapist) => {
               const color = getTherapistCalendarColor(therapist.name, therapists);
@@ -6992,10 +7034,10 @@ function AdminPortal({
                 <span className="w-2.5 h-2.5 rounded-full bg-stone-400" />{tr("Unassigned appointments")}</span>
             )}
           </div>}
-          {visibleCalendarEvents.length === 0 && !isLoadingCalendar ? (
+          {calendarViewMode === 'agenda' && (visibleCalendarEvents.length === 0 && !isLoadingCalendar ? (
             <p className="py-8 text-center text-sm text-stone-500">{tr("No appointments match this date, search, branch and therapist. Adjust your filters or add an appointment.")}</p>
           ) : (
-            <div className="space-y-3">
+            <div className={calendarFullscreen ? 'min-h-0 flex-1 space-y-3 overflow-y-auto' : 'space-y-3'}>
               {visibleCalendarEvents.map((event) => (
                 <div key={event.id} className={`group relative py-4 pl-4 pr-12 rounded-xl border border-stone-200 ${getTherapistCalendarColor(event.therapistName, therapists).event}`}>
                   <div className="flex flex-wrap items-start justify-between gap-3">
@@ -7026,7 +7068,7 @@ function AdminPortal({
                 </div>
               ))}
             </div>
-          )}
+          ))}
         </div>
       )}
       {activeTab === 'calendar' && (
@@ -7073,8 +7115,7 @@ function AdminPortal({
           setActiveTab('calendar');
           setCalendarDate(date);
           setCalendarBranch(branchId);
-          setCalendarTherapist(therapistId);
-          if (activeTab === 'calendar' && date === calendarDate && branchId === calendarBranch && therapistId === calendarTherapist) await loadCalendar();
+          if (activeTab === 'calendar' && date === calendarDate && branchId === calendarBranch) await loadCalendar();
           await loadBookingsFromBackend();
         }}
       />}
@@ -8457,6 +8498,7 @@ function AdminPortal({
                     { key: 'taxRegistrationNumber', label: 'GST/HST registration number', type: 'text', placeholder: 'Optional — enter only your registered number' },
                     { key: 'photoUrl', label: 'Business photo URL', type: 'url', placeholder: 'https://example.com/business-photo.jpg' },
                     { key: 'therapistBufferMinutes', label: 'Therapist gap after appointments (minutes)', type: 'number', min: 0, max: 120, step: 15, required: true },
+                    { key: 'minimumBookingNoticeMinutes', label: 'Minimum booking notice (minutes)', type: 'number', min: 0, max: 1440, step: 1, required: true },
                   ].map((field) => (
                     <label key={field.key} className={`block ${field.key === 'businessName' || field.key === 'tagline' || field.key === 'photoUrl' ? 'sm:col-span-2' : ''}`}>
                       <span className="mb-1.5 block text-xs font-semibold text-slate-700">{tr(field.label)}{field.required && <span className="ml-1 text-rose-600">*</span>}</span>
@@ -8477,6 +8519,7 @@ function AdminPortal({
                       />
                       {field.key === 'photoUrl' && <span className="mt-1.5 block text-xs leading-5 text-slate-500">{tr("Paste a publicly accessible image URL. Leave blank to use the business initials.")}</span>}
                       {field.key === 'therapistBufferMinutes' && <span className="mt-1.5 block text-xs leading-5 text-slate-500">{tr("Time reserved after each therapist appointment before the next booking. Use 0 for no gap; changes apply immediately.")}</span>}
+                      {field.key === 'minimumBookingNoticeMinutes' && <span className="mt-1.5 block text-xs leading-5 text-slate-500">{tr("Customers can only book slots this many minutes from now. Default: 15 minutes. Use 0 to allow immediate bookings; past slots are never available.")}</span>}
                     </label>
                   ))}
                 </div>
@@ -8746,7 +8789,16 @@ function AdminPortal({
         <div className="fixed inset-0 z-[70] flex items-center justify-center overflow-y-auto bg-slate-950/55 p-4 backdrop-blur-sm" onClick={(event) => { if (event.target === event.currentTarget) setSelectedCalendarEvent(null); }}>
           <section role="dialog" aria-modal="true" aria-labelledby="appointment-receipt-title" className="my-auto w-full max-w-xl overflow-hidden rounded-2xl bg-white shadow-2xl">
             <div className="flex items-start justify-between gap-4 bg-gradient-to-r from-slate-950 to-emerald-900 px-5 py-5 text-white sm:px-6">
-              <div><p className="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-200">{tr("Appointment details")}</p><h2 id="appointment-receipt-title" className="mt-1 text-lg font-bold">{issuedReceipt?.booking?.customerName || selectedCalendarEvent.booking?.customerName || selectedCalendarEvent.summary}</h2><p className="mt-1 text-xs text-emerald-100/80">{selectedCalendarEvent.booking?.id || tr("Calendar event")} · {formatTime(selectedCalendarEvent.timeRange || selectedCalendarEvent.localTime)}</p></div>
+              <div>
+                <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-200">{tr("Appointment details")}</p>
+                <h2 id="appointment-receipt-title" className="mt-1 text-lg font-bold">{issuedReceipt?.booking?.customerName || selectedCalendarEvent.booking?.customerName || selectedCalendarEvent.summary}</h2>
+                {selectedCalendarEvent.booking?.customerType && (
+                  <span className={`mt-1 inline-flex rounded-full px-2.5 py-1 text-[10px] font-bold ${selectedCalendarEvent.booking.customerType === 'returning' ? 'bg-sky-100 text-sky-900' : 'bg-emerald-100 text-emerald-900'}`}>
+                    {tr(selectedCalendarEvent.booking.customerType === 'returning' ? "Returning customer" : "New customer")}
+                  </span>
+                )}
+                <p className="mt-1 text-xs text-emerald-100/80">{selectedCalendarEvent.booking?.id || tr("Calendar event")} · {formatTime(selectedCalendarEvent.timeRange || selectedCalendarEvent.localTime)}</p>
+              </div>
               <button type="button" aria-label={tr("Close appointment details")} onClick={() => setSelectedCalendarEvent(null)} className="rounded-lg p-1.5 text-white/80 hover:bg-white/10 hover:text-white"><X className="h-5 w-5" /></button>
             </div>
             <div className="space-y-5 p-5 sm:p-6">

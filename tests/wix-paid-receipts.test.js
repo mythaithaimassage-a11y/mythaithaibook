@@ -27,7 +27,7 @@ test('reviewed Wix import produces paid records and actual receipt endpoint issu
     { id: 1, name: 'Traditional Thai (90 min)', duration: 90, price: 100, taxRate: 0.13 },
     { id: 2, name: 'Registered Massage Therapy (90 min)', duration: 90, price: 120, taxRate: 0 },
   ];
-  const profileHeaders = ['businessName', 'legalName', 'tagline', 'email', 'phone', 'website', 'address', 'taxRegistrationNumber', 'photoUrl', 'therapistBufferMinutes'];
+  const profileHeaders = ['businessName', 'legalName', 'tagline', 'email', 'phone', 'website', 'address', 'taxRegistrationNumber', 'photoUrl', 'therapistBufferMinutes', 'minimumBookingNoticeMinutes'];
   let businessPhotoUrl = '';
   t.mock.method(google, 'sheets', () => ({
     spreadsheets: {
@@ -38,9 +38,9 @@ test('reviewed Wix import produces paid records and actual receipt endpoint issu
           if (range === 'Services!A2:K') return { data: { values: services.map((service) => [
             service.id, service.name, 'Massage', service.duration, service.price, 0, 'FALSE', service.taxRate, '', 'TRUE',
           ]) } };
-          if (range === 'BusinessProfile!A1:J1') return { data: { values: [profileHeaders] } };
-          if (range === 'BusinessProfile!A1:J2') return { data: { values: [profileHeaders, [
-            'Test Clinic', '', '', 'test@example.com', '4165550100', 'https://test.example', 'Ontario', '', businessPhotoUrl, '15',
+          if (range === 'BusinessProfile!A1:K1') return { data: { values: [profileHeaders] } };
+          if (range === 'BusinessProfile!A1:K2') return { data: { values: [profileHeaders, [
+            'Test Clinic', '', '', 'test@example.com', '4165550100', 'https://test.example', 'Ontario', '', businessPhotoUrl, '15', '15',
           ]] } };
           throw new Error(`Unexpected spreadsheet read: ${range}`);
         },
