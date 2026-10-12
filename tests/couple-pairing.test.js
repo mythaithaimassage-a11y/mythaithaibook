@@ -35,6 +35,15 @@ test('coupleTimeMinutes parses 12-hour and 24-hour times and rejects junk', () =
 
 test('candidates must share the branch, date, start time and end time', () => {
   assert.ok(isCoupleCandidate(base, candidate({})));
+  const calendarRange = {
+    calendarStart: '2025-03-04T11:00:00-05:00',
+    calendarEnd: '2025-03-04T12:00:00-05:00',
+  };
+  assert.ok(isCoupleCandidate({ ...base, ...calendarRange }, candidate({
+    time: '11:30 AM',
+    durationMinutes: 45,
+    ...calendarRange,
+  })), 'The displayed calendar range takes precedence over stale booking time fields');
   assert.equal(isCoupleCandidate(base, candidate({ time: '11:15 AM' })), false);
   assert.equal(isCoupleCandidate(base, candidate({ durationMinutes: 75 })), false);
   assert.equal(isCoupleCandidate(base, candidate({ branchName: 'Sukhumvit' })), false);

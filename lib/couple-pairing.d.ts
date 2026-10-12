@@ -5,6 +5,8 @@ export type CoupleBooking = {
   date?: string;
   time?: string;
   durationMinutes?: number;
+  calendarStart?: string;
+  calendarEnd?: string;
   status?: string;
   serviceName?: string;
   therapistName?: string;

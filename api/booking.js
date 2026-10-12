@@ -12,7 +12,7 @@ import { createBookingHistoryStore } from '../lib/booking-history.js';
 import { syncWixCalendarBatch } from '../lib/wix-calendar.js';
 import { searchBookingCustomers } from '../lib/customer-search.js';
 import { customerTypeForBooking } from '../lib/customer-type.js';
-import { coupleTimeMinutes } from '../lib/couple-pairing.js';
+import { isCoupleCandidate } from '../lib/couple-pairing.js';
 import { applySavedTherapistAliases, parseTherapistAliases, planTherapistRename, readTherapistAliases, renameTherapistBookingBatch, renameTherapistLabel, saveTherapistAlias } from '../lib/therapist-rename.js';
 import { sendGmailMessage } from '../lib/gmail.js';
 import { BOOKING_DEPOSIT_AMOUNT, validateBranchPaymentOptions, validateAppointmentTime, validateBusinessHours, appointmentTimeMinutes } from '../lib/booking-options.js';
@@ -8221,6 +8221,8 @@ export default async function handler(req, res) {
                   couplePartnerBookingId: bookingRow[31] || '',
                   status: bookingRow[24] || '',
                   statusNotes: bookingRow[25] || '',
+                  calendarStart: start,
+                  calendarEnd: end,
                   paymentLocked: staffBooking(bookingRow).paymentLocked,
                   manualBookingDiscount: staffBooking(bookingRow).manualBookingDiscount,
                   originalBookingTotal: staffBooking(bookingRow).originalBookingTotal,
@@ -8274,6 +8276,8 @@ export default async function handler(req, res) {
                     paidAmount: parsedDescription.paidAmount || 0,
                     total: parsedDescription.total || 0,
                     durationMinutes: autoDurationMinutes,
+                    calendarStart: start,
+                    calendarEnd: end,
                     receiptNumber: '',
                     receiptEmailStatus: '',
                     checkedInAt: '',
@@ -9508,19 +9512,30 @@ export default async function handler(req, res) {
       if (String(row[7] || '') !== String(partnerRow[7] || '')) {
         return res.status(409).json({ message: 'Couple appointments must be on the same date.' });
       }
-      const minutesOf = (value) => coupleTimeMinutes(normalizeBookingTime(String(value || '')));
-      const bookingMinutes = minutesOf(row[8]);
-      const partnerMinutes = minutesOf(partnerRow[8]);
-      if (bookingMinutes === null || partnerMinutes === null) {
-        return res.status(400).json({ message: 'These appointments have no valid time, so they cannot be paired.' });
-      }
-      const bookingDuration = Number(row[12]);
-      const partnerDuration = Number(partnerRow[12]);
-      if (!Number.isInteger(bookingDuration) || bookingDuration <= 0 ||
-          !Number.isInteger(partnerDuration) || partnerDuration <= 0) {
-        return res.status(400).json({ message: 'These appointments have no valid duration, so they cannot be paired.' });
-      }
-      if (bookingMinutes !== partnerMinutes || bookingMinutes + bookingDuration !== partnerMinutes + partnerDuration) {
+      const readAppointmentRange = async (candidate) => {
+        const eventId = String(candidate[16] || '').trim();
+        if (!eventId) {
+          return {
+            time: normalizeBookingTime(String(candidate[8] || '')),
+            durationMinutes: Number(candidate[12]),
+          };
+        }
+        const event = (await calendarApi.events.get({
+          calendarId: candidate[15] || PRIMARY_CALENDAR_ID,
+          eventId,
+        })).data;
+        return {
+          calendarStart: event.start?.dateTime || '',
+          calendarEnd: event.end?.dateTime || '',
+        };
+      };
+      const [bookingRange, partnerRange] = await Promise.all([
+        readAppointmentRange(row), readAppointmentRange(partnerRow),
+      ]);
+      if (!isCoupleCandidate(
+        { id: bookingId, branchName: row[4], date: row[7], ...bookingRange },
+        { id: partnerBookingId, branchName: partnerRow[4], date: partnerRow[7], ...partnerRange },
+      )) {
         return res.status(409).json({ message: 'Couple appointments must have the same start and end time.' });
       }
       const partnerExistingPartnerId = String(partnerRow[31] || '');

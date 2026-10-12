@@ -140,6 +140,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   let failCalendarPatch = false, failRecovery = false, failBookingWrite = false, raceBookingWrite = false;
   const originalEvent = { summary: 'Original appointment', description: 'Customer: Old name\nTherapist: Test Therapist\nPrivate integration metadata',
     start: { dateTime: '2026-11-01T10:00:00-05:00' }, end: { dateTime: '2026-11-01T11:00:00-05:00' }, etag: '"original"' };
+  const coupleCalendarEvents = new Map();
   t.mock.method(google, 'calendar', () => ({ events: {
     list: async (options) => {
       if (options.maxResults === 20) {
@@ -149,7 +150,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
       return { data: { items: busyEvents } };
     },
     insert: async (options) => { events.push(options); return { data: { id: `event-${events.length}` } }; },
-    get: async () => ({ data: originalEvent }),
+    get: async ({ eventId }) => ({ data: coupleCalendarEvents.get(eventId) || originalEvent }),
     patch: async (options, transport) => {
       patches.push({ ...options, transport });
       if (failCalendarPatch || (failRecovery && options.requestBody.summary === originalEvent.summary)) throw new Error('Synthetic calendar failure');
@@ -826,6 +827,17 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   const coupleA = coupleBooking('couple-pair-a', '11:00 AM', 'Couple A');
   const coupleB = coupleBooking('couple-pair-b', '11:00 AM', 'Couple B');
   const coupleC = coupleBooking('couple-pair-c', '11:00 AM', 'Couple C');
+  coupleA.calendar_event_id = 'couple-event-a';
+  coupleB.calendar_event_id = 'couple-event-b';
+  coupleC.calendar_event_id = 'couple-event-c';
+  coupleB.duration_minutes = 60;
+  const matchingCalendarRange = {
+    start: { dateTime: '2099-01-01T11:15:00-05:00' },
+    end: { dateTime: '2099-01-01T12:15:00-05:00' },
+  };
+  coupleCalendarEvents.set('couple-event-a', matchingCalendarRange);
+  coupleCalendarEvents.set('couple-event-b', matchingCalendarRange);
+  coupleCalendarEvents.set('couple-event-c', matchingCalendarRange);
   const coupleDifferentStart = coupleBooking('couple-pair-different-start', '11:15 AM', 'Couple Different Start');
   const coupleFar = coupleBooking('couple-pair-far', '03:00 PM', 'Couple Far');
   const coupleDifferentEnd = { ...coupleBooking('couple-pair-different-end', '11:00 AM', 'Couple Different End'), duration_minutes: 60 };
