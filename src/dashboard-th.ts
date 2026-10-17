@@ -1,4 +1,5 @@
 export const dashboardThai: Record<string, string> = {
+  'Business hours': 'เวลาทำการ',
   'Owner dashboard shortcuts': 'ทางลัดแผงควบคุมเจ้าของ',
   'Overdue check-in reminders': 'แจ้งเตือนการเช็คอินที่เกินเวลา',
   'Check in only the overdue appointments listed below for today. Confirm every listed client has arrived.': 'เช็คอินเฉพาะนัดหมายวันนี้ที่เกินเวลาในรายการด้านล่าง โปรดยืนยันว่าลูกค้าทุกคนในรายการมาถึงแล้ว',

@@ -4646,7 +4646,12 @@ function AdminPortal({
   const [calendarUrl, setCalendarUrl] = useState('');
   const [calendarWarnings, setCalendarWarnings] = useState([]);
   const [calendarUnavailability, setCalendarUnavailability] = useState([]);
-  const [calendarViewMode, setCalendarViewMode] = useState('therapists');
+  const [calendarViewMode, setCalendarViewMode] = useState('auto');
+  const [compactCalendar, setCompactCalendar] = useState(() =>
+    typeof window !== 'undefined' && window.matchMedia('(max-width: 1023px)').matches);
+  const [mobileCalendarColumn, setMobileCalendarColumn] = useState('');
+  const resolvedCalendarViewMode = calendarViewMode === 'auto'
+    ? (compactCalendar ? 'agenda' : 'therapists') : calendarViewMode;
   const [calendarFullscreen, setCalendarFullscreen] = useState(false);
   const [calendarFullscreenError, setCalendarFullscreenError] = useState('');
   const calendarPanelRef = useRef(null);
@@ -4666,6 +4671,14 @@ function AdminPortal({
   const [isLoadingUnavailability, setIsLoadingUnavailability] = useState(false);
   const [unavailabilityLoadError, setUnavailabilityLoadError] = useState('');
   const [unavailabilityForm, setUnavailabilityForm] = useState({ scope: 'business', branchName: '', therapistName: '', date: new Date().toISOString().slice(0, 10), startTime: '12:00', endTime: '13:00', reason: '' });
+
+  useEffect(() => {
+    const query = window.matchMedia('(max-width: 1023px)');
+    const syncCompactCalendar = () => setCompactCalendar(query.matches);
+    syncCompactCalendar();
+    query.addEventListener('change', syncCompactCalendar);
+    return () => query.removeEventListener('change', syncCompactCalendar);
+  }, []);
 
   useEffect(() => {
     const syncFullscreenState = () => {
@@ -6229,7 +6242,7 @@ function AdminPortal({
   const calendarFirstHour = Math.min(8, ...visibleHours);
   const calendarLastHour = Math.max(19, ...visibleHours);
   const calendarDisplayHours = Array.from({ length: calendarLastHour - calendarFirstHour + 1 }, (_, index) => index + calendarFirstHour);
-  const calendarColumnTherapists = therapists.filter((therapist) =>
+  const calendarAvailableTherapists = therapists.filter((therapist) =>
     therapist.active !== false &&
     (calendarTherapist === 'all' || String(therapist.id) === calendarTherapist) &&
     calendarBusinessBranches.some((branch) =>
@@ -6237,8 +6250,19 @@ function AdminPortal({
       (dashboardUser.role === 'owner' || dashboardUser.branchIds.includes(String(branch.id))),
     ),
   );
-  const calendarHasUnassignedColumn = calendarTherapist === 'all' &&
+  const calendarIncludesUnassigned = calendarTherapist === 'all' &&
     visibleCalendarEvents.some((event) => !event.therapistName || event.therapistName === 'Any Available');
+  const calendarMobileColumns = [
+    ...calendarAvailableTherapists.map((therapist) => ({ id: String(therapist.id), name: therapist.name })),
+    ...(calendarIncludesUnassigned ? [{ id: 'unassigned', name: tr("Unassigned appointments") }] : []),
+  ];
+  const activeMobileCalendarColumn = calendarMobileColumns.some((column) => column.id === mobileCalendarColumn)
+    ? mobileCalendarColumn : calendarMobileColumns[0]?.id;
+  const calendarColumnTherapists = compactCalendar
+    ? calendarAvailableTherapists.filter((therapist) => String(therapist.id) === activeMobileCalendarColumn)
+    : calendarAvailableTherapists;
+  const calendarHasUnassignedColumn = calendarIncludesUnassigned &&
+    (!compactCalendar || activeMobileCalendarColumn === 'unassigned');
   const calendarGapMinutes = Math.max(0, Number(businessProfile.therapistBufferMinutes) || 0);
   const calendarFirstMinute = Math.min(
     10 * 60,
@@ -6734,6 +6758,8 @@ function AdminPortal({
             }}
           />
       {bookingEditNotice && <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">{tr(bookingEditNotice)}</p>}
+      <details open={activeTab !== 'calendar' || !compactCalendar}>
+      <summary className={activeTab === 'calendar' ? 'calendar-context-toggle cursor-pointer rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 lg:hidden' : 'hidden'}><Settings className="mr-2 inline h-4 w-4" />{tr("Owner workspace")}</summary>
       <section className="dashboard-banner relative overflow-hidden rounded-3xl bg-gradient-to-br from-slate-950 via-emerald-950 to-emerald-800 px-5 py-6 text-white shadow-xl shadow-emerald-950/10 sm:px-8 sm:py-8">
         <div aria-hidden="true" className="absolute -right-16 -top-28 h-72 w-72 rounded-full border border-white/10" />
         <div aria-hidden="true" className="absolute -right-2 -top-14 h-48 w-48 rounded-full border border-white/10" />
@@ -6766,6 +6792,7 @@ function AdminPortal({
           <span className="ml-auto hidden text-xs text-emerald-100/70 sm:inline">{tr("Practice & branch management")}</span>
         </div>
       </section>
+      </details>
 
       {(() => {
         const branchDetail = selectedBranchName || (isBranchReceptionist ? tr("Assigned branches") : tr("All branches"));
@@ -6791,9 +6818,9 @@ function AdminPortal({
               : [];
         if (!stats.length) return null;
         return (
-          <div className={`grid grid-cols-2 gap-4 ${stats.length === 4 ? 'md:grid-cols-4' : 'md:grid-cols-3'}`}>
+          <div className={`${activeTab === 'calendar' ? 'calendar-stats ' : ''}grid grid-cols-2 gap-4 ${stats.length === 4 ? 'md:grid-cols-4' : 'md:grid-cols-3'}`}>
             {stats.map(({ label, value, detail, Icon, style, valueStyle = 'text-slate-900' }) => (
-              <div key={label} className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
+              <div key={label} title={`${label}: ${value}`} className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
                 <div className="flex items-center justify-between"><div className="text-xs font-semibold text-slate-500">{label}</div><span className={`rounded-xl p-2 ${style}`}><Icon className="h-4 w-4" /></span></div>
                 <div className={`mt-3 text-2xl font-bold tracking-tight ${valueStyle}`}>{value}</div>
                 <div className="mt-1 text-[11px] text-slate-400">{detail}</div>
@@ -6995,21 +7022,21 @@ function AdminPortal({
 
       {activeTab === 'calendar' && (
         <div ref={calendarPanelRef} className={calendarFullscreen
-          ? 'fixed inset-0 z-[60] flex h-dvh flex-col gap-3 overflow-hidden bg-white p-3 sm:p-4'
-          : 'space-y-4 rounded-2xl border border-stone-200 bg-white p-6 shadow-sm'}>
-          <div className="flex shrink-0 flex-wrap items-end justify-between gap-3">
+          ? 'booking-calendar calendar-fullscreen fixed inset-0 z-[60] flex h-dvh flex-col gap-3 overflow-hidden bg-white p-3 sm:p-4'
+          : 'booking-calendar space-y-4 rounded-2xl border border-stone-200 bg-white p-6 shadow-sm'}>
+          <div className="calendar-heading flex shrink-0 flex-wrap items-end justify-between gap-3">
             <div>
               <h2 className="text-lg font-bold text-stone-900">{tr("Booking Calendar")}</h2>
-              {!calendarFullscreen && <p className="text-xs text-stone-500">{tr("Live appointments and quick manual booking.")}</p>}
+              {!calendarFullscreen && <p className="calendar-help text-xs text-stone-500">{tr("Live appointments and quick manual booking.")}</p>}
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <label className="relative"><span className="sr-only">{tr("Search appointments")}</span><Search className="absolute left-3 top-2.5 h-4 w-4 text-blue-600" /><input type="search" value={calendarSearch} onChange={(event) => setCalendarSearch(event.target.value)} placeholder={tr("Search appointments")} className="h-9 w-48 rounded-full border border-blue-200 pl-9 pr-3 text-xs" /></label>
-              <label><span className="sr-only">{tr("Calendar view")}</span><select value={calendarViewMode} onChange={(event) => setCalendarViewMode(event.target.value)} className="h-9 rounded-full border border-blue-200 bg-white px-4 text-xs text-blue-700"><option value="daily">{tr("Daily")}</option><option value="therapists">{tr("Therapist schedule")}</option><option value="agenda">{tr("Agenda")}</option></select></label>
+            <div className="calendar-actions flex flex-wrap items-center gap-2">
+              <label className="calendar-search relative"><span className="sr-only">{tr("Search appointments")}</span><Search className="absolute left-3 top-2.5 h-4 w-4 text-blue-600" /><input type="search" value={calendarSearch} onChange={(event) => setCalendarSearch(event.target.value)} placeholder={tr("Search appointments")} className="h-9 w-48 rounded-full border border-blue-200 pl-9 pr-3 text-xs" /></label>
+              <label className="calendar-view"><span className="sr-only">{tr("Calendar view")}</span><select value={resolvedCalendarViewMode} onChange={(event) => setCalendarViewMode(event.target.value)} className="h-9 rounded-full border border-blue-200 bg-white px-4 text-xs text-blue-700"><option value="daily">{tr("Daily")}</option><option value="therapists">{tr("Therapist schedule")}</option><option value="agenda">{tr("Agenda")}</option></select></label>
               <button type="button" onClick={toggleCalendarFullscreen} aria-label={tr(calendarFullscreen ? 'Exit fullscreen calendar' : 'Fit calendar to screen')}
                 title={tr(calendarFullscreen ? 'Exit fullscreen calendar' : 'Fit calendar to screen')}
                 className="inline-flex h-9 items-center gap-2 rounded-full border border-blue-200 bg-white px-3 text-xs font-semibold text-blue-700 hover:bg-blue-50">
                 {calendarFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
-                <span className="hidden sm:inline">{tr(calendarFullscreen ? 'Exit fullscreen' : 'Fit to screen')}</span>
+                <span className="hidden lg:inline">{tr(calendarFullscreen ? 'Exit fullscreen' : 'Fit to screen')}</span>
               </button>
               <button type="button" aria-label={tr("Calendar filters")} aria-expanded={calendarFiltersOpen} onClick={() => setCalendarFiltersOpen(!calendarFiltersOpen)} className="rounded-full border border-blue-200 p-2 text-blue-600"><Filter className="h-4 w-4" /></button>
               <details className="relative">
@@ -7020,7 +7047,7 @@ function AdminPortal({
                 </div>
               </details>
               <details className="relative">
-                <summary className="cursor-pointer list-none rounded-full border border-blue-200 px-4 py-2 text-xs font-semibold text-blue-600">{tr("Manage ▾")}</summary>
+                <summary aria-label={tr("Manage ▾")} title={tr("Manage ▾")} className="calendar-icon-action cursor-pointer list-none rounded-full border border-blue-200 px-4 py-2 text-xs font-semibold text-blue-600"><Briefcase className="h-4 w-4 lg:hidden" /><span className="hidden lg:inline">{tr("Manage ▾")}</span></summary>
                 <div className="absolute right-0 z-20 mt-2 w-48 rounded-xl border border-stone-200 bg-white p-2 text-sm shadow-lg">
                   <button type="button" onClick={() => setActiveTab('schedule')} className="w-full rounded-lg px-3 py-2 text-left hover:bg-blue-50">{tr("Appointments")}</button>
                   {dashboardUser.role === 'owner' && <>
@@ -7030,7 +7057,7 @@ function AdminPortal({
                 </div>
               </details>
               <details className="relative">
-                <summary className="cursor-pointer list-none rounded-full bg-blue-600 px-5 py-2 text-xs font-bold text-white hover:bg-blue-700">{tr("Add ▾")}</summary>
+                <summary aria-label={tr("Add ▾")} title={tr("Add ▾")} className="calendar-icon-action cursor-pointer list-none rounded-full bg-blue-600 px-5 py-2 text-xs font-bold text-white hover:bg-blue-700"><Plus className="h-4 w-4 lg:hidden" /><span className="hidden lg:inline">{tr("Add ▾")}</span></summary>
                 <div className="absolute right-0 z-20 mt-2 w-56 rounded-xl border border-stone-200 bg-white p-2 text-sm shadow-lg">
                   <button type="button" onClick={(event) => { event.currentTarget.closest('details').open = false; openQuickBooking(); }} className="w-full rounded-lg px-4 py-3 text-left hover:bg-blue-50">{tr("Quick Sale")} <span className="block text-[10px] text-stone-500">{tr("Quick appointment · no payment")}</span></button>
                   <button type="button" onClick={(event) => { event.currentTarget.closest('details').open = false; openQuickBooking(); }} className="w-full border-t border-stone-100 px-4 py-3 text-left hover:bg-blue-50">{tr("Appointment")}</button>
@@ -7050,7 +7077,7 @@ function AdminPortal({
               </details>
             </div>
           </div>
-          <div className="flex shrink-0 flex-wrap items-end gap-2 border-t-2 border-blue-600 pt-4">
+          <div className="calendar-filters flex shrink-0 flex-wrap items-end gap-2 border-t-2 border-blue-600 pt-4">
               <label className="text-xs font-semibold text-stone-600">{tr("Date")}<input type="date" value={calendarDate} onChange={(event) => setCalendarDate(event.target.value)} className="block mt-1 p-2 rounded-lg border border-stone-300" />
               </label>
               {calendarFiltersOpen && <label className="text-xs font-semibold text-stone-600">{tr("Branch")}<select value={calendarBranch} onChange={(event) => setCalendarBranch(event.target.value)} className="block mt-1 p-2 rounded-lg border border-stone-300">
@@ -7069,11 +7096,11 @@ function AdminPortal({
                   <option value="unpaired">{tr("Couple massage without a partner")}</option>
                 </select>
               </label>}
-              <button onClick={loadCalendar} disabled={isLoadingCalendar} className="h-9 px-3 bg-emerald-800 text-white rounded-lg text-xs font-bold disabled:opacity-50">
-                {isLoadingCalendar ? tr("Loading...") : tr("Refresh")}
+              <button onClick={loadCalendar} disabled={isLoadingCalendar} aria-label={tr(isLoadingCalendar ? "Loading..." : "Refresh")} title={tr("Refresh")} className="calendar-icon-action h-9 px-3 bg-emerald-800 text-white rounded-lg text-xs font-bold disabled:opacity-50">
+                <RefreshCw className={`h-4 w-4 lg:hidden ${isLoadingCalendar ? 'animate-spin' : ''}`} /><span className="hidden lg:inline">{isLoadingCalendar ? tr("Loading...") : tr("Refresh")}</span>
               </button>
-              {!calendarFullscreen && <button type="button" aria-expanded={showTodayAvailability} onClick={() => setShowTodayAvailability((visible) => !visible)} className="inline-flex h-9 items-center gap-2 rounded-lg border border-blue-200 bg-white px-3 text-xs font-semibold text-blue-700 hover:bg-blue-50">
-                <CalendarDays className="h-4 w-4" />{tr(showTodayAvailability ? "Hide today's availability" : "Set therapist availability today")}
+              {!calendarFullscreen && <button type="button" aria-label={tr(showTodayAvailability ? "Hide today's availability" : "Set therapist availability today")} title={tr(showTodayAvailability ? "Hide today's availability" : "Set therapist availability today")} aria-expanded={showTodayAvailability} onClick={() => setShowTodayAvailability((visible) => !visible)} className="calendar-icon-action inline-flex h-9 items-center gap-2 rounded-lg border border-blue-200 bg-white px-3 text-xs font-semibold text-blue-700 hover:bg-blue-50">
+                <CalendarDays className="h-4 w-4" /><span className="hidden lg:inline">{tr(showTodayAvailability ? "Hide today's availability" : "Set therapist availability today")}</span>
               </button>}
               {!calendarFiltersOpen && (calendarBranch !== 'all' || calendarTherapist !== 'all' || calendarCoupleFilter !== 'all') && <button type="button" onClick={() => setCalendarFiltersOpen(true)} className="h-9 rounded-lg border border-blue-200 px-3 text-xs text-blue-700">{tr("Filters:")}{branches.find((item) => String(item.id) === calendarBranch)?.name || tr("All branches")} · {therapists.find((item) => String(item.id) === calendarTherapist)?.name || tr("All therapists")}{calendarCoupleFilter !== 'all' && ` · ${tr(calendarCoupleFilter === 'couple' ? "Couple massage only" : "Couple massage without a partner")}`}
               </button>}
@@ -7092,12 +7119,15 @@ function AdminPortal({
           {quickBookingNotice && !calendarFullscreen && <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">{tr(quickBookingNotice)}</p>}
           {deleteBookingError && <div role="alert" className="p-3 bg-red-50 border border-red-200 text-red-800 rounded-xl text-xs">{tr(deleteBookingError)}</div>}
           {calendarLoadError && <div className="p-3 bg-red-50 border border-red-200 text-red-800 rounded-xl text-xs">{tr(calendarLoadError)}</div>}
-          {!calendarFullscreen && <div className="flex flex-wrap gap-3 text-xs text-stone-600">
+          {!calendarFullscreen && <details className="calendar-hours text-xs text-stone-600" open={!compactCalendar}>
+            <summary className="cursor-pointer font-semibold lg:hidden">{tr("Business hours")}</summary>
+            <div className="flex flex-wrap gap-3">
             {calendarBusinessBranches.map((branch) => {
               const hours = businessHoursForDate(branch, calendarDate);
               return <span key={branch.id}><strong>{branch.name}</strong>: {hours.closed ? tr('Closed') : `${hours.open} - ${hours.close}`}</span>;
             })}
-          </div>}
+            </div>
+          </details>}
           {!calendarFullscreen && calendarWarnings.length > 0 && (
             <div className="p-3 bg-amber-50 border border-amber-200 text-amber-900 rounded-xl text-xs">{tr("Calendar access warning:")}{calendarWarnings.join(' · ')}
             </div>
@@ -7117,15 +7147,15 @@ function AdminPortal({
           {!calendarFullscreen && calendarUrl && (
             <a href={calendarUrl} target="_blank" rel="noreferrer" className="inline-flex text-xs font-semibold text-emerald-800 underline">{tr("Open the primary Google Calendar")}</a>
           )}
-          {calendarViewMode === 'daily' && <div className={`flex min-h-0 flex-col overflow-hidden rounded-xl border border-stone-200 bg-white${calendarFullscreen ? ' flex-1' : ''}`}>
+          {resolvedCalendarViewMode === 'daily' && <div className={`calendar-schedule flex min-h-0 flex-col overflow-hidden rounded-xl border border-stone-200 bg-white${calendarFullscreen ? ' flex-1' : ''}`}>
             <div className="flex items-center justify-between px-4 py-3 bg-stone-50 border-b border-stone-200">
               <div>
                 <p className="font-bold text-stone-900">{new Date(`${calendarDate}T12:00:00`).toLocaleDateString(locale, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</p>
-                <p className="text-xs text-stone-500">{tr("MY THAI THAI · live primary calendar view")}</p>
+                <p className="calendar-help text-xs text-stone-500">{tr("MY THAI THAI · live primary calendar view")}</p>
               </div>
               <CalendarIcon className="w-5 h-5 text-emerald-700" />
             </div>
-            <div className={calendarFullscreen ? 'min-h-0 flex-1 overflow-y-auto' : 'max-h-[620px] overflow-y-auto'}>
+            <div className={`calendar-scroll ${calendarFullscreen ? 'min-h-0 flex-1 overflow-y-auto' : 'max-h-[620px] overflow-y-auto'}`}>
               {calendarDisplayHours.map((hour) => {
                 const hourLabel = new Date(2000, 0, 1, hour).toLocaleTimeString(locale, { hour: 'numeric' });
                 const hourEvents = visibleCalendarEvents.filter((event) => Number(event.localTime?.split(':')[0]) === hour);
@@ -7171,13 +7201,19 @@ function AdminPortal({
               })}
             </div>
           </div>}
-          {calendarViewMode === 'therapists' && <div className={`flex min-h-0 flex-col overflow-hidden rounded-xl border border-stone-200 bg-white${calendarFullscreen ? ' flex-1' : ''}`}>
+          {resolvedCalendarViewMode === 'therapists' && <div className={`calendar-schedule flex min-h-0 flex-col overflow-hidden rounded-xl border border-stone-200 bg-white${calendarFullscreen ? ' flex-1' : ''}`}>
             <div className="border-b border-stone-200 bg-stone-50 px-3 py-2">
               <p className="text-sm font-bold text-stone-900">{new Date(`${calendarDate}T12:00:00`).toLocaleDateString(locale, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</p>
-              {!calendarFullscreen && <p className="text-xs text-stone-500">{tr("Appointments grouped by therapist. The gap after each appointment is reserved automatically.")}</p>}
+              {!calendarFullscreen && <p className="calendar-help text-xs text-stone-500">{tr("Appointments grouped by therapist. The gap after each appointment is reserved automatically.")}</p>}
+              {compactCalendar && calendarMobileColumns.length > 0 && <label className="mt-2 block">
+                <span className="sr-only">{tr("Therapist")}</span>
+                <select aria-label={tr("Therapist")} value={activeMobileCalendarColumn} onChange={(event) => setMobileCalendarColumn(event.target.value)} className="min-h-11 w-full min-w-0 rounded-lg border border-stone-300 bg-white px-2 text-sm">
+                  {calendarMobileColumns.map((column) => <option key={column.id} value={column.id}>{column.name}</option>)}
+                </select>
+              </label>}
             </div>
-            <div className={calendarFullscreen ? 'min-h-0 flex-1 overflow-auto' : 'max-h-[680px] overflow-auto'}>
-              <div className="w-fit min-w-full">
+            <div className={`calendar-scroll ${calendarFullscreen ? 'min-h-0 flex-1 overflow-auto' : 'max-h-[680px] overflow-auto'}`}>
+              <div className="calendar-grid w-fit min-w-full">
                 <div className="sticky top-0 z-20 grid bg-stone-50" style={{ gridTemplateColumns: `56px repeat(${calendarColumnTherapists.length + Number(calendarHasUnassignedColumn)}, minmax(128px, 220px))` }}>
                   <div className="border-b border-r border-stone-200 p-1.5 text-[10px] font-semibold text-stone-500">{tr("Time")}</div>
                   {calendarColumnTherapists.map((therapist) => (
@@ -7304,10 +7340,12 @@ function AdminPortal({
               </div>
             </div>
           </div>}
-          {!calendarFullscreen && <p className="text-xs text-stone-500">
+          {!calendarFullscreen && <p className="calendar-help text-xs text-stone-500">
             {calendarAutoRefresh ? tr("Updates automatically every 15 seconds while this tab is visible.") : tr("Auto-refresh is paused. Use Refresh to load current appointments.")}{tr("The daily view and appointment list use the same search, date, branch, and therapist filters.")}</p>
           }
-          {!calendarFullscreen && calendarShowLegend && <div className="flex flex-wrap gap-3 items-center rounded-xl bg-stone-50 border border-stone-200 px-3 py-2">
+          {!calendarFullscreen && calendarShowLegend && <details className="calendar-legend rounded-xl bg-stone-50 border border-stone-200 px-3 py-2" open={!compactCalendar}>
+            <summary className="cursor-pointer text-xs font-semibold text-stone-700 lg:hidden">{tr("Therapists:")}</summary>
+            <div className="flex flex-wrap gap-3 items-center">
             <span className="text-xs font-bold text-stone-700">{tr("Therapists:")}</span>
             {(calendarTherapist === 'all' ? therapists : therapists.filter((therapist) => String(therapist.id) === calendarTherapist)).map((therapist) => {
               const color = getTherapistCalendarColor(therapist.name, therapists);
@@ -7322,16 +7360,17 @@ function AdminPortal({
               <span className="inline-flex items-center gap-1.5 text-xs text-stone-500">
                 <span className="w-2.5 h-2.5 rounded-full bg-stone-400" />{tr("Unassigned appointments")}</span>
             )}
-          </div>}
-          {calendarViewMode === 'agenda' && (visibleCalendarEvents.length === 0 && !isLoadingCalendar ? (
+            </div>
+          </details>}
+          {resolvedCalendarViewMode === 'agenda' && (visibleCalendarEvents.length === 0 && !isLoadingCalendar ? (
             <p className="py-8 text-center text-sm text-stone-500">{tr("No appointments match this date, search, branch, therapist and couple massage filters. Adjust your filters or add an appointment.")}</p>
           ) : (
-            <div className={calendarFullscreen ? 'min-h-0 flex-1 space-y-3 overflow-y-auto' : 'space-y-3'}>
+            <div className={`calendar-agenda ${calendarFullscreen ? 'min-h-0 flex-1 space-y-3 overflow-y-auto' : 'space-y-3'}`}>
               {visibleCalendarEvents.map((event) => (
                 <div key={event.id} className={`group relative py-4 pl-4 pr-12 rounded-xl border border-stone-200 ${getTherapistCalendarColor(event.therapistName, therapists).event}`}>
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <button type="button" onClick={() => { setSelectedCalendarEvent(event); setIssuedReceipt(null); setReceiptError(''); setReceiptNotice(''); }} className="min-w-0 text-left">
-                      <span className="font-bold text-stone-900 inline-flex items-center gap-1.5">
+                      <span className="calendar-event-title font-bold text-stone-900 inline-flex items-center gap-1.5">
                         {event.isCouple && <Users className="w-3.5 h-3.5 text-rose-500 shrink-0" aria-label={tr("Couple massage")} />}
                         {event.summary}
                         {event.booking?.status === 'Cancelled' && <span className="text-[10px] font-bold uppercase tracking-wide text-red-700 bg-red-100 px-1.5 py-0.5 rounded-full">{tr("Cancelled")}</span>}
@@ -7341,7 +7380,7 @@ function AdminPortal({
                     </button>
                     <div className="flex shrink-0 flex-col items-end gap-2">
                       <span className="text-sm font-semibold text-emerald-800">{formatTime(event.timeRange || event.localTime)}</span>
-                      <button type="button" onClick={() => { setSelectedCalendarEvent(event); setIssuedReceipt(null); setReceiptError(''); setReceiptNotice(''); }} className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-white px-2.5 py-1.5 text-[11px] font-bold text-emerald-900 transition hover:bg-emerald-50"><ReceiptText className="h-3.5 w-3.5" />{tr("Open appointment")}</button>
+                      <button type="button" aria-label={tr("Open appointment")} title={tr("Open appointment")} onClick={() => { setSelectedCalendarEvent(event); setIssuedReceipt(null); setReceiptError(''); setReceiptNotice(''); }} className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-white px-2.5 py-1.5 text-[11px] font-bold text-emerald-900 transition hover:bg-emerald-50"><ReceiptText className="h-3.5 w-3.5" /><span className="hidden lg:inline">{tr("Open appointment")}</span></button>
                     </div>
                   </div>
                   {dashboardUser.role === 'owner' && event.booking?.id && <button

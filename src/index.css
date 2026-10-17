@@ -3,6 +3,209 @@
 @tailwind utilities;
 
 @media (max-width: 1023px) {
+  .calendar-context-toggle {
+    min-height: 44px;
+  }
+
+  .calendar-stats {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .calendar-stats > div {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px;
+    padding: 8px;
+  }
+
+  .calendar-stats > div > div:first-child > div {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .calendar-stats > div > div:last-child {
+    display: none;
+  }
+
+  .calendar-stats > div > div:nth-child(2) {
+    margin-top: 0;
+    font-size: 18px;
+  }
+
+  .booking-calendar {
+    min-width: 0;
+    padding: 12px;
+  }
+
+  .booking-calendar > * + * {
+    margin-top: 12px;
+  }
+
+  .booking-calendar .calendar-help {
+    display: none;
+  }
+
+  .booking-calendar .calendar-heading {
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .booking-calendar .calendar-heading h2 {
+    font-size: 16px;
+  }
+
+  .booking-calendar .calendar-actions {
+    position: relative;
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    width: 100%;
+    gap: 6px;
+  }
+
+  .booking-calendar .calendar-search,
+    .booking-calendar .calendar-view {
+    grid-column: span 3;
+    min-width: 0;
+  }
+
+  .booking-calendar .calendar-search input,
+    .booking-calendar .calendar-view select {
+    width: 100%;
+    min-width: 0;
+    height: 44px;
+  }
+
+  .booking-calendar .calendar-actions > button,
+    .booking-calendar .calendar-actions summary,
+    .booking-calendar .calendar-icon-action {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 8px;
+  }
+
+  .booking-calendar .calendar-actions details {
+    position: static;
+  }
+
+  .booking-calendar .calendar-actions details > div {
+    right: 0;
+    max-width: 100%;
+  }
+
+  .booking-calendar .calendar-actions details > div button,
+    .booking-calendar .calendar-actions details > div label {
+    min-height: 44px;
+  }
+
+  .booking-calendar .calendar-filters {
+    padding-top: 8px;
+  }
+
+  .booking-calendar .calendar-filters label {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .booking-calendar .calendar-filters input,
+    .booking-calendar .calendar-filters select {
+    min-width: 0;
+    max-width: 100%;
+    min-height: 44px;
+  }
+
+  .booking-calendar .calendar-filters > button {
+    max-width: 100%;
+    height: auto;
+    min-height: 44px;
+    overflow-wrap: anywhere;
+  }
+
+  .booking-calendar .calendar-grid {
+    width: 100%;
+  }
+
+  .booking-calendar .calendar-grid > .grid {
+    grid-template-columns: 48px minmax(0, 1fr) !important;
+  }
+
+  .booking-calendar .calendar-grid > .sticky > .relative {
+    width: 100%;
+  }
+
+  .booking-calendar .calendar-grid > .sticky:not(.grid) {
+    position: relative;
+    top: auto;
+  }
+
+  .booking-calendar .calendar-grid [id^="therapist-next-availability-"],
+    .booking-calendar .calendar-grid #any-therapist-next-availability {
+    max-width: calc(100% - 8px);
+    overflow-wrap: anywhere;
+  }
+
+  .booking-calendar .calendar-scroll {
+    max-height: none;
+    overflow: visible;
+  }
+
+  .booking-calendar .calendar-schedule {
+    flex: none;
+  }
+
+  .booking-calendar.calendar-fullscreen {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .booking-calendar .calendar-agenda {
+    flex: none;
+    overflow: visible;
+  }
+
+  .booking-calendar .calendar-agenda > div {
+    padding: 12px 52px 12px 12px;
+    overflow-wrap: anywhere;
+  }
+
+  .booking-calendar .calendar-agenda > div > div {
+    gap: 8px;
+  }
+
+  .booking-calendar .calendar-agenda button,
+    .booking-calendar .calendar-grid button:not(.absolute) {
+    min-height: 44px;
+  }
+
+  .booking-calendar .calendar-agenda .calendar-event-title {
+    font-size: 14px;
+    overflow-wrap: anywhere;
+  }
+
+  .booking-calendar .calendar-agenda > div > button {
+    opacity: 1;
+    min-width: 44px;
+    right: 4px;
+    top: 4px;
+  }
+
+  .booking-calendar .calendar-agenda > div > div > div {
+    width: 100%;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+}
+
+@media (max-width: 1023px) {
   .owner-dashboard .dashboard-menu-toggle,
   .owner-dashboard .dashboard-toolbar button {
     min-height: 44px;

@@ -112,10 +112,10 @@ test('appointment settings migration button disappears after BigQuery takes over
 });
 
 test('business profile configures appointment gaps and the calendar offers therapist columns', () => {
-  assert.match(source, /const \[calendarViewMode, setCalendarViewMode\] = useState\('therapists'\)/);
+  assert.match(source, /const \[calendarViewMode, setCalendarViewMode\] = useState\('auto'\)/);
   assert.match(source, /Therapist gap after appointments \(minutes\)/);
   assert.match(source, /min=\{field\.min\}[\s\S]*max=\{field\.max\}[\s\S]*step=\{field\.step\}/);
-  assert.match(source, /calendarViewMode === 'therapists'/);
+  assert.match(source, /resolvedCalendarViewMode === 'therapists'/);
   assert.match(source, /gridTemplateColumns: `56px repeat\(\$\{calendarColumnTherapists\.length/);
   assert.match(source, /minmax\(128px, 220px\)/);
   assert.match(source, /Next available \(60 min\)/);
@@ -244,10 +244,110 @@ test('mobile booking cards retain all nine fields, booking data and existing act
 
 test('responsive styles are owner-only, below 1024px, with scrollable menus and 44px touch controls', () => {
   const css = postcss.parse(readFileSync(new URL('../src/index.css', import.meta.url), 'utf8'));
-  const media = css.nodes.find((node) => node.type === 'atrule' && node.name === 'media');
+  const media = css.nodes.findLast((node) => node.type === 'atrule' && node.name === 'media' && node.params === '(max-width: 1023px)');
   assert.equal(media.params, '(max-width: 1023px)');
   media.walkRules((rule) => {
     for (const selector of rule.selectors) assert.ok(selector.startsWith('.owner-dashboard '), selector);
+  });
+
+  test('phone calendars default to agenda, retain all appointments and allow explicit view choices', () => {
+    const events = [{
+      id: 'phone-event', summary: 'Phone appointment', therapistName: 'Tanya',
+      localTime: '11:00', start: '2026-10-10T11:00:00-04:00', end: '2026-10-10T12:00:00-04:00',
+      booking: { ...booking, bookingNote: 'Important team note' },
+    }];
+    const mobile = render('calendar', 'en', { compactCalendar: true, calendarEvents: events });
+    assert.match(mobile, /value="agenda" selected/);
+    assert.match(mobile, /calendar-agenda/);
+    assert.match(mobile, /Phone appointment/);
+    assert.match(mobile, /Important team note/);
+    for (const action of ['Open appointment', 'Calendar settings', 'Calendar filters', 'Add ▾', 'Manage ▾', 'Refresh']) {
+      assert.ok(mobile.includes(`aria-label="${action}"`), action);
+    }
+    assert.doesNotMatch(mobile, /calendar-legend[^>]* open=""/);
+    assert.doesNotMatch(mobile, /calendar-hours[^>]* open=""/);
+    assert.match(mobile, /<details><summary class="calendar-context-toggle/);
+    assert.match(mobile, /class="calendar-stats /);
+    assert.match(render('calendar', 'en', { compactCalendar: false }), /value="therapists" selected/);
+    assert.match(render('calendar', 'en', { compactCalendar: true, calendarViewMode: 'daily' }), /value="daily" selected/);
+    assert.match(render('calendar', 'en', { compactCalendar: false, calendarViewMode: 'agenda' }), /value="agenda" selected/);
+  });
+
+  test('phone therapist columns page independently of appointment filters, including unassigned', () => {
+    const date = '2026-10-10';
+    const therapists = [
+      { id: 1, name: 'Tanya', branches: [1], schedule: {}, active: true },
+      { id: 2, name: 'Second therapist', branches: [1], schedule: {}, active: true },
+    ];
+    const events = therapists.map((therapist) => ({
+      id: `event-${therapist.id}`, therapistName: therapist.name, summary: `${therapist.name} appointment`,
+      localTime: '11:00', start: `${date}T11:00:00-04:00`, end: `${date}T12:00:00-04:00`,
+    }));
+    events.push({ ...events[0], id: 'unassigned', therapistName: 'Any Available', summary: 'Unassigned booking' });
+    const fixture = { compactCalendar: true, calendarViewMode: 'therapists', calendarDate: date, calendarEvents: events };
+    const first = render('calendar', 'en', fixture, { therapists });
+    assert.match(first, /Tanya appointment/);
+    assert.doesNotMatch(first, /Second therapist appointment|Unassigned booking/);
+    assert.match(first, /<option value="2">Second therapist<\/option>/);
+    assert.match(first, /<option value="unassigned">Unassigned appointments<\/option>/);
+    const second = render('calendar', 'en', { ...fixture, mobileCalendarColumn: '2' }, { therapists });
+    assert.match(second, /Second therapist appointment/);
+    assert.doesNotMatch(second, /Tanya appointment|Unassigned booking/);
+    const unassigned = render('calendar', 'en', { ...fixture, mobileCalendarColumn: 'unassigned' }, { therapists });
+    assert.match(unassigned, /Unassigned booking/);
+    assert.doesNotMatch(unassigned, /Tanya appointment|Second therapist appointment/);
+    const fallback = render('calendar', 'en', { ...fixture, mobileCalendarColumn: 'removed' }, { therapists });
+    assert.match(fallback, /Tanya appointment/);
+    const desktop = render('calendar', 'en', { ...fixture, compactCalendar: false }, { therapists });
+    for (const event of events) assert.ok(desktop.includes(event.summary));
+    const agenda = render('calendar', 'en', { ...fixture, calendarViewMode: 'agenda', mobileCalendarColumn: '2' }, { therapists });
+    for (const event of events) assert.ok(agenda.includes(event.summary), 'Column selection must not filter the agenda');
+  });
+
+  test('compact calendar breakpoint subscription updates and cleans up on resize', () => {
+    let effect;
+    const visit = (node) => {
+      if (ts.isCallExpression(node) && node.expression.getText(ast) === 'useEffect' &&
+          node.arguments[0]?.getText(ast).includes('const syncCompactCalendar')) effect = node.arguments[0].getText(ast);
+      ts.forEachChild(node, visit);
+    };
+    visit(portal);
+    let listener;
+    const changes = [];
+    const query = {
+      matches: true,
+      addEventListener(type, callback) { assert.equal(type, 'change'); listener = callback; },
+      removeEventListener(type, callback) { assert.equal(type, 'change'); assert.equal(callback, listener); listener = null; },
+    };
+    const cleanup = vm.runInNewContext(`(${effect})()`, {
+      window: { matchMedia(value) { assert.equal(value, '(max-width: 1023px)'); return query; } },
+      setCompactCalendar(value) { changes.push(value); },
+    });
+    query.matches = false;
+    listener();
+    assert.deepEqual(changes, [true, false]);
+    cleanup();
+    assert.equal(listener, null);
+  });
+
+  test('phone layout fits the grid without altering appointment geometry or hiding warnings', () => {
+    const css = postcss.parse(readFileSync(new URL('../src/index.css', import.meta.url), 'utf8'));
+    const media = css.nodes.find((node) => node.type === 'atrule' && node.params === '(max-width: 1023px)');
+    assert.ok(media);
+    const declarations = (selector) => {
+      const result = {};
+      media.walkRules((rule) => {
+        if (rule.selectors.includes(selector)) rule.walkDecls((decl) => { result[decl.prop] = decl.value; });
+      });
+      return result;
+    };
+    assert.equal(declarations('.booking-calendar .calendar-grid > .grid')['grid-template-columns'], '48px minmax(0, 1fr)');
+    assert.equal(declarations('.booking-calendar .calendar-scroll').overflow, 'visible');
+    assert.equal(declarations('.booking-calendar .calendar-scroll')['max-height'], 'none');
+    assert.equal(declarations('.booking-calendar .calendar-agenda > div > button').opacity, '1');
+    assert.equal(declarations('.booking-calendar .calendar-agenda button')['min-height'], '44px');
+    assert.deepEqual(declarations('.booking-calendar .calendar-grid button'), {}, 'Duration cards must keep their exact height');
+    assert.match(render('calendar', 'en', { compactCalendar: true, calendarWarnings: ['Visible calendar warning'] }), /Visible calendar warning/);
   });
   const declarations = (selector) => {
     const result = {};

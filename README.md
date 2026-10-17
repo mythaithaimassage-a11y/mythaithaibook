@@ -138,7 +138,20 @@ Booking Calendar, and Sales & reports shortcuts. **All sections** opens a
 scrollable menu grouped by Workspace, Manage, and Grow; selecting a section
 closes the menu. Schedule bookings appear as labeled cards with the same
 Edit booking, Appointment details, and Clear actions. Touch controls are larger.
-Desktop, other staff views, and customer booking workflows are unchanged.
+These navigation and schedule-card changes are owner-only; customer booking
+workflows are unchanged.
+
+On phones and tablets (below 1024px), Booking Calendar automatically opens the compact
+Agenda view. Selecting Daily or Therapist schedule keeps that choice while
+resizing; otherwise the desktop therapist grid returns on wider screens.
+The phone therapist schedule shows one selectable therapist column at a time,
+including an Unassigned appointments option when needed, without changing
+appointment filters. Controls use labeled icons, business hours and the
+therapist legend can be expanded, and the calendar uses one vertical page
+scroll instead of a nested scrolling grid. The large workspace banner is
+collapsed under **Owner workspace**, and calendar totals use compact icon
+counters. Booking actions, appointment
+details, durations, overlaps, buffers, and desktop behavior remain unchanged.
 
 The dashboard **Booking Calendar** includes appointment search, Daily/Agenda
 views, branch and therapist filters, display/auto-refresh settings, and
