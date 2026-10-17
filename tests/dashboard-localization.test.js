@@ -143,6 +143,19 @@ test('all dashboard sections retain a current title and usable mobile navigation
   assert.match(render('patient-history', 'en', { compactCalendar: true }), /Confidential health information/);
 });
 
+test('mobile therapist filter is visible without expanding filters and retains its selection', () => {
+  const filter = (html) => html.match(/<label class="text-xs font-semibold text-stone-600">Therapist<select[\s\S]*?<\/select>/g) || [];
+  const mobile = render('calendar', 'en', { compactCalendar: true, calendarFiltersOpen: false });
+  assert.equal(filter(mobile).length, 1);
+  assert.match(filter(mobile)[0], /value="all" selected/);
+  assert.match(filter(mobile)[0], /<option value="1">Tanya<\/option>/);
+  const selected = render('calendar', 'en', { compactCalendar: true, calendarTherapist: '1' });
+  assert.match(filter(selected)[0], /value="1" selected/);
+  assert.equal(filter(render('calendar', 'en', { compactCalendar: true, calendarFiltersOpen: true })).length, 1);
+  assert.equal(filter(render('calendar', 'en', { compactCalendar: false, calendarFiltersOpen: false })).length, 0);
+  assert.equal(filter(render('calendar', 'en', { compactCalendar: false, calendarFiltersOpen: true })).length, 1);
+});
+
 test('appointment settings migration button disappears after BigQuery takes over', () => {
   const beforeImport = render('branches', 'en', { appointmentConfigSource: 'sheets' });
   assert.match(beforeImport, /Appointment settings storage/);
@@ -292,18 +305,19 @@ test('responsive staff styles stay below 1024px, with scrollable menus and 44px 
     for (const selector of rule.selectors) assert.ok(selector.startsWith('.staff-dashboard '), selector);
   });
 
-  test('phone calendars default to agenda, retain all appointments and allow explicit view choices', () => {
+  test('phone calendars default to daily, retain all appointments and allow explicit view choices', () => {
     const events = [{
       id: 'phone-event', summary: 'Phone appointment', therapistName: 'Tanya',
       localTime: '11:00', start: '2026-10-10T11:00:00-04:00', end: '2026-10-10T12:00:00-04:00',
       booking: { ...booking, bookingNote: 'Important team note' },
     }];
     const mobile = render('calendar', 'en', { compactCalendar: true, calendarEvents: events });
-    assert.match(mobile, /value="agenda" selected/);
-    assert.match(mobile, /calendar-agenda/);
+    assert.match(mobile, /value="daily" selected/);
+    assert.match(mobile, /calendar-schedule/);
+    assert.doesNotMatch(mobile, /calendar-agenda/);
     assert.match(mobile, /Phone appointment/);
     assert.match(mobile, /Important team note/);
-    for (const action of ['Open appointment', 'Calendar settings', 'Calendar filters', 'Add ▾', 'Manage ▾', 'Refresh']) {
+    for (const action of ['Calendar settings', 'Calendar filters', 'Add ▾', 'Manage ▾', 'Refresh']) {
       assert.ok(mobile.includes(`aria-label="${action}"`), action);
     }
     assert.doesNotMatch(mobile, /calendar-legend[^>]* open=""/);
@@ -311,7 +325,7 @@ test('responsive staff styles stay below 1024px, with scrollable menus and 44px 
     assert.match(mobile, /<details><summary class="calendar-context-toggle/);
     assert.match(mobile, /class="calendar-stats /);
     assert.match(render('calendar', 'en', { compactCalendar: false }), /value="therapists" selected/);
-    assert.match(render('calendar', 'en', { compactCalendar: true, calendarViewMode: 'daily' }), /value="daily" selected/);
+    assert.match(render('calendar', 'en', { compactCalendar: true, calendarViewMode: 'agenda' }), /value="agenda" selected/);
     assert.match(render('calendar', 'en', { compactCalendar: false, calendarViewMode: 'agenda' }), /value="agenda" selected/);
   });
 
@@ -475,6 +489,12 @@ test('owner menu toggles, closes after navigation and supports Escape without bo
   calendar.props.onClick();
   assert.equal(values.activeTab, 'calendar');
   assert.equal(values.mobileNavOpen, false);
+  values.compactCalendar = true;
+  const therapistFilter = walk(tree(), (node) => node.type === 'select' && node.props.onChange?.toString().includes('setCalendarTherapist'));
+  assert.ok(therapistFilter, 'Mobile therapist filter is available without opening filters');
+  therapistFilter.props.onChange({ target: { value: '1' } });
+  assert.equal(values.calendarTherapist, '1');
+  assert.equal(values.calendarFiltersOpen, false);
 });
 
 test('managers and receptionists can edit bookings and issue receipts without manual discounts or medical access', () => {

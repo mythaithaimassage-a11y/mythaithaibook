@@ -153,7 +153,9 @@ accounts for the navigation bar and device safe area. Desktop layouts and
 public booking workflows are unchanged.
 
 On phones and tablets (below 1024px), Booking Calendar automatically opens the compact
-Agenda view. Selecting Daily or Therapist schedule keeps that choice while
+Daily view, with the therapist filter always visible (initially **All therapists**).
+Branch and couple filters remain under the filters button.
+Selecting Agenda or Therapist schedule keeps that choice while
 resizing; otherwise the desktop therapist grid returns on wider screens.
 The phone therapist schedule shows one selectable therapist column at a time,
 including an Unassigned appointments option when needed, without changing

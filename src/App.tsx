@@ -4659,7 +4659,7 @@ function AdminPortal({
     typeof window !== 'undefined' && window.matchMedia('(max-width: 1023px)').matches);
   const [mobileCalendarColumn, setMobileCalendarColumn] = useState('');
   const resolvedCalendarViewMode = calendarViewMode === 'auto'
-    ? (compactCalendar ? 'agenda' : 'therapists') : calendarViewMode;
+    ? (compactCalendar ? 'daily' : 'therapists') : calendarViewMode;
   const [calendarFullscreen, setCalendarFullscreen] = useState(false);
   const [calendarFullscreenError, setCalendarFullscreenError] = useState('');
   const calendarPanelRef = useRef(null);
@@ -7119,7 +7119,7 @@ function AdminPortal({
                   {dashboardBranches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
                 </select>
               </label>}
-              {calendarFiltersOpen && <label className="text-xs font-semibold text-stone-600">{tr("Therapist")}<select value={calendarTherapist} onChange={(event) => setCalendarTherapist(event.target.value)} className="block mt-1 p-2 rounded-lg border border-stone-300">
+              {(compactCalendar || calendarFiltersOpen) && <label className="text-xs font-semibold text-stone-600">{tr("Therapist")}<select value={calendarTherapist} onChange={(event) => setCalendarTherapist(event.target.value)} className="block mt-1 p-2 rounded-lg border border-stone-300">
                   <option value="all">{tr("All therapists")}</option>
                   {therapists.map((therapist) => <option key={therapist.id} value={therapist.id}>{therapist.name}</option>)}
                 </select>
