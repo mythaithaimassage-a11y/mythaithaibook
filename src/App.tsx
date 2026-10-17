@@ -4682,22 +4682,55 @@ function AdminPortal({
 
   useEffect(() => {
     const syncFullscreenState = () => {
-      setCalendarFullscreen(document.fullscreenElement === calendarPanelRef.current);
+      setCalendarFullscreen(Boolean(calendarPanelRef.current) && document.fullscreenElement === calendarPanelRef.current);
     };
     document.addEventListener('fullscreenchange', syncFullscreenState);
     return () => document.removeEventListener('fullscreenchange', syncFullscreenState);
   }, []);
 
+  useEffect(() => {
+    if (activeTab !== 'calendar') setCalendarFullscreen(false);
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (!calendarFullscreen || activeTab !== 'calendar') return;
+    const bodyOverflow = document.body.style.overflow;
+    const rootOverflow = document.documentElement.style.overflow;
+    document.body.style.overflow = 'hidden';
+    document.documentElement.style.overflow = 'hidden';
+    const exitViewportCalendar = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !event.defaultPrevented &&
+          !selectedCalendarEvent && !quickBooking && !editingBooking &&
+          document.fullscreenElement !== calendarPanelRef.current) {
+        setCalendarFullscreen(false);
+      }
+    };
+    document.addEventListener('keydown', exitViewportCalendar);
+    return () => {
+      document.body.style.overflow = bodyOverflow;
+      document.documentElement.style.overflow = rootOverflow;
+      document.removeEventListener('keydown', exitViewportCalendar);
+    };
+  }, [calendarFullscreen, activeTab, selectedCalendarEvent, quickBooking, editingBooking]);
+
   const toggleCalendarFullscreen = async () => {
     setCalendarFullscreenError('');
+    const panel = calendarPanelRef.current;
     try {
-      if (document.fullscreenElement === calendarPanelRef.current) {
+      if (!panel) throw new Error('Unable to change calendar fullscreen mode.');
+      if (document.fullscreenElement === panel && typeof document.exitFullscreen === 'function') {
         await document.exitFullscreen();
+      } else if (calendarFullscreen) {
+        setCalendarFullscreen(false);
+      } else if (typeof panel.requestFullscreen === 'function' &&
+                 typeof document.exitFullscreen === 'function' && document.fullscreenEnabled !== false) {
+        await panel.requestFullscreen();
       } else {
-        await calendarPanelRef.current?.requestFullscreen();
+        setCalendarFullscreen(true);
       }
     } catch (error) {
       setCalendarFullscreenError(error instanceof Error ? error.message : 'Unable to change calendar fullscreen mode.');
+      if (panel && !calendarFullscreen) setCalendarFullscreen(true);
     }
   };
   const [isSavingUnavailability, setIsSavingUnavailability] = useState(false);

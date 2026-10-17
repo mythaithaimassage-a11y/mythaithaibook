@@ -386,7 +386,8 @@ test('calendar toolbar opens manual booking with search applied to both calendar
 test('booking calendar can be fitted to the viewport and exits on browser fullscreen changes', () => {
   const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
   assert.match(app, /ref=\{calendarPanelRef\} className=\{calendarFullscreen/);
-  assert.match(app, /calendarPanelRef\.current\?\.requestFullscreen\(\)/);
+  assert.match(app, /typeof panel\.requestFullscreen === 'function'/);
+  assert.match(app, /await panel\.requestFullscreen\(\)/);
   assert.match(app, /document\.exitFullscreen\(\)/);
   assert.match(app, /document\.addEventListener\('fullscreenchange', syncFullscreenState\)/);
   assert.match(app, /aria-label=\{tr\(calendarFullscreen \? 'Exit fullscreen calendar' : 'Fit calendar to screen'\)\}/);

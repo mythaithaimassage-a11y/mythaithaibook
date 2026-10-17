@@ -153,6 +153,14 @@ collapsed under **Owner workspace**, and calendar totals use compact icon
 counters. Booking actions, appointment
 details, durations, overlaps, buffers, and desktop behavior remain unchanged.
 
+**Fit to screen** uses browser fullscreen when supported. On mobile browsers
+without that API (including iPhone browsers), it expands the calendar within
+the current browser viewport instead. Use **Exit fullscreen** to return;
+Escape also exits the viewport layout when no appointment dialog is open.
+The background page stays locked while the fitted calendar scrolls. If a
+browser rejects a native fullscreen request, the viewport layout still opens
+and the browser error is shown.
+
 The dashboard **Booking Calendar** includes appointment search, Daily/Agenda
 views, branch and therapist filters, display/auto-refresh settings, and
 **Manage** and **Add** menus. **Add > Quick Sale** and **Add > Appointment**
