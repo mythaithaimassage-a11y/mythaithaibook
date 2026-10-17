@@ -158,7 +158,13 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
     },
   } }));
   const emails = [];
-  t.mock.method(google, 'gmail', () => ({ users: { messages: { send: async (request) => { emails.push(request); return { data: { id: 'email' } }; } } } }));
+  const staffEmails = [];
+  t.mock.method(google, 'gmail', () => ({ users: { messages: { send: async (request) => {
+    const raw = Buffer.from(request.requestBody.raw, 'base64url').toString();
+    const staffSubject = Buffer.from('New appointment booked').toString('base64');
+    (raw.includes(`Subject: =?UTF-8?B?${staffSubject}?=`) ? staffEmails : emails).push(request);
+    return { data: { id: 'email' } };
+  } } } }));
   t.mock.method(BigQuery.prototype, 'dataset', () => ({
     exists: async () => [true],
     table: () => ({
@@ -227,6 +233,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
       return [[{ name: 'Existing Client', email: 'client@example.com', phone: '+1 (437) 898-7424' }]];
     }
     if (query.includes('dashboard_users')) {
+      if (query.startsWith('SELECT email, role, branch_ids, status')) return [dashboardUsers.filter((user) => user.status === 'active')];
       if (query.startsWith('SELECT id FROM') && query.includes("role = 'owner'")) {
         return [dashboardUsers.filter((user) => user.role === 'owner').map(({ id }) => ({ id }))];
       }
@@ -262,6 +269,9 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
         }
         return [[]];
       }
+    }
+    if (query.startsWith('SELECT booking_id, customer_name, branch_name')) {
+      return [records.filter((record) => record.created_at >= params.from && record.created_at <= params.now)];
     }
     if (query.startsWith('SELECT * FROM `test-project.booking_system.bookings`')) return [records];
     if (query.startsWith('INSERT INTO `test-project.booking_system.bookings`')) { records.push(params); return [[]]; }
@@ -320,6 +330,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
     date: '2026-11-01', time: '10:00 AM', durationMinutes: 60,
     subtotalAmount: '100', taxRate: 0.13, paymentOption: 'clinic', skipPatientHistory: true,
   };
+  assert.equal((await request('booking-notifications', null, { method: 'GET' })).code, 401);
   assert.equal((await request('', { ...base, time: '09:45 AM' })).code, 400);
   assert.equal((await request('reschedule-booking', { bookingId: 'MTT-test', email: base.email, date: base.date, time: '09:30 AM' })).code, 404);
   assert.equal(events.length, 0);
@@ -658,6 +669,14 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
     const result = await request('manual-booking', { ...manual, ...invalid });
     assert.equal(result.code, 400, JSON.stringify({ invalid, data: result.data }));
   }
+  for (const details of [
+    { email: '', phone: '' }, { email: ' ', phone: ' ' },
+    { email: 'invalid@email', phone: manual.contact },
+    { email: 'client@example.com', phone: '123' },
+  ]) {
+    const result = await request('manual-booking', { ...manual, contact: undefined, ...details });
+    assert.equal(result.code, 400, JSON.stringify(result.data));
+  }
   branchRows.push([2, 'Unassigned Branch', '', '', '', 'TRUE', '', 'TRUE', 'TRUE', 'TRUE', 'TRUE']);
   branchConfigRows.push({
     ...branchConfigRows[0], id: '2', name: 'Unassigned Branch',
@@ -674,12 +693,28 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   assert.equal((await request('manual-booking', manual)).code, 409);
   blockRows = [['Block ID']];
   assert.equal(events.length, eventCount, 'Invalid or unavailable bookings do not create events');
-  const phoneBooking = await request('manual-booking', manual);
+  const phoneBooking = await request('manual-booking', { ...manual, contact: undefined, email: '', phone: manual.contact });
   assert.equal(phoneBooking.code, 200, JSON.stringify(phoneBooking.data));
   assert.match(phoneBooking.data.bookingId, /^MTT-/);
   assert.equal(phoneBooking.data.emailSkipped, true);
   assert.equal(phoneBooking.data.emailSent, false);
   assert.equal(phoneBooking.data.emailError, '');
+  assert.equal(phoneBooking.data.staffNotificationError, '');
+  assert.ok(phoneBooking.data.staffEmailsSent >= 2, 'Phone-only bookings still alert dashboard owners and branch staff');
+  const staffMessage = Buffer.from(staffEmails.at(-1).requestBody.raw, 'base64url').toString();
+  const staffBody = staffMessage.match(/Content-Type: text\/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n([\s\S]*?)\r\n--/)[1];
+  const staffText = Buffer.from(staffBody.replace(/\s/g, ''), 'base64').toString();
+  assert.match(staffText, /Branch: Test Branch/);
+  assert.match(staffText, /Duration: 60 minutes/);
+  assert.doesNotMatch(staffText, /undefined|Internal team reference/);
+  const baseline = await request('booking-notifications', null, { method: 'GET' });
+  assert.equal(baseline.code, 200);
+  assert.deepEqual(baseline.data.notifications, []);
+  const feed = await request('booking-notifications', null, { method: 'GET', query: { since: new Date(Date.parse(baseline.data.cursor) - 60000).toISOString() } });
+  assert.equal(feed.code, 200);
+  assert.ok(feed.data.notifications.some((item) => item.id === phoneBooking.data.bookingId));
+  assert.ok(feed.data.notifications.every((item) => item.branchName === 'Test Branch'));
+  assert.equal((await request('booking-notifications', null, { method: 'GET', query: { since: 'bad' } })).code, 400);
   assert.equal(phoneBooking.data.patientHistorySkipped, true);
   assert.equal(phoneBooking.data.patientHistorySaved, false);
   assert.equal(phoneBooking.data.paidAmount, '0.00');
@@ -692,10 +727,12 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   assert.doesNotMatch(events.at(-1).requestBody.description, /Internal team reference/);
   assert.equal(histories.length, historyCount);
   assert.equal(emails.length, emailCount, 'Phone-only bookings do not attempt email delivery');
-  const emailBooking = await request('manual-booking', { ...manual, contact: 'Client@Example.com', email: 'client@example.com', phone: manual.contact, serviceId: '2', therapistId2: '2', time: '11:15 AM' });
+  const emailBooking = await request('manual-booking', { ...manual, contact: undefined, email: ' Client@Example.com ', phone: manual.contact, serviceId: '2', therapistId2: '2', time: '11:15 AM' });
   assert.equal(emailBooking.code, 200, JSON.stringify(emailBooking.data));
   assert.equal(emailBooking.data.emailSkipped, false);
   assert.equal(emailBooking.data.emailSent, true);
+  assert.equal(records.at(-1).email, 'client@example.com');
+  assert.equal(records.at(-1).phone, manual.contact);
   assert.equal(emailBooking.data.therapistName, 'Test Therapist, Second Therapist');
   assert.equal(records.at(-1).service_name, 'Couple Massage');
   assert.equal(records.at(-1).duration_minutes, 60, 'Both therapists share the couple package duration');
@@ -748,11 +785,13 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   cookie = ownerCookie;
   t.mock.method(google, 'gmail', () => ({ users: { messages: { send: async () => { throw new Error('Synthetic confirmation delivery failure'); } } } }));
   const recordsBeforeEmailFailure = records.length;
-  const savedWithoutEmail = await request('manual-booking', { ...manual, contact: 'owner-client@example.com', time: '01:45 PM' });
+  const savedWithoutEmail = await request('manual-booking', { ...manual, contact: undefined, email: 'owner-client@example.com', phone: '', time: '01:45 PM' });
   assert.equal(savedWithoutEmail.code, 200, JSON.stringify(savedWithoutEmail.data));
   assert.equal(savedWithoutEmail.data.emailSent, false);
   assert.equal(savedWithoutEmail.data.emailSkipped, false);
   assert.match(savedWithoutEmail.data.emailError, /Synthetic confirmation delivery failure/);
+  assert.equal(savedWithoutEmail.data.staffEmailsSent, 0);
+  assert.match(savedWithoutEmail.data.staffNotificationError, /staff booking email\(s\) failed/);
   assert.equal(records.length, recordsBeforeEmailFailure + 1, 'Confirmation failures do not discard the saved appointment');
   assert.equal(events.length, eventCount + 4);
   assert.equal(histories.length, historyCount);

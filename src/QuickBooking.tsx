@@ -3,6 +3,7 @@ import { X } from 'lucide-react';
 import { message, useTranslation, type TranslationMessage } from './localization';
 import { branchAppointmentTimes, type WeeklyBusinessHours } from '../lib/booking-options.js';
 import useTherapistAvailability from './useTherapistAvailability';
+import { validateBookingContact } from '../lib/booking-contact.js';
 
 type Branch = { id: number; name: string; active?: boolean; businessHours?: WeeklyBusinessHours };
 type Service = { id: number; name: string; active?: boolean; isRmt?: boolean; duration?: number; price?: number };
@@ -29,7 +30,7 @@ export default function QuickBooking(props: Props) {
   const singleServices = activeServices.filter((item) => !/couple/i.test(item.name));
   const initialService = activeServices.find((item) => singleServices.includes(item) || couplePackages.includes(item));
   const [name, setName] = useState('');
-  const [contact, setContact] = useState('');
+  const [email, setEmail] = useState('');
   const [bookingNote, setBookingNote] = useState('');
   const [date, setDate] = useState(props.date);
   const [branchId, setBranchId] = useState(props.branchId === 'all' ? String(props.branches.find((branch) => branch.active !== false)?.id || '') : props.branchId);
@@ -46,6 +47,7 @@ export default function QuickBooking(props: Props) {
   const [searchError, setSearchError] = useState('');
   const [activeCustomer, setActiveCustomer] = useState(-1);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+  const [phone, setPhone] = useState('');
   const dialog = useRef<HTMLDialogElement>(null);
   const submitting = useRef(false);
   const selectableServices = couplePackage ? couplePackages : singleServices;
@@ -94,7 +96,8 @@ export default function QuickBooking(props: Props) {
 
   const selectCustomer = (customer: Customer) => {
     setName(customer.name);
-    setContact(customer.email || customer.phone);
+    setEmail(customer.email);
+    setPhone(customer.phone);
     setSelectedCustomer(customer);
     setSearchOpen(false);
     setCustomers([]);
@@ -118,15 +121,19 @@ export default function QuickBooking(props: Props) {
     setError('');
     try {
       if (!service) throw new Error('Choose an available service or couple package.');
+      const contactDetails = validateBookingContact({ email, phone });
       const response = await fetch('/api/booking?view=manual-booking', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ customerName: name, contact, ...(selectedCustomer ? { email: selectedCustomer.email, phone: selectedCustomer.phone } : {}), branchId, serviceId, therapistId: validTherapistId, therapistId2: couple ? validTherapistId2 : '', date, time: validTime, bookingNote }),
+        body: JSON.stringify({ customerName: name, ...contactDetails, branchId, serviceId, therapistId: validTherapistId, therapistId2: couple ? validTherapistId2 : '', date, time: validTime, bookingNote }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || 'Unable to save this appointment.');
-      const confirmation = data.emailSkipped ? message('Phone-only booking; no email confirmation sent.')
+      const customerConfirmation = data.emailSkipped ? message('Phone-only booking; no email confirmation sent.')
         : data.emailSent ? message('Confirmation email sent.') : message('Confirmation email was not sent: {error}', { error: message(data.emailError || '') });
+      const confirmation = data.staffNotificationError
+        ? message('{confirmation} Staff booking alert failed: {error}', { confirmation: customerConfirmation, error: data.staffNotificationError })
+        : customerConfirmation;
       await props.onSaved({ date, branchId, therapistId: validTherapistId, notice: message('Appointment {id} saved. No payment collected. {confirmation}', { id: data.bookingId, confirmation }) });
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : 'Unable to save this appointment.');
@@ -194,11 +201,17 @@ export default function QuickBooking(props: Props) {
             </div>
           </div>}
         </div>
-        <label className="block text-xs font-bold text-stone-700">{tr('Email or phone number')}<input required maxLength={254} value={contact} onChange={(event) => {
-          setContact(event.target.value);
-          setSelectedCustomer(null);
-        }} placeholder={tr('client@example.com or +1 437 898 7424')} className={inputClass} /></label>
-        {selectedCustomer?.email && selectedCustomer.phone && <p className="text-xs text-stone-500">{selectedCustomer.email} / {selectedCustomer.phone}</p>}
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="block text-xs font-bold text-stone-700">{tr('Email')}<input type="email" autoComplete="email" required={!phone.trim()} maxLength={254} value={email} onChange={(event) => {
+            setEmail(event.target.value);
+            setSelectedCustomer(null);
+          }} aria-describedby="quick-booking-contact-help" placeholder="client@example.com" className={inputClass} /></label>
+          <label className="block text-xs font-bold text-stone-700">{tr('Phone')}<input type="tel" autoComplete="tel" required={!email.trim()} maxLength={40} value={phone} onChange={(event) => {
+            setPhone(event.target.value);
+            setSelectedCustomer(null);
+          }} aria-describedby="quick-booking-contact-help" placeholder="+1 437 898 7424" className={inputClass} /></label>
+        </div>
+        <p id="quick-booking-contact-help" className="text-xs text-stone-500">{tr('Enter at least one email address or phone number.')}</p>
         <label className="flex items-start gap-3 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm font-semibold text-stone-800">
           <input type="checkbox" checked={couplePackage} disabled={saving} onChange={(event) => toggleCouplePackage(event.target.checked)}
             className="mt-0.5 h-4 w-4 accent-blue-600" />

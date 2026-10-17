@@ -68,7 +68,7 @@ function customerHarness(fetch, overrides = {}) {
   };
   const testModule = { exports: {} };
   vm.runInNewContext(compiled, {
-    exports: testModule.exports, fetch, URLSearchParams, AbortController,
+    exports: testModule.exports, fetch, URLSearchParams, AbortController, Error,
     setTimeout(callback, delay) { assert.equal(delay, 250); timers.set(++timerId, callback); return timerId; },
     clearTimeout(id) { timers.delete(id); },
     require(specifier) {
@@ -132,7 +132,7 @@ test('client name searches by name, email or formatted phone and selection autof
   await ui.find((node) => node.type === 'form').props.onSubmit({ preventDefault() {} });
   const payload = JSON.parse(requests.at(-1).options.body);
   assert.equal(payload.customerName, customer.name);
-  assert.equal(payload.contact, customer.email);
+  assert.equal(payload.contact, undefined);
   assert.equal(payload.email, customer.email);
   assert.equal(payload.phone, customer.phone);
   assert.equal(payload.date, props.date);
@@ -149,7 +149,8 @@ test('customer suggestions support keyboard selection, phone-only contacts and E
   assert.equal(ui.input().props['aria-activedescendant'], 'quick-booking-customer-0');
   ui.input().props.onKeyDown({ key: 'Enter', preventDefault() {} });
   assert.equal(ui.input().props.value, 'Phone Client');
-  assert.equal(ui.find((node) => node.type === 'input' && node.props.maxLength === 254).props.value, '437-898-7424');
+  assert.equal(ui.find((node) => node.type === 'input' && node.props.type === 'email').props.value, '');
+  assert.equal(ui.find((node) => node.type === 'input' && node.props.type === 'tel').props.value, '437-898-7424');
   await ui.search('Phone');
   let stopped = false;
   ui.input().props.onKeyDown({ key: 'Escape', preventDefault() {}, stopPropagation() { stopped = true; } });
@@ -171,9 +172,9 @@ test('search failures and no matches are explicit and manual client entry remain
   await ui.find((node) => node.type === 'form').props.onSubmit({ preventDefault() {} });
   const payload = JSON.parse(requests.at(-1).options.body);
   assert.equal(payload.customerName, 'New Client 2');
-  assert.equal(payload.contact, 'new@example.com');
-  assert.equal(payload.email, undefined);
-  assert.equal(payload.phone, undefined);
+  assert.equal(payload.contact, undefined);
+  assert.equal(payload.email, 'new@example.com');
+  assert.equal(payload.phone, '');
 });
 
 test('debouncing cancels old requests and stale results cannot replace the current customer search', async () => {
@@ -201,11 +202,13 @@ test('debouncing cancels old requests and stale results cannot replace the curre
   assert.equal(requests.length, 2);
 });
 
-test('quick booking renders name, one contact input, therapist and time dropdowns without payment or intake fields', () => {
+test('quick booking renders separate email and phone fields, therapist and time dropdowns without payment or intake fields', () => {
   const html = render();
   assert.match(html, /<dialog[^>]*aria-labelledby="quick-booking-title"/);
   assert.match(html, /Client name<input[^>]*required=""[^>]*maxLength="150"/);
-  assert.match(html, /Email or phone number<input[^>]*required=""/);
+  assert.match(html, /Email<input[^>]*type="email"[^>]*required=""/);
+  assert.match(html, /Phone<input[^>]*type="tel"[^>]*required=""/);
+  assert.match(html, /Enter at least one email address or phone number/);
   assert.match(html, /Therapist<select required=""/);
   assert.match(html, /Time<select required=""/);
   assert.equal((html.match(/<select/g) || []).length, 4);
@@ -216,11 +219,57 @@ test('quick booking renders name, one contact input, therapist and time dropdown
   assert.doesNotMatch(html, /Off Duty|Inactive Therapist|Inactive service/);
   assert.match(html, /type="checkbox"/);
   assert.match(html, /Couple massage \(2 people\)/);
-  assert.doesNotMatch(html, /type="radio"|type="email"|type="tel"/);
+  assert.doesNotMatch(html, /type="radio"/);
   assert.match(html, /Internal booking note \(optional\)/);
   assert.match(html, /<textarea maxLength="2000"/);
   assert.match(html, /Save appointment/);
   for (const time of AVAILABLE_TIMES) assert.ok(html.includes(time), `Missing time ${time}`);
+});
+
+test('either contact field satisfies the requirement; both are accepted and validated when present', async () => {
+  for (const [email, phone] of [
+    ['', ''], ['client@example.com', ''], ['', '437-898-7424'],
+    [' Client@Example.com ', '+1 (437) 898-7424'],
+    ['invalid@email', '437-898-7424'], ['client@example.com', '123'],
+  ]) {
+    const requests = [];
+    const ui = customerHarness(async (url, options) => {
+      requests.push({ url, options });
+      return { ok: true, json: async () => ({ bookingId: 'new-booking', emailSent: true }) };
+    });
+    ui.input().props.onChange({ target: { value: 'New Client' } });
+    ui.find((node) => node.props.type === 'email').props.onChange({ target: { value: email } });
+    ui.find((node) => node.props.type === 'tel').props.onChange({ target: { value: phone } });
+    assert.equal(ui.find((node) => node.props.type === 'email').props.required, !phone.trim());
+    assert.equal(ui.find((node) => node.props.type === 'tel').props.required, !email.trim());
+    await ui.find((node) => node.type === 'form').props.onSubmit({ preventDefault() {} });
+    if ((!email && !phone) || email === 'invalid@email' || phone === '123') {
+      assert.equal(requests.length, 0, 'Invalid contact details must not be submitted');
+      assert.match(renderToStaticMarkup(ui.render()), /role="alert"/);
+    } else {
+      const payload = JSON.parse(requests[0].options.body);
+      assert.equal(payload.email, email.trim().toLowerCase());
+      assert.equal(payload.phone, phone);
+    }
+  }
+});
+
+test('both autofilled contact fields stay editable without losing the other contact value', async () => {
+  const requests = [];
+  const customer = { name: 'Alice Smith', email: 'alice@example.com', phone: '437-898-7424' };
+  const ui = customerHarness(async (url, options) => {
+    requests.push({ url, options });
+    return { ok: true, json: async () => options?.method === 'POST' ? { bookingId: 'new-booking' } : { customers: [customer] } };
+  });
+  await ui.search('Alice');
+  ui.find((node) => node.props.role === 'option').props.onClick();
+  ui.find((node) => node.props.type === 'email').props.onChange({ target: { value: 'changed@example.com' } });
+  assert.equal(ui.find((node) => node.props.type === 'tel').props.value, customer.phone);
+  ui.find((node) => node.props.type === 'tel').props.onChange({ target: { value: '416-555-1234' } });
+  await ui.find((node) => node.type === 'form').props.onSubmit({ preventDefault() {} });
+  const payload = JSON.parse(requests.at(-1).options.body);
+  assert.equal(payload.email, 'changed@example.com');
+  assert.equal(payload.phone, '416-555-1234');
 });
 
 test('RMT and couple services restrict qualified staff and require a second therapist', () => {
@@ -264,6 +313,7 @@ test('couple checkbox selects an existing package of matching duration and submi
   const secondTherapist = () => ui.find((node) => node.type === 'select' && node.props.children?.some?.(
     (child) => child?.type === 'option' && child.props.children === 'Choose a different therapist'));
   secondTherapist().props.onChange({ target: { value: '4' } });
+  ui.find((node) => node.props.type === 'tel').props.onChange({ target: { value: '437-898-7424' } });
   await ui.find((node) => node.type === 'form').props.onSubmit({ preventDefault() {} });
   const payload = JSON.parse(requests.at(-1).options.body);
   assert.equal(payload.serviceId, '6');

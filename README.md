@@ -76,6 +76,30 @@ the primary calendar with `GOOGLE_PRIMARY_CALENDAR_ID`.
 
 ## Staff calendar and quick booking
 
+Therapist schedule cards cover the entire start-to-end interval (including
+appointments that start between quarter-hour rows). The configured therapist
+buffer remains separate from the appointment itself.
+
+Quick appointments have separate **Email** and **Phone** fields. At least one
+is required; both may be provided, and each populated field must be valid.
+Selecting an existing customer fills both fields, which remain editable.
+Phone-only bookings skip the customer confirmation email but still notify staff.
+
+New public and manual bookings email active dashboard owners and staff assigned
+to the booking's branch; the configured environment owner is included too.
+Therapist-only accounts are not recipients. Email delivery failures are logged
+and returned separately without undoing a saved appointment. Quick booking
+shows staff email failures alongside the customer confirmation status.
+
+While signed in, all dashboard sections check for new bookings every 15 seconds
+and show dismissible in-app popups, independent of calendar filters and
+auto-refresh settings. Branch staff only receive alerts for their assigned
+branches. Click **Enable browser booking alerts** to allow browser notifications;
+these require browser permission and an open app tab (background tabs may be
+throttled). Browser notifications omit customer details. No old-booking popup
+backlog is shown when first opening the dashboard. These alerts do not require
+marketing consent and do not change customer confirmation/reminder emails.
+
 In **Business profile**, **Minimum booking notice (minutes)** controls how far
 ahead customers must book (default: 15 minutes; whole minutes from 0 to 1440).
 Customer availability and booking/rescheduling requests enforce this notice in

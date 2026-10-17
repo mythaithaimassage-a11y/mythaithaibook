@@ -15,6 +15,8 @@ import { customerTypeForBooking } from '../lib/customer-type.js';
 import { isCoupleCandidate, branchesMatch } from '../lib/couple-pairing.js';
 import { applySavedTherapistAliases, parseTherapistAliases, planTherapistRename, readTherapistAliases, renameTherapistBookingBatch, renameTherapistLabel, saveTherapistAlias } from '../lib/therapist-rename.js';
 import { sendGmailMessage } from '../lib/gmail.js';
+import { validateBookingContact } from '../lib/booking-contact.js';
+import { bookingAlertRecipients, deliverBookingAlerts, readBookingNotifications } from '../lib/booking-notifications.js';
 import {
   collectAppointmentAlertCandidates,
   formatAppointmentReminderEmail,
@@ -5044,7 +5046,7 @@ export default async function handler(req, res) {
     const historyViews = ['booking-history-preview', 'clear-booking-history'];
     const wixCalendarViews = ['wix-calendar-sync'];
     const validGetViews = ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'business-name', 'square-config', 'google-reviews', 'branches', 'services', 'therapists', 'staff-work-schedule', 'available-therapists', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal', 'company-join', 'find-booking', 'availability', 'unavailability', 'appointment-config-status', 'campaign-log', 'campaign-audience-options', 'review-request-audience', 'appointment-alerts-audience', 'confirm-attendance', 'therapist-accounts', 'wix-contacts', 'dashboard-users'];
-    if (req.method === 'GET' && !validGetViews.includes(view) && !['therapist-name-merge', 'customer-search', 'wix-contacts-import', 'wix-bookings-import', ...packageViews, ...historyViews, ...wixCalendarViews].includes(view)) {
+    if (req.method === 'GET' && !validGetViews.includes(view) && !['booking-notifications', 'therapist-name-merge', 'customer-search', 'wix-contacts-import', 'wix-bookings-import', ...packageViews, ...historyViews, ...wixCalendarViews].includes(view)) {
       return res.status(404).json({ message: 'Unknown booking view' });
     }
     const ownerOnlyRequest =
@@ -5054,6 +5056,17 @@ export default async function handler(req, res) {
       (req.method === 'POST' && ['branches', 'services', 'therapists', 'unavailability'].includes(view));
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
     const dashboardSession = await getOwnerSession(req);
+    if (view === 'booking-notifications') {
+      res.setHeader('Cache-Control', 'no-store');
+      if (!['owner', 'branch_manager', 'branch_receptionist'].includes(dashboardSession?.role)) {
+        return res.status(dashboardSession ? 403 : 401).json({ message: 'Dashboard sign-in required' });
+      }
+      if (req.method !== 'GET') return res.status(405).json({ message: 'Method Not Allowed' });
+      const bigquery = getBigQueryClient();
+      await ensureBookingsTable(bigquery);
+      const branches = await getDashboardBranchNames(createSheetsClient(), dashboardSession);
+      return res.status(200).json(await readBookingNotifications(bigquery, bookingsTableRef(), req.query?.since, branches));
+    }
     if (['manual-booking', 'edit-booking', 'issue-receipt', 'mark-paid', 'check-in'].includes(view)) {
       res.setHeader('Cache-Control', 'no-store');
       if (!dashboardSession) return res.status(401).json({ message: 'Dashboard sign-in required' });
@@ -10017,22 +10030,10 @@ export default async function handler(req, res) {
       if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return res.status(400).json({ message: 'Appointment details are required.' });
       const customerName = String(payload.customerName || '').trim();
       const bookingNote = validateBookingNote(payload.bookingNote);
-      const contact = String(payload.contact || '').trim();
       const date = String(payload.date || '');
       const parsedDate = new Date(`${date}T12:00:00Z`);
       if (!customerName || customerName.length > 150) return res.status(400).json({ message: 'Enter a client name (up to 150 characters).' });
-      const isEmail = contact.includes('@');
-      if (isEmail ? contact.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact)
-        : contact.length > 40 || !/^\+?[\d\s().-]+$/.test(contact) || contact.replace(/\D/g, '').length < 7 || contact.replace(/\D/g, '').length > 15) {
-        return res.status(400).json({ message: 'Enter a valid email address or phone number.' });
-      }
-      const email = payload.email === undefined ? (isEmail ? contact.toLowerCase() : '') : String(payload.email).trim().toLowerCase();
-      const phone = payload.phone === undefined ? (isEmail ? '' : contact) : String(payload.phone).trim();
-      if ((email && (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) ||
-          (phone && (phone.length > 40 || !/^\+?[\d\s().-]+$/.test(phone) || phone.replace(/\D/g, '').length < 7 || phone.replace(/\D/g, '').length > 15)) ||
-          (isEmail ? email !== contact.toLowerCase() : phone !== contact)) {
-        return res.status(400).json({ message: 'Enter valid customer contact details matching the email or phone number.' });
-      }
+      const { email, phone } = validateBookingContact(payload);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== date) {
         return res.status(400).json({ message: 'Choose a valid appointment date.' });
       }
@@ -10362,6 +10363,34 @@ export default async function handler(req, res) {
 
     await bqInsertBookingRow(getBigQueryClient(), rowValues);
 
+    let staffNotificationError = '';
+    let staffEmailsSent = 0;
+    try {
+      const bigquery = getBigQueryClient();
+      await ensureDashboardAuthTables(bigquery);
+      const [users] = await bigquery.query({
+        query: `SELECT email, role, branch_ids, status FROM ${dashboardUsersTableRef()} WHERE status = 'active'`,
+      });
+      const recipients = bookingAlertRecipients(users, selectedBranch.id, isOwnerAuthConfigured() ? OWNER_ADMIN_EMAIL : '');
+      const delivery = await deliverBookingAlerts(recipients, (email) => sendFormattedLoyaltyEmail(createGmailApi(), {
+        email, name: 'Clinic team', subject: 'New appointment booked',
+        businessName: bookingProfile.businessName, heading: 'New appointment booked',
+        intro: `${payload.customerName} booked an appointment.`,
+        details: [
+          { label: 'Booking', value: payload.id }, { label: 'Branch', value: payload.branchName },
+          { label: 'Service', value: payload.serviceName }, { label: 'Therapist', value: therapistName },
+          { label: 'Date', value: payload.date }, { label: 'Start time', value: payload.time },
+          { label: 'Duration', value: `${payload.durationMinutes} minutes` },
+        ],
+        note: 'Open the booking calendar to view this appointment.',
+      }));
+      staffEmailsSent = delivery.sent;
+      if (delivery.failures.length) staffNotificationError = `${delivery.failures.length} staff booking email(s) failed. Check server logs before retrying.`;
+    } catch (error) {
+      staffNotificationError = error.message || 'Staff booking notifications failed.';
+      console.error('Staff booking notification error:', error);
+    }
+
     const hasLoyaltyEnrollmentRequest = payload.loyaltyOptIn === true || payload.platinumEnrollment === true;
     let loyaltyEnrollmentSaved = !hasLoyaltyEnrollmentRequest;
     let loyaltyEnrollmentError = '';
@@ -10445,6 +10474,8 @@ export default async function handler(req, res) {
       bookingId: payload.id,
       calendarId,
       calendarEventId: calendarEvent.data.id,
+      staffEmailsSent,
+      staffNotificationError,
       emailSent,
       emailSkipped,
       emailError,

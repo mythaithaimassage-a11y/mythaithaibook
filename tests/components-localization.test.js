@@ -115,7 +115,9 @@ for (const [name, props, english, thai] of screens) {
     assert.ok(!thaiHtml.includes(english));
     if (name === 'QuickBooking') {
       assert.match(thaiHtml, /aria-label="ปิดหน้าต่างเพิ่มนัดหมายด่วน"/);
-      assert.match(thaiHtml, /client@example.com หรือ/);
+      assert.match(thaiHtml, /อีเมล<input[^>]*type="email"/);
+      assert.match(thaiHtml, /โทรศัพท์<input[^>]*type="tel"/);
+      assert.match(thaiHtml, /กรอกอีเมลหรือหมายเลขโทรศัพท์อย่างน้อยหนึ่งอย่าง/);
       assert.match(thaiHtml, /value="1"[^>]*>นวดไทย/);
       assert.match(thaiHtml, /Tanya/);
       assert.match(thaiHtml, /Central/);
@@ -381,7 +383,7 @@ test('package balances, usage and deduction confirmation render localized templa
 
 test('Thai time options preserve original API values when a different time is selected', async () => {
   let sent;
-  const ui = harness('QuickBooking', 'th-TH', {}, async (_url, options) => {
+  const ui = harness('QuickBooking', 'th-TH', { 1: 'client@example.com' }, async (_url, options) => {
     sent = JSON.parse(options.body);
     return { ok: true, async json() { return { bookingId: 'B124', emailSent: true }; } };
   });
