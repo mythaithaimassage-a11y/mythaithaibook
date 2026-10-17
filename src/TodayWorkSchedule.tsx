@@ -15,6 +15,9 @@ type Props = {
   branches: Branch[];
   therapists: Therapist[];
   initialBranchId: string;
+  initialDate?: string;
+  onBusyChange?: (busy: boolean) => void;
+  onSaved?: () => void;
   onOpenFullSchedule: (branchId: string, date: string) => void;
 };
 
@@ -26,9 +29,9 @@ function shiftKey(therapistId: number | string) {
   return String(therapistId);
 }
 
-export default function TodayWorkSchedule({ branches, therapists, initialBranchId, onOpenFullSchedule }: Props) {
-  const { translate: tr } = useTranslation();
-  const [date] = useState(() => localDateKey(new Date()));
+export default function TodayWorkSchedule({ branches, therapists, initialBranchId, initialDate, onBusyChange, onSaved, onOpenFullSchedule }: Props) {
+  const { translate: tr, locale } = useTranslation();
+  const [date, setDate] = useState(() => initialDate || localDateKey(new Date()));
   const [branchId, setBranchId] = useState(() =>
     branches.some((branch) => String(branch.id) === initialBranchId)
       ? initialBranchId
@@ -47,9 +50,10 @@ export default function TodayWorkSchedule({ branches, therapists, initialBranchI
     Object.values(therapist.schedule || {}).some((id) => Number(id) === Number(branchId)),
   ), [therapists, branchId]);
   const selectedBranch = branches.find((branch) => String(branch.id) === branchId);
-  const selectedDateLabel = new Date(`${date}T12:00:00`).toLocaleDateString(undefined, {
+  const selectedDateLabel = new Date(`${date}T12:00:00`).toLocaleDateString(locale, {
     weekday: 'long', month: 'long', day: 'numeric',
   });
+  useEffect(() => { onBusyChange?.(saving); }, [saving, onBusyChange]);
 
   useEffect(() => {
     if (initialBranchId !== 'all' && branches.some((branch) => String(branch.id) === initialBranchId)) {
@@ -120,11 +124,12 @@ export default function TodayWorkSchedule({ branches, therapists, initialBranchI
         else delete next[shiftKey(editingTherapist.id)];
         return next;
       });
-      setNotice('Today’s therapist availability was saved to the work schedule.');
+      setNotice(initialDate ? 'Therapist availability was saved for this date.' : 'Today’s therapist availability was saved to the work schedule.');
       setEditingTherapist(null);
       setEditShift(null);
+      onSaved?.();
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : 'Unable to save today’s therapist availability.');
+      setError(failure instanceof Error ? failure.message : 'Unable to save therapist availability.');
     } finally {
       setSaving(false);
     }
@@ -150,6 +155,7 @@ export default function TodayWorkSchedule({ branches, therapists, initialBranchI
       if (!data.override) throw new Error('Public visibility could not be saved. Refresh and try again.');
       setOverrides((current) => ({ ...current, [shiftKey(therapist.id)]: { ...data.override, isOverride: true } }));
       setNotice('Therapist public visibility was saved for this date.');
+      onSaved?.();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'Unable to save therapist public visibility.');
     } finally {
@@ -176,16 +182,23 @@ export default function TodayWorkSchedule({ branches, therapists, initialBranchI
     <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h3 className="font-bold text-slate-900">{tr("Today's therapist availability")}</h3>
-          <MobileHelp><p className="mt-1 text-xs text-slate-500">{tr('Changes are saved to Work schedule and affect appointment availability for today.')}</p></MobileHelp>
+          <h3 className="font-bold text-slate-900">{tr(initialDate ? 'Therapist availability' : "Today's therapist availability")}</h3>
+          <MobileHelp><p className="mt-1 text-xs text-slate-500">{tr(initialDate ? 'Changes affect the selected date only and are saved to Work schedule.' : 'Changes are saved to Work schedule and affect appointment availability for today.')}</p></MobileHelp>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {initialDate && <label className="text-xs font-semibold text-slate-600">{tr('Date')}
+            <input type="date" required value={date} disabled={saving || Boolean(editingTherapist)} onChange={(event) => {
+              if (!event.target.value) return;
+              setDate(event.target.value);
+              setNotice('');
+            }} className="ml-2 min-h-11 rounded-lg border border-slate-300 px-3 py-2" />
+          </label>}
           <label className="text-xs font-semibold text-slate-600">{tr('Branch')}
-            <select value={branchId} onChange={(event) => setBranchId(event.target.value)} className="ml-2 rounded-lg border border-slate-300 bg-white px-3 py-2">
+            <select value={branchId} disabled={saving || Boolean(editingTherapist)} onChange={(event) => setBranchId(event.target.value)} className="ml-2 rounded-lg border border-slate-300 bg-white px-3 py-2">
               {branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
             </select>
           </label>
-          <button type="button" onClick={() => onOpenFullSchedule(branchId, date)} className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">{tr('Open full Work schedule')}</button>
+          <button type="button" disabled={saving} onClick={() => onOpenFullSchedule(branchId, date)} className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">{tr('Open full Work schedule')}</button>
         </div>
       </div>
       {error && <p role="alert" className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">{tr(error)}</p>}
@@ -206,7 +219,7 @@ export default function TodayWorkSchedule({ branches, therapists, initialBranchI
                     return <tr key={therapist.id}>
                       <th scope="row" className="border-r bg-white p-3 font-semibold text-slate-800">{therapist.name}</th>
                       <td className="p-1.5">
-                        <button type="button" onClick={() => openEditor(therapist)} aria-label={tr('Set availability for {value0}', { value0: therapist.name })} className={`min-h-11 w-full rounded-md px-3 py-2 text-left transition hover:ring-2 hover:ring-blue-300 ${shift.isWorking ? 'bg-blue-50 text-blue-900' : 'text-slate-400 hover:bg-slate-50'}`}>
+                        <button type="button" disabled={saving} onClick={() => openEditor(therapist)} aria-label={tr('Set availability for {value0}', { value0: therapist.name })} className={`min-h-11 w-full rounded-md px-3 py-2 text-left transition hover:ring-2 hover:ring-blue-300 ${shift.isWorking ? 'bg-blue-50 text-blue-900' : 'text-slate-400 hover:bg-slate-50'}`}>
                           <span className="block font-semibold">{shift.isWorking ? `${shift.startTime}–${shift.endTime}` : tr('Off')}</span>
                           {shift.isOverride && <span className="mt-0.5 block text-[10px] text-blue-600">{tr('Custom')}</span>}
                         </button>
@@ -227,7 +240,13 @@ export default function TodayWorkSchedule({ branches, therapists, initialBranchI
             </div>}
       <p className="mt-3 flex items-center gap-1.5 text-xs text-slate-500"><Users className="h-3.5 w-3.5" />{selectedBranch ? tr('{value0} · changes affect this date only', { value0: selectedBranch.name }) : ''}</p>
     </section>
-    {editingTherapist && editShift && <div role="dialog" aria-modal="true" aria-labelledby="today-work-schedule-editor-title" className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4" onClick={(event) => { if (event.target === event.currentTarget && !saving) setEditingTherapist(null); }}>
+    {editingTherapist && editShift && <div role="dialog" aria-modal="true" aria-labelledby="today-work-schedule-editor-title" className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-950/50 p-4" onKeyDown={(event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!saving) setEditingTherapist(null);
+      }
+    }} onClick={(event) => { if (event.target === event.currentTarget && !saving) setEditingTherapist(null); }}>
       <section className="w-full max-w-md rounded-xl bg-white p-5 shadow-xl">
         <h3 id="today-work-schedule-editor-title" className="font-bold text-slate-900">{tr('Edit work hours')}</h3>
         <p className="mt-1 text-sm text-slate-600">{editingTherapist.name} · {selectedDateLabel} · {selectedBranch?.name}</p>
@@ -253,7 +272,7 @@ export default function TodayWorkSchedule({ branches, therapists, initialBranchI
         </div>
         <div className="mt-5 flex flex-wrap justify-between gap-2">
           <button type="button" onClick={resetToWeeklySchedule} disabled={saving} className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 disabled:opacity-50">{tr('Reset to weekly schedule')}</button>
-          <div className="flex gap-2"><button type="button" onClick={() => setEditingTherapist(null)} disabled={saving} className="rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:opacity-50">{tr('Cancel')}</button><button type="button" onClick={saveEditedShift} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"><Save className="h-4 w-4" />{tr(saving ? 'Saving…' : 'Save today')}</button></div>
+          <div className="flex gap-2"><button type="button" onClick={() => setEditingTherapist(null)} disabled={saving} className="rounded-lg border border-slate-300 px-3 py-2 text-sm disabled:opacity-50">{tr('Cancel')}</button><button type="button" onClick={saveEditedShift} disabled={saving} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"><Save className="h-4 w-4" />{tr(saving ? 'Saving…' : initialDate ? 'Save availability' : 'Save today')}</button></div>
         </div>
       </section>
     </div>}

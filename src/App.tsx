@@ -39,6 +39,7 @@ import { couplePairCandidates, filterCoupleCalendarEvents } from '../lib/couple-
 import useTherapistAvailability, { useBookingSlotAvailability, useNextAvailableBookingSlot } from './useTherapistAvailability';
 import WorkSchedule from './WorkSchedule';
 import TodayWorkSchedule from './TodayWorkSchedule';
+import CalendarAvailability from './CalendarAvailability';
 import BookingNotifications from './BookingNotifications';
 import BookingActivityFeed from './BookingActivityFeed';
 import { calendarEventRange, calendarEventStyle } from '../lib/calendar-layout.js';
@@ -4672,6 +4673,7 @@ function AdminPortal({
   const [calendarBranch, setCalendarBranch] = useState('all');
   const [calendarTherapist, setCalendarTherapist] = useState('all');
   const [showTodayAvailability, setShowTodayAvailability] = useState(false);
+  const [calendarAvailabilityOpen, setCalendarAvailabilityOpen] = useState(false);
   const [workScheduleInitialBranchId, setWorkScheduleInitialBranchId] = useState('');
   const [workScheduleInitialDate, setWorkScheduleInitialDate] = useState('');
   const [calendarEvents, setCalendarEvents] = useState([]);
@@ -4737,7 +4739,7 @@ function AdminPortal({
     document.documentElement.style.overflow = 'hidden';
     const exitViewportCalendar = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && !event.defaultPrevented &&
-          !selectedCalendarEvent && !quickBooking && !editingBooking &&
+          !selectedCalendarEvent && !quickBooking && !editingBooking && !calendarAvailabilityOpen &&
           document.fullscreenElement !== calendarPanelRef.current) {
         setCalendarFullscreen(false);
       }
@@ -4748,7 +4750,7 @@ function AdminPortal({
       document.documentElement.style.overflow = rootOverflow;
       document.removeEventListener('keydown', exitViewportCalendar);
     };
-  }, [calendarFullscreen, activeTab, selectedCalendarEvent, quickBooking, editingBooking]);
+  }, [calendarFullscreen, activeTab, selectedCalendarEvent, quickBooking, editingBooking, calendarAvailabilityOpen]);
 
   const toggleCalendarFullscreen = async () => {
     setCalendarFullscreenError('');
@@ -6535,6 +6537,18 @@ function AdminPortal({
       ? calendarBusinessBranches.find((branch) => branchAppointmentTimes(branch, calendarDate).includes(time)) : null;
     setQuickBooking({ date: calendarDate, branchId: slotBranch ? String(slotBranch.id) : calendarBranch, therapistId: calendarTherapist, time });
   };
+  const openCalendarWorkSchedule = async (branchId = calendarBranch, date = calendarDate) => {
+    setCalendarFullscreenError('');
+    try {
+      if (document.fullscreenElement === calendarPanelRef.current) await document.exitFullscreen();
+      setWorkScheduleInitialBranchId(branchId);
+      setWorkScheduleInitialDate(date);
+      setCalendarAvailabilityOpen(false);
+      setActiveTab('work-schedule');
+    } catch (error) {
+      setCalendarFullscreenError(error instanceof Error ? error.message : 'Unable to open Work schedule.');
+    }
+  };
 
   useEffect(() => {
     if (activeTab !== 'calendar') return;
@@ -6822,7 +6836,7 @@ function AdminPortal({
     enabled: compactCalendar && activeTab === 'calendar' && resolvedCalendarViewMode !== 'agenda',
     fullscreen: calendarFullscreen,
     blocked: isLoadingCalendar || Boolean(calendarLoadError) || mobileNavOpen
-      || Boolean(selectedCalendarEvent || quickBooking || editingBooking),
+      || Boolean(selectedCalendarEvent || quickBooking || editingBooking || calendarAvailabilityOpen),
     date: calendarDate,
     onNavigate: moveCalendarDate,
   });
@@ -7158,6 +7172,15 @@ function AdminPortal({
                 <summary aria-label={tr("Manage ▾")} title={tr("Manage ▾")} className="calendar-icon-action cursor-pointer list-none rounded-full border border-blue-200 px-4 py-2 text-xs font-semibold text-blue-600"><Briefcase className="h-4 w-4 lg:hidden" /><span className="hidden lg:inline">{tr("Manage ▾")}</span></summary>
                 <div className="absolute right-0 z-20 mt-2 w-48 rounded-xl border border-stone-200 bg-white p-2 text-sm shadow-lg">
                   <button type="button" onClick={() => setActiveTab('schedule')} className="w-full rounded-lg px-3 py-2 text-left hover:bg-blue-50">{tr("Appointments")}</button>
+                  <button type="button" onClick={(event) => {
+                    event.currentTarget.closest('details').open = false;
+                    setCalendarFullscreenError('');
+                    setCalendarAvailabilityOpen(true);
+                  }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left hover:bg-blue-50"><UserCheck aria-hidden="true" className="h-4 w-4 shrink-0" />{tr("Therapist availability")}</button>
+                  <button type="button" onClick={(event) => {
+                    event.currentTarget.closest('details').open = false;
+                    void openCalendarWorkSchedule();
+                  }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left hover:bg-blue-50"><CalendarDays aria-hidden="true" className="h-4 w-4 shrink-0" />{tr("Work schedule")}</button>
                   {dashboardUser.role === 'owner' && <>
                     <button type="button" onClick={() => setActiveTab('availability')} className="w-full rounded-lg px-3 py-2 text-left hover:bg-blue-50">{tr("Staff availability")}</button>
                     <button type="button" onClick={() => setActiveTab('services')} className="w-full rounded-lg px-3 py-2 text-left hover:bg-blue-50">{tr("Services")}</button>
@@ -7484,6 +7507,20 @@ function AdminPortal({
         <WixCalendarSync onSynced={async () => {
           await Promise.all([loadCalendar(), loadBookingsFromBackend()]);
         }} />
+      )}
+
+      {activeTab === 'calendar' && calendarAvailabilityOpen && createPortal(
+        <CalendarAvailability
+          error={calendarFullscreenError}
+          initialDate={calendarDate}
+          initialBranchId={calendarBranch}
+          branches={dashboardBranches.filter((branch) => branch.active !== false)}
+          therapists={therapists.filter((therapist) => therapist.active !== false)}
+          onClose={() => setCalendarAvailabilityOpen(false)}
+          onSaved={() => { void loadCalendar(); }}
+          onOpenFullSchedule={(branchId, date) => { void openCalendarWorkSchedule(branchId, date); }}
+        />,
+        calendarFullscreen && calendarPanelRef.current ? calendarPanelRef.current : document.body,
       )}
 
       {editingBooking && <EditBooking

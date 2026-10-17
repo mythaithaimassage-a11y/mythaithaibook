@@ -1,4 +1,9 @@
 export const componentThai: Record<string, string> = {
+  'Therapist availability': 'เวลาว่างของผู้ให้บริการ',
+  'Therapist availability was saved for this date.': 'บันทึกเวลาว่างของผู้ให้บริการสำหรับวันที่นี้แล้ว',
+  'Changes affect the selected date only and are saved to Work schedule.': 'การเปลี่ยนแปลงมีผลเฉพาะวันที่เลือกและบันทึกลงในตารางงาน',
+  'Save availability': 'บันทึกเวลาว่าง',
+  'Unable to save therapist availability.': 'ไม่สามารถบันทึกเวลาว่างของผู้ให้บริการได้',
   'Help': 'ช่วยเหลือ',
   'Staff dashboard shortcuts': 'ทางลัดแผงควบคุมพนักงาน',
   'Mobile staff dashboard navigation': 'เมนูแผงควบคุมพนักงานบนมือถือ',

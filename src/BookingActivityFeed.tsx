@@ -2,6 +2,8 @@ import MobileHelp from './MobileHelp';
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from './localization';
 import { bookingActivityTitles } from './BookingNotifications';
+import { RefreshCw } from 'lucide-react';
+import AppointmentDateRail from './AppointmentDateRail';
 
 type BookingActivity = {
   id: string; bookingId: string; type: string; customerName: string; branchName: string;
@@ -23,11 +25,12 @@ const TYPE_STYLES: Record<string, string> = {
 };
 
 export default function BookingActivityFeed() {
-  const { translate: tr, formatTime } = useTranslation();
+  const { translate: tr, formatTime, locale } = useTranslation();
   const [events, setEvents] = useState<BookingActivity[]>([]);
   const [filter, setFilter] = useState('all');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [order, setOrder] = useState('desc');
 
   const load = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
@@ -60,6 +63,14 @@ export default function BookingActivityFeed() {
     return totals;
   }, {});
   const displayed = filter === 'all' ? events : events.filter((event) => event.type === filter);
+  const grouped = new Map<string, BookingActivity[]>();
+  for (const event of displayed) {
+    const entries = grouped.get(event.date) || [];
+    entries.push(event);
+    grouped.set(event.date, entries);
+  }
+  const groups = [...grouped.entries()].sort(([left], [right]) =>
+    order === 'asc' ? left.localeCompare(right) : right.localeCompare(left));
 
   return (
     <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -68,47 +79,60 @@ export default function BookingActivityFeed() {
           <h3 className="text-base font-bold text-slate-900">{tr('Booking activity')}</h3>
           <MobileHelp><p className="text-xs text-slate-500">{tr('New bookings, reschedules, cancellations and staff edits from the last 7 days.')}</p></MobileHelp>
         </div>
-        <button type="button" onClick={() => void load()} disabled={loading}
-          className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">
-          {loading ? tr('Loading…') : tr('Refresh')}
+        <button type="button" onClick={() => void load()} disabled={loading} title={tr('Refresh')} aria-label={tr(loading ? 'Loading…' : 'Refresh')}
+          className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-50">
+          <RefreshCw aria-hidden="true" className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
         </button>
       </div>
       <div className="mt-3 flex flex-wrap gap-2">
         {FILTERS.map((option) => (
           <button key={option} type="button" onClick={() => setFilter(option)} aria-pressed={filter === option}
-            className={`rounded-full px-3 py-1 text-xs font-semibold ${filter === option ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}>
+            className={`min-h-11 rounded-full px-3 py-1 text-xs font-semibold ${filter === option ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}>
             {tr(FILTER_LABELS[option])} ({option === 'all' ? events.length : counts[option] || 0})
           </button>
         ))}
       </div>
+      <div className="mt-3 flex items-center justify-between gap-2 text-xs text-slate-500">
+        <span>{tr('Grouped by appointment date')}</span>
+        <select aria-label={tr('Date order')} value={order} onChange={(event) => setOrder(event.target.value)} className="min-h-11 rounded-lg border border-slate-200 bg-white px-3">
+          <option value="desc">{tr('Newest first')}</option>
+          <option value="asc">{tr('Oldest first')}</option>
+        </select>
+      </div>
       {error && <p role="alert" className="mt-3 rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-800">{tr(error)}</p>}
       {!error && !loading && !displayed.length && <p className="mt-4 text-sm text-slate-500">{tr('No booking activity in the last 7 days.')}</p>}
       {displayed.length > 0 && (
-        <ul className="mt-4 divide-y divide-slate-100">
-          {displayed.map((event) => (
-            <li key={event.id} className="flex flex-wrap items-start justify-between gap-3 py-3 text-sm">
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${TYPE_STYLES[event.type] || TYPE_STYLES.edited}`}>
-                    {tr(bookingActivityTitles[event.type] || 'Appointment updated')}
-                  </span>
-                  <span className="font-semibold text-slate-900">{event.customerName || tr('Customer')}</span>
-                </div>
-                <p className="mt-1 text-xs text-slate-600">{[event.serviceName, event.therapistName, event.branchName].filter(Boolean).join(' · ')}</p>
-                <p className="mt-0.5 text-xs text-slate-700">
-                  {event.previousDate && <span className="mr-1 text-slate-400 line-through">{event.previousDate} {formatTime(event.previousTime)}</span>}
-                  {event.previousDate && '→ '}
-                  {event.date} {formatTime(event.time)}
-                  {event.durationMinutes > 0 && ` · ${tr('{minutes} minutes', { minutes: event.durationMinutes })}`}
-                </p>
-              </div>
-              <div className="text-right text-[11px] text-slate-500">
-                <p>{new Date(event.createdAt).toLocaleString()}</p>
-                {event.actor && <p>{event.actor === 'customer' ? tr('By customer') : tr('By {actor}', { actor: event.actor })}</p>}
-              </div>
-            </li>
-          ))}
-        </ul>
+        <div className="mt-4 space-y-4" aria-busy={loading}>
+          {groups.map(([date, entries]) => <section key={date} className="appointment-date-group grid grid-cols-[3.25rem_minmax(0,1fr)] gap-3 sm:grid-cols-[6.5rem_minmax(0,1fr)] sm:gap-5">
+            <AppointmentDateRail date={date} count={entries.length} />
+            <ul className="min-w-0 space-y-2">
+              {[...entries].sort((left, right) => right.createdAt.localeCompare(left.createdAt)).map((event) => (
+                <li key={event.id} className="rounded-2xl border border-slate-200 bg-white p-3 text-sm shadow-sm sm:p-4">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${TYPE_STYLES[event.type] || TYPE_STYLES.edited}`}>
+                        {tr(bookingActivityTitles[event.type] || 'Appointment updated')}
+                      </span>
+                      <span className="font-semibold text-slate-900">{event.customerName || tr('Customer')}</span>
+                    </div>
+                    <p className="mt-1 text-xs text-slate-600">{tr(event.serviceName)}</p>
+                    <p className="mt-1 text-xs text-slate-400">{[event.therapistName, event.branchName].filter(Boolean).join(' · ')}</p>
+                    <p className="mt-0.5 text-xs text-slate-700">
+                      {event.previousDate && <span className="mr-1 text-slate-400 line-through">{event.previousDate} {formatTime(event.previousTime)}</span>}
+                      {event.previousDate && '→ '}
+                      {formatTime(event.time)}
+                      {event.durationMinutes > 0 && ` · ${tr('{minutes} minutes', { minutes: event.durationMinutes })}`}
+                    </p>
+                  </div>
+                  <div className="mt-3 flex flex-wrap justify-between gap-2 border-t border-slate-100 pt-2 text-[11px] text-slate-400">
+                    <time dateTime={event.createdAt}>{new Date(event.createdAt).toLocaleString(locale, { timeZone: 'America/Toronto' })}</time>
+                    {event.actor && <p>{event.actor === 'customer' ? tr('By customer') : tr('By {actor}', { actor: event.actor })}</p>}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </section>)}
+        </div>
       )}
     </section>
   );

@@ -1,4 +1,7 @@
 export const dashboardThai: Record<string, string> = {
+  'Grouped by appointment date': 'จัดกลุ่มตามวันที่นัดหมาย',
+  'Close availability': 'ปิดเวลาว่าง',
+  'Unable to open Work schedule.': 'ไม่สามารถเปิดตารางงานได้',
   'Search bookings': 'ค้นหาการจอง',
   'Booking history tools': 'เครื่องมือจัดการประวัติการจอง',
   'All dates': 'ทุกวันที่',

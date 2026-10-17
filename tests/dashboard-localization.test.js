@@ -261,6 +261,19 @@ test('today availability shortcut displays the Work Schedule shift graphic for t
     react: React,
     './localization': { useTranslation: () => ({ translate: todayTranslator }) },
   });
+
+  test('fullscreen calendar Manage exposes availability and Work schedule shortcuts to all dashboard staff', () => {
+    for (const role of ['owner', 'branch_manager', 'branch_receptionist']) {
+      const html = render('calendar', 'en', { compactCalendar: true, calendarFullscreen: true }, {
+        dashboardUser: { role, branchIds: ['1'] },
+      });
+      const manage = html.match(/<summary aria-label="Manage ▾"[\s\S]*?<\/details>/)?.[0];
+      assert.ok(manage);
+      assert.match(manage, /Therapist availability/);
+      assert.match(manage, /Work schedule/);
+      assert.doesNotMatch(manage, /Work schedule[^<]*disabled/);
+    }
+  });
   const { default: TodayWorkSchedule } = todayScheduleLoader(new URL('../src/TodayWorkSchedule.tsx', import.meta.url).pathname);
   const html = renderToStaticMarkup(React.createElement(TodayWorkSchedule, {
     branches: [{ id: 1, name: 'Central Branch' }],

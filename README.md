@@ -114,6 +114,22 @@ logged to the BigQuery `booking_activity` table (override with
 `BIGQUERY_BOOKING_ACTIVITY_TABLE`), created automatically. New bookings come
 from the bookings table, so the feed includes bookings made before the log
 existed. Logging failures are recorded in server logs without undoing the change.
+Activity uses the same compact cards and left-hand date rail as appointments
+and Agenda, grouped by **appointment date** (not the activity timestamp).
+Newest/oldest date ordering and type filters are available; changes within each
+date remain newest-first. Cards retain the original reschedule date/time,
+activity timestamp in the clinic time zone, and actor. The seven-day window
+still refers to when the activity occurred.
+
+The calendar **Manage** menu includes **Therapist availability** and **Work
+schedule**, also in mobile/fullscreen mode. Availability opens a modal above
+the calendar, defaults to its selected date and branch, and lets staff choose
+another date, edit hours/off-days and public visibility, or reset to the weekly
+schedule. Changes apply to that date only and refresh the calendar. The Work
+schedule shortcut opens the selected branch and month; opening it from the
+availability modal preserves that modal's chosen date/branch. Branch staff
+retain their assigned-branch restrictions. Native fullscreen exits before
+navigating to Work schedule; closing availability keeps the calendar expanded.
 
 In **Business profile**, **Minimum booking notice (minutes)** controls how far
 ahead customers must book (default: 15 minutes; whole minutes from 0 to 1440).

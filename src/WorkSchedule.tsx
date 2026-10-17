@@ -34,7 +34,7 @@ function shiftKey(therapistId: number | string, date: string) {
 export default function WorkSchedule({ branches, therapists, initialBranchId = '', initialDate = '' }: Props) {
   const { translate: tr } = useTranslation();
   const today = new Date();
-  const [month, setMonth] = useState(`${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`);
+  const [month, setMonth] = useState(initialDate ? initialDate.slice(0, 7) : `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`);
   const [branchId, setBranchId] = useState(() =>
     branches.some((branch) => String(branch.id) === initialBranchId) ? initialBranchId : String(branches[0]?.id || ''),
   );

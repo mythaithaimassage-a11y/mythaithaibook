@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { CalendarDays, Clock, CloudOff, Database, Edit, Eye, Loader2, StickyNote, Trash2, UserCheck, Users } from 'lucide-react';
 import { useTranslation } from './localization';
 import { coupleTimeMinutes } from '../lib/couple-pairing.js';
+import AppointmentDateRail from './AppointmentDateRail';
 
 export type ListAppointment = {
   id: string;
@@ -87,15 +88,7 @@ export default function AppointmentList({ bookings, onOpen, onEdit, onDelete, de
         const validDate = /^\d{4}-\d{2}-\d{2}$/.test(date) && Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === date;
         const dateLabel = validDate ? new Intl.DateTimeFormat(locale, { dateStyle: 'full', timeZone: 'UTC' }).format(parsed) : date || tr('Date not set');
         return <section key={date} aria-label={dateLabel} className="appointment-date-group grid grid-cols-[3.25rem_minmax(0,1fr)] gap-3 sm:grid-cols-[6.5rem_minmax(0,1fr)] sm:gap-5">
-          <h3 className="appointment-date-rail self-start rounded-xl bg-slate-100 px-1 py-3 text-center text-slate-600">
-            {validDate ? <time dateTime={date} title={dateLabel}>
-              <span className="block text-[10px] font-bold uppercase tracking-wide">{new Intl.DateTimeFormat(locale, { month: 'short', timeZone: 'UTC' }).format(parsed)}</span>
-              <span className="block text-2xl font-bold leading-tight text-slate-900">{new Intl.DateTimeFormat(locale, { day: 'numeric', timeZone: 'UTC' }).format(parsed)}</span>
-              <span className="mt-1 block text-[10px]">{new Intl.DateTimeFormat(locale, { weekday: 'short', timeZone: 'UTC' }).format(parsed)}</span>
-              <span className="block text-[10px] text-slate-400">{new Intl.DateTimeFormat(locale, { year: 'numeric', timeZone: 'UTC' }).format(parsed)}</span>
-            </time> : <span className="text-xs">{dateLabel}</span>}
-            <span className="sr-only">{tr('{count} appointments', { count: entries.length })}</span>
-          </h3>
+          <AppointmentDateRail date={date} count={entries.length} />
           <div className="min-w-0 space-y-2">
             {entries.map((booking) => <article key={booking.id} className="appointment-card rounded-2xl border border-slate-200 bg-white p-3 shadow-sm transition hover:border-emerald-200 sm:p-4 xl:grid xl:grid-cols-[minmax(0,1fr)_auto] xl:items-center xl:gap-x-4">
               <div className="flex items-start justify-between gap-3">

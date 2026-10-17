@@ -24,6 +24,14 @@
 }
 
 @media (max-width: 1023px) {
+  .calendar-availability :is(button, input, select) {
+    min-height: 44px;
+  }
+
+  .calendar-availability :is(input:not([type="checkbox"]), select) {
+    font-size: 16px;
+  }
+
   .appointment-date-rail,
   .calendar-agenda .appointment-date-rail {
     top: 72px;
