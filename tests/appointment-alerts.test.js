@@ -88,6 +88,7 @@ test('collectAppointmentAlertCandidates filters today’s appointments, computes
   // Candidate flags
   const candidate101 = result.candidates.find((c) => c.id === 'MTT-101');
   assert.equal(candidate101.eligible, true);
+  assert.equal(candidate101.hasEmail, true);
   assert.equal(candidate101.isUpcoming, true);
   assert.equal(candidate101.confirmedOnTime, false);
 
@@ -100,6 +101,18 @@ test('collectAppointmentAlertCandidates filters today’s appointments, computes
 
   const candidate105 = result.candidates.find((c) => c.id === 'MTT-105');
   assert.equal(candidate105.eligible, false); // no email
+  assert.equal(candidate105.hasEmail, false);
+});
+
+test('email presence and reminder eligibility are distinct for no-show appointments', () => {
+  const row = ['MTT-no-show', 'Test Client', '', ' Client@Example.com ', 'Downtown', 'Massage', 'Ploy', '2026-10-17', '10:00 AM'];
+  row[24] = 'No Show';
+  const candidate = collectAppointmentAlertCandidates([row]).candidates[0];
+  assert.equal(candidate.email, 'client@example.com');
+  assert.equal(candidate.hasEmail, true);
+  assert.equal(candidate.eligible, false);
+  row[3] = 'invalid@email';
+  assert.equal(collectAppointmentAlertCandidates([row]).candidates[0].hasEmail, false);
 });
 
 test('collectAppointmentAlertCandidates scopes to allowedBranches', () => {

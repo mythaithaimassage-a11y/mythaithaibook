@@ -3,9 +3,20 @@ import { createPortal } from 'react-dom';
 import { useTranslation } from './localization';
 
 type BookingAlert = {
-  id: string; customerName: string; branchName: string; serviceName: string;
+  id: string; type?: string; customerName: string; branchName: string; serviceName: string;
   therapistName: string; date: string; time: string; durationMinutes: number; createdAt: string;
+  previousDate?: string; previousTime?: string;
 };
+
+export const bookingActivityTitles: Record<string, string> = {
+  created: 'New appointment booked',
+  rescheduled: 'Appointment rescheduled',
+  cancelled: 'Appointment cancelled',
+  edited: 'Appointment updated',
+  deleted: 'Appointment deleted',
+};
+
+const activityTitle = (type?: string) => bookingActivityTitles[type || 'created'] || bookingActivityTitles.created;
 
 export default function BookingNotifications({ userId, portalTarget }: { userId: string; portalTarget?: Element | null }) {
   const { translate: tr, formatTime } = useTranslation();
@@ -47,7 +58,7 @@ export default function BookingNotifications({ userId, portalTarget }: { userId:
           if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
             for (const item of fresh) {
               // Keep customer details inside the authenticated app, not on the lock screen.
-              const notification = new Notification(tr('New appointment booked'), {
+              const notification = new Notification(tr(activityTitle(item.type)), {
                 body: tr('Open the booking calendar to view this appointment.'), tag: `booking-${item.id}`,
               });
               notification.onclick = () => { window.focus(); notification.close(); };
@@ -87,10 +98,11 @@ export default function BookingNotifications({ userId, portalTarget }: { userId:
       </button>}
       {permission === 'denied' && <p className="rounded-lg bg-white p-2 text-xs text-stone-600 shadow">{tr('Browser alerts are blocked. Enable notifications in browser settings. In-app alerts remain active.')}</p>}
       {error && <p role="alert" className="rounded-lg border border-red-200 bg-white p-3 text-xs text-red-800 shadow">{tr(error)}</p>}
-      {alert && <section role="alertdialog" aria-modal="false" aria-labelledby="new-booking-title" className="rounded-xl border border-emerald-300 bg-white p-4 text-sm text-stone-800 shadow-xl">
-        <h2 id="new-booking-title" className="font-bold">{tr('New appointment booked')}</h2>
+      {alert && <section role="alertdialog" aria-modal="false" aria-labelledby="new-booking-title" className={`rounded-xl border bg-white p-4 text-sm text-stone-800 shadow-xl ${alert.type === 'cancelled' || alert.type === 'deleted' ? 'border-red-300' : alert.type === 'rescheduled' || alert.type === 'edited' ? 'border-amber-300' : 'border-emerald-300'}`}>
+        <h2 id="new-booking-title" className="font-bold">{tr(activityTitle(alert.type))}</h2>
         <p className="mt-2 font-semibold">{alert.customerName}</p>
         <p>{alert.serviceName}</p>
+        {alert.previousDate && <p className="text-stone-500 line-through">{alert.previousDate} · {formatTime(alert.previousTime || '')}</p>}
         <p>{alert.date} · {formatTime(alert.time)} · {tr('{minutes} minutes', { minutes: alert.durationMinutes })}</p>
         <p>{alert.branchName} · {alert.therapistName}</p>
         <button type="button" onClick={() => setAlerts((current) => current.slice(1))} className="mt-3 rounded-lg bg-emerald-700 px-3 py-1.5 font-semibold text-white">{tr('Dismiss')}</button>

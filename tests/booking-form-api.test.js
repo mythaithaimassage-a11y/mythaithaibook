@@ -161,8 +161,9 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   const staffEmails = [];
   t.mock.method(google, 'gmail', () => ({ users: { messages: { send: async (request) => {
     const raw = Buffer.from(request.requestBody.raw, 'base64url').toString();
-    const staffSubject = Buffer.from('New appointment booked').toString('base64');
-    (raw.includes(`Subject: =?UTF-8?B?${staffSubject}?=`) ? staffEmails : emails).push(request);
+    const staffSubjects = ['New appointment booked', 'Appointment rescheduled', 'Appointment cancelled']
+      .map((subject) => `Subject: =?UTF-8?B?${Buffer.from(subject).toString('base64')}?=`);
+    (staffSubjects.some((subject) => raw.includes(subject)) ? staffEmails : emails).push(request);
     return { data: { id: 'email' } };
   } } } }));
   t.mock.method(BigQuery.prototype, 'dataset', () => ({
@@ -173,6 +174,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
     }),
   }));
   const records = [];
+  const activities = [];
   const customerSearches = [];
   const histories = [];
   const dashboardChallenges = createDashboardChallengeStore();
@@ -271,7 +273,12 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
       }
     }
     if (query.startsWith('SELECT booking_id, customer_name, branch_name')) {
-      return [records.filter((record) => record.created_at >= params.from && record.created_at <= params.now)];
+      const to = params.now ?? params.to;
+      return [records.filter((record) => record.created_at >= params.from && record.created_at <= to)];
+    }
+    if (query.startsWith('INSERT INTO `test-project.booking_system.booking_activity`')) { activities.push(params); return [[]]; }
+    if (query.startsWith('SELECT id, booking_id, type') && query.includes('booking_activity')) {
+      return [activities.filter((activity) => activity.created_at >= params.from && activity.created_at <= params.to)];
     }
     if (query.startsWith('SELECT * FROM `test-project.booking_system.bookings`')) return [records];
     if (query.startsWith('INSERT INTO `test-project.booking_system.bookings`')) { records.push(params); return [[]]; }
@@ -523,6 +530,13 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   });
   assert.equal(rescheduledWithoutSheetRead.code, 200, JSON.stringify(rescheduledWithoutSheetRead.data));
   assert.equal(rescheduledWithoutSheetRead.data.date, '2026-11-03');
+  const rescheduleActivity = activities.find((activity) => activity.booking_id === 'MTT-clinic' && activity.type === 'rescheduled');
+  assert.ok(rescheduleActivity, 'Customer reschedules are recorded in booking activity');
+  assert.equal(rescheduleActivity.date, '2026-11-03');
+  assert.equal(rescheduleActivity.time, '11:00 AM');
+  assert.ok(rescheduleActivity.previous_date && rescheduleActivity.previous_time);
+  assert.equal(rescheduleActivity.actor, 'customer');
+  assert.ok(staffEmails.length >= 1, 'Customer reschedules alert dashboard staff');
   failBranchesSheetRead = false;
   const rescheduledRecord = records.find((record) => record.booking_id === 'MTT-clinic');
   rescheduledRecord.date = '2026-11-01';
@@ -715,6 +729,10 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   assert.ok(feed.data.notifications.some((item) => item.id === phoneBooking.data.bookingId));
   assert.ok(feed.data.notifications.every((item) => item.branchName === 'Test Branch'));
   assert.equal((await request('booking-notifications', null, { method: 'GET', query: { since: 'bad' } })).code, 400);
+  const activityFeed = await request('booking-activity', null, { method: 'GET' });
+  assert.equal(activityFeed.code, 200, JSON.stringify(activityFeed.data));
+  assert.ok(activityFeed.data.events.some((event) => event.type === 'created' && event.bookingId === phoneBooking.data.bookingId));
+  assert.ok(activityFeed.data.events.every((event) => event.branchName === 'Test Branch'));
   assert.equal(phoneBooking.data.patientHistorySkipped, true);
   assert.equal(phoneBooking.data.patientHistorySaved, false);
   assert.equal(phoneBooking.data.paidAmount, '0.00');
@@ -966,6 +984,10 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   assert.equal(notificationEdit.code, 200, JSON.stringify(notificationEdit.data));
   assert.equal(notificationEdit.data.emailSent, true);
   assert.equal(emails.length, emailsBeforeEdit + 1, 'Opted-in schedule edits send a client notification');
+  const staffEditActivity = activities.findLast((activity) => activity.booking_id === notificationRecord.booking_id);
+  assert.equal(staffEditActivity?.type, 'rescheduled', 'Staff time changes are recorded as reschedules');
+  assert.equal(staffEditActivity.time, '03:00 PM');
+  assert.ok(staffEditActivity.actor.includes('@'));
   const failedNotificationRecord = { ...editable, booking_id: 'notify-client-edit-failure', calendar_event_id: '' };
   records.push(failedNotificationRecord);
   t.mock.method(google, 'gmail', () => ({ users: { messages: { send: async () => { throw new Error('Synthetic notification email failure'); } } } }));

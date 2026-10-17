@@ -3,6 +3,7 @@ export interface AppointmentAlertBooking {
   customerName: string;
   phone: string;
   email: string;
+  hasEmail: boolean;
   branchName: string;
   serviceName: string;
   therapistName: string;

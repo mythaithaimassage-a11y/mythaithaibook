@@ -36,6 +36,7 @@ import useTherapistAvailability, { useBookingSlotAvailability, useNextAvailableB
 import WorkSchedule from './WorkSchedule';
 import TodayWorkSchedule from './TodayWorkSchedule';
 import BookingNotifications from './BookingNotifications';
+import BookingActivityFeed from './BookingActivityFeed';
 import { calendarEventRange, calendarEventStyle } from '../lib/calendar-layout.js';
 
 const MOCK_BRANCHES = [
@@ -7419,7 +7420,7 @@ function AdminPortal({
             </section>
             <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
               <p className="text-xs font-medium text-slate-500">{tr("Total today")}</p>
-              <p className="mt-1 text-2xl font-bold text-slate-900">{alertsData?.stats?.totalToday ?? 0}</p>
+              <p className="mt-1 text-2xl font-bold text-slate-900">{alertsData?.stats?.total ?? 0}</p>
             </section>
           </div>
 
@@ -7435,7 +7436,7 @@ function AdminPortal({
                   onClick={() => setAlertsFilter('upcoming')}
                   className={`rounded-md px-3 py-1.5 font-semibold transition ${alertsFilter === 'upcoming' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
                 >
-                  {tr("Upcoming today")} ({alertsData?.candidates?.filter((c) => !c.isPast).length ?? 0})
+                  {tr("Upcoming today")} ({alertsData?.candidates?.filter((c) => c.isUpcoming).length ?? 0})
                 </button>
                 <button
                   type="button"
@@ -7459,7 +7460,7 @@ function AdminPortal({
             )}
 
             {!isLoadingAlerts && alertsData && alertsData.candidates?.length > 0 && (() => {
-              const displayed = alertsData.candidates.filter((candidate) => alertsFilter === 'all' || !candidate.isPast);
+              const displayed = alertsData.candidates.filter((candidate) => alertsFilter === 'all' || candidate.isUpcoming);
               const eligibleDisplayed = displayed.filter((c) => c.eligible);
               return (
                 <div className="p-4 sm:p-5">
@@ -7504,7 +7505,7 @@ function AdminPortal({
                             type="checkbox"
                             className="mt-1 h-4 w-4 accent-emerald-700 disabled:opacity-40 sm:mt-0"
                             checked={alertsSelected.includes(candidate.id)}
-                            disabled={!candidate.hasEmail}
+                            disabled={!candidate.eligible}
                             onChange={() => toggleAlertRecipient(candidate.id)}
                             aria-label={`Select ${candidate.customerName || candidate.id}`}
                           />
@@ -7528,7 +7529,7 @@ function AdminPortal({
                                   {tr("Missing email")}
                                 </span>
                               )}
-                              {candidate.isPast && (
+                              {!candidate.isUpcoming && (
                                 <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600">
                                   {tr("Past time")}
                                 </span>
@@ -7550,7 +7551,7 @@ function AdminPortal({
                             <button
                               type="button"
                               onClick={() => sendAlertReminders(candidate.id)}
-                              disabled={isSendingAlerts || !candidate.hasEmail}
+                              disabled={isSendingAlerts || !candidate.eligible}
                               className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:opacity-40"
                             >
                               <Mail className="h-3.5 w-3.5 text-slate-500" />
@@ -7580,6 +7581,7 @@ function AdminPortal({
               );
             })()}
           </section>
+          <BookingActivityFeed />
         </div>
       )}
 

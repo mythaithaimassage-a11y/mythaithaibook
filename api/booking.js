@@ -17,6 +17,7 @@ import { applySavedTherapistAliases, parseTherapistAliases, planTherapistRename,
 import { sendGmailMessage } from '../lib/gmail.js';
 import { validateBookingContact } from '../lib/booking-contact.js';
 import { bookingAlertRecipients, deliverBookingAlerts, readBookingNotifications } from '../lib/booking-notifications.js';
+import { bookingActivityRecord, ensureBookingActivityTable, insertBookingActivity, readBookingActivity } from '../lib/booking-activity.js';
 import {
   collectAppointmentAlertCandidates,
   formatAppointmentReminderEmail,
@@ -245,6 +246,58 @@ function getBigQueryClient() {
 
 function bookingsTableRef() {
   return `\`${BIGQUERY_PROJECT_ID}.${BIGQUERY_DATASET_ID}.${BIGQUERY_BOOKINGS_TABLE}\``;
+}
+
+const BIGQUERY_BOOKING_ACTIVITY_TABLE = process.env.BIGQUERY_BOOKING_ACTIVITY_TABLE || 'booking_activity';
+function bookingActivityTableRef() {
+  return `\`${BIGQUERY_PROJECT_ID}.${BIGQUERY_DATASET_ID}.${BIGQUERY_BOOKING_ACTIVITY_TABLE}\``;
+}
+
+let ensureBookingActivityTablePromise = null;
+async function ensureBookingActivityTableReady(bigquery) {
+  await ensureBookingsTable(bigquery);
+  if (!ensureBookingActivityTablePromise) {
+    ensureBookingActivityTablePromise = ensureBookingActivityTable(bigquery, BIGQUERY_DATASET_ID, BIGQUERY_BOOKING_ACTIVITY_TABLE)
+      .catch((error) => {
+        ensureBookingActivityTablePromise = null;
+        throw error;
+      });
+  }
+  return ensureBookingActivityTablePromise;
+}
+
+// Activity logging must never undo or block the booking change it describes.
+async function logBookingActivity(bigquery, type, row, options = {}) {
+  try {
+    await ensureBookingActivityTableReady(bigquery);
+    await insertBookingActivity(bigquery, bookingActivityTableRef(), bookingActivityRecord(type, row, options));
+  } catch (error) {
+    console.error(`Booking activity log (${type}) failed:`, error.message || error);
+  }
+}
+
+async function notifyStaffOfBookingChange(sheets, bigquery, row, { heading, intro, details }) {
+  try {
+    const [businessProfile, branches, [users]] = await Promise.all([
+      getBusinessProfile(sheets),
+      getBranches(sheets),
+      (async () => {
+        await ensureDashboardAuthTables(bigquery);
+        return bigquery.query({ query: `SELECT email, role, branch_ids, status FROM ${dashboardUsersTableRef()} WHERE status = 'active'` });
+      })(),
+    ]);
+    const branch = branches.find((item) => item.name === row[4] || item.address === row[4]);
+    const recipients = bookingAlertRecipients(users, branch?.id ?? '', isOwnerAuthConfigured() ? OWNER_ADMIN_EMAIL : '');
+    const gmail = createGmailApi();
+    return await deliverBookingAlerts(recipients, (email) => sendFormattedLoyaltyEmail(gmail, {
+      email, name: 'Clinic team', subject: heading,
+      businessName: businessProfile.businessName, heading, intro, details,
+      note: 'Open the Alerts tab to review booking activity.',
+    }));
+  } catch (error) {
+    console.error(`Staff ${heading} alert failed:`, error.message || error);
+    return { sent: 0, failures: [{ email: '', message: error.message || 'Staff alert failed.' }] };
+  }
 }
 
 function branchConfigTableRef() {
@@ -5046,7 +5099,7 @@ export default async function handler(req, res) {
     const historyViews = ['booking-history-preview', 'clear-booking-history'];
     const wixCalendarViews = ['wix-calendar-sync'];
     const validGetViews = ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'business-name', 'square-config', 'google-reviews', 'branches', 'services', 'therapists', 'staff-work-schedule', 'available-therapists', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal', 'company-join', 'find-booking', 'availability', 'unavailability', 'appointment-config-status', 'campaign-log', 'campaign-audience-options', 'review-request-audience', 'appointment-alerts-audience', 'confirm-attendance', 'therapist-accounts', 'wix-contacts', 'dashboard-users'];
-    if (req.method === 'GET' && !validGetViews.includes(view) && !['booking-notifications', 'therapist-name-merge', 'customer-search', 'wix-contacts-import', 'wix-bookings-import', ...packageViews, ...historyViews, ...wixCalendarViews].includes(view)) {
+    if (req.method === 'GET' && !validGetViews.includes(view) && !['booking-notifications', 'booking-activity', 'therapist-name-merge', 'customer-search', 'wix-contacts-import', 'wix-bookings-import', ...packageViews, ...historyViews, ...wixCalendarViews].includes(view)) {
       return res.status(404).json({ message: 'Unknown booking view' });
     }
     const ownerOnlyRequest =
@@ -5056,16 +5109,27 @@ export default async function handler(req, res) {
       (req.method === 'POST' && ['branches', 'services', 'therapists', 'unavailability'].includes(view));
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
     const dashboardSession = await getOwnerSession(req);
-    if (view === 'booking-notifications') {
+    if (view === 'booking-notifications' || view === 'booking-activity') {
       res.setHeader('Cache-Control', 'no-store');
       if (!['owner', 'branch_manager', 'branch_receptionist'].includes(dashboardSession?.role)) {
         return res.status(dashboardSession ? 403 : 401).json({ message: 'Dashboard sign-in required' });
       }
       if (req.method !== 'GET') return res.status(405).json({ message: 'Method Not Allowed' });
       const bigquery = getBigQueryClient();
-      await ensureBookingsTable(bigquery);
+      await ensureBookingActivityTableReady(bigquery);
       const branches = await getDashboardBranchNames(createSheetsClient(), dashboardSession);
-      return res.status(200).json(await readBookingNotifications(bigquery, bookingsTableRef(), req.query?.since, branches));
+      if (view === 'booking-activity') {
+        const days = Math.min(Math.max(Number.parseInt(String(req.query?.days || '7'), 10) || 7, 1), 60);
+        const to = new Date().toISOString();
+        const from = new Date(Date.parse(to) - days * 86400000).toISOString();
+        const events = await readBookingActivity(bigquery, {
+          bookingsTable: bookingsTableRef(), activityTable: bookingActivityTableRef(), from, to, allowedBranches: branches,
+        });
+        return res.status(200).json({ from, to, events });
+      }
+      return res.status(200).json(await readBookingNotifications(
+        bigquery, bookingsTableRef(), req.query?.since, branches, undefined, bookingActivityTableRef(),
+      ));
     }
     if (['manual-booking', 'edit-booking', 'issue-receipt', 'mark-paid', 'check-in'].includes(view)) {
       res.setHeader('Cache-Control', 'no-store');
@@ -8826,6 +8890,10 @@ export default async function handler(req, res) {
           });
         }
       }
+      const staffRescheduled = edited.date !== row[7] || edited.time !== row[8];
+      await logBookingActivity(bigquery, staffRescheduled ? 'rescheduled' : 'edited', updatedRow, {
+        previousDate: staffRescheduled ? row[7] : '', previousTime: staffRescheduled ? row[8] : '', actor: dashboardSession.email,
+      });
       let emailSent = false;
       let emailError = '';
       if (req.body?.notifyClient === true && schedulingChanged) {
@@ -9398,6 +9466,7 @@ export default async function handler(req, res) {
         }
       }
       await bqDeleteBookingRow(bigquery, bookingId);
+      await logBookingActivity(bigquery, 'deleted', row, { actor: dashboardSession?.email || '' });
       const removedContacts = await syncMarketingContactsWithDatabase(sheets, bigquery);
       return res.status(200).json({
         deleted: true,
@@ -9481,6 +9550,16 @@ export default async function handler(req, res) {
       }
 
       await bqUpdateBookingFields(bigquery, bookingId, { status: 'Cancelled', statusNotes });
+      await logBookingActivity(bigquery, 'cancelled', row, { actor: 'customer' });
+      await notifyStaffOfBookingChange(sheets, bigquery, row, {
+        heading: 'Appointment cancelled',
+        intro: `${row[1] || 'A customer'} cancelled an appointment.`,
+        details: [
+          { label: 'Booking', value: bookingId }, { label: 'Branch', value: row[4] || '' },
+          { label: 'Service', value: row[5] || '' }, { label: 'Therapist', value: row[6] || '' },
+          { label: 'Date & time', value: `${row[7]} at ${row[8]}` },
+        ],
+      });
 
       const calendarId = row[15] || PRIMARY_CALENDAR_ID;
       const calendarEventId = row[16] || '';
@@ -9644,6 +9723,20 @@ export default async function handler(req, res) {
       }
       const statusNotes = `Rescheduled ${new Date().toISOString()} from ${originalDate} ${originalTime} to ${newDate} ${newTime} — no refund, per cancellation/reschedule policy.`;
       await bqUpdateBookingFields(bigquery, bookingId, { date: newDate, time: newTime, statusNotes });
+      const rescheduledRow = [...row];
+      rescheduledRow[7] = newDate;
+      rescheduledRow[8] = newTime;
+      await logBookingActivity(bigquery, 'rescheduled', rescheduledRow, { previousDate: originalDate, previousTime: originalTime, actor: 'customer' });
+      await notifyStaffOfBookingChange(sheets, bigquery, rescheduledRow, {
+        heading: 'Appointment rescheduled',
+        intro: `${row[1] || 'A customer'} rescheduled an appointment.`,
+        details: [
+          { label: 'Booking', value: bookingId }, { label: 'Branch', value: row[4] || '' },
+          { label: 'Service', value: row[5] || '' }, { label: 'Therapist', value: row[6] || '' },
+          { label: 'Previous date & time', value: `${originalDate} at ${originalTime}` },
+          { label: 'New date & time', value: `${newDate} at ${newTime}` },
+        ],
+      });
 
       let emailSent = false;
       try {

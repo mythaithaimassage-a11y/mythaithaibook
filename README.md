@@ -85,6 +85,11 @@ is required; both may be provided, and each populated field must be valid.
 Selecting an existing customer fills both fields, which remain editable.
 Phone-only bookings skip the customer confirmation email but still notify staff.
 
+The Alerts reminder list marks email as missing only when the stored address
+is absent or invalid. Valid-email bookings enable reminder controls unless
+otherwise ineligible (for example, no-show appointments). Upcoming filters
+and totals use the same fields as the reminder audience API.
+
 New public and manual bookings email active dashboard owners and staff assigned
 to the booking's branch; the configured environment owner is included too.
 Therapist-only accounts are not recipients. Email delivery failures are logged
@@ -99,6 +104,16 @@ these require browser permission and an open app tab (background tabs may be
 throttled). Browser notifications omit customer details. No old-booking popup
 backlog is shown when first opening the dashboard. These alerts do not require
 marketing consent and do not change customer confirmation/reminder emails.
+
+The Alerts tab includes a **Booking activity** feed for the last 7 days: new
+bookings, reschedules (showing old → new time), cancellations, staff edits and
+deletions, with type filters and a 30-second refresh. Customer reschedules and
+cancellations also email the same staff recipients as new bookings, and the
+dashboard popups/browser notifications cover every activity type. Changes are
+logged to the BigQuery `booking_activity` table (override with
+`BIGQUERY_BOOKING_ACTIVITY_TABLE`), created automatically. New bookings come
+from the bookings table, so the feed includes bookings made before the log
+existed. Logging failures are recorded in server logs without undoing the change.
 
 In **Business profile**, **Minimum booking notice (minutes)** controls how far
 ahead customers must book (default: 15 minutes; whole minutes from 0 to 1440).
