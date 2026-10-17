@@ -174,6 +174,14 @@ The background page stays locked while the fitted calendar scrolls. If a
 browser rejects a native fullscreen request, the viewport layout still opens
 and the browser error is shown.
 
+Mobile staff views hide the MedBook platform header by default. Platform
+switching remains available in the footer; desktop and public booking headers
+are unchanged. Selecting Booking Calendar on mobile automatically opens the
+full-viewport calendar without requesting the browser fullscreen API. **Exit
+fullscreen** returns to the dashboard layout so the bottom navigation is
+available again. Selecting Calendar again reopens the expanded view after
+visiting another section. Device safe areas are respected.
+
 The dashboard **Booking Calendar** includes appointment search, Daily/Agenda
 views, branch and therapist filters, display/auto-refresh settings, and
 **Manage** and **Add** menus. **Add > Quick Sale** and **Add > Appointment**

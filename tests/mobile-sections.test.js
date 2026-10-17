@@ -132,4 +132,16 @@ test('compact section styles are mobile-only, preserve desktop tables and respec
   assert.equal(declarations('.mobile-data-table .mobile-table-toggle')['min-height'], '44px');
   assert.match(declarations('.staff-dashboard .dashboard-content').padding, /88px \+ env\(safe-area-inset-bottom\)/);
   assert.match(declarations('.staff-dashboard .dashboard-shortcuts')['padding-bottom'], /safe-area-inset-bottom/);
+  assert.equal(declarations('.staff-dashboard .dashboard-toolbar').top, '0');
+  assert.match(declarations('.booking-calendar.calendar-fullscreen')['padding-top'], /safe-area-inset-top/);
+});
+
+test('staff mobile header is hidden while desktop and public headers and platform switching remain available', () => {
+  const source = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  assert.match(source, /<header className=\{`\$\{viewMode === 'customer' \? 'flex' : 'hidden lg:flex'\}/);
+  const footer = source.slice(source.indexOf('{/* Footer */}'), source.indexOf('// Self-service portal'));
+  assert.match(footer, /entry\.staffNavigation && viewMode !== 'customer'/);
+  assert.match(footer, /aria-label=\{tr\('Staff platform views'\)\} value=\{viewMode\}/);
+  assert.match(footer, /onChange=\{\(event\) => setViewMode\(event\.target\.value\)\}/);
+  for (const value of ['customer', 'admin', 'therapist']) assert.ok(footer.includes(`value="${value}"`));
 });

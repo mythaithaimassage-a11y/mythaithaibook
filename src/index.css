@@ -15,6 +15,10 @@
 }
 
 @media (max-width: 1023px) {
+  .staff-platform-footer {
+    padding-bottom: calc(88px + env(safe-area-inset-bottom));
+  }
+
   .staff-dashboard .dashboard-content {
     padding: 12px 12px calc(88px + env(safe-area-inset-bottom));
     overflow-wrap: anywhere;
@@ -30,6 +34,7 @@
 
   .staff-dashboard .dashboard-toolbar {
     padding: 8px 12px;
+    top: 0;
   }
 
   .staff-dashboard .dashboard-content :is(section, form, fieldset, label, .grid > *, .flex > *) {
@@ -402,6 +407,10 @@
   .booking-calendar.calendar-fullscreen {
     overflow-y: auto;
     overscroll-behavior: contain;
+    padding-top: max(12px, env(safe-area-inset-top));
+    padding-right: max(12px, env(safe-area-inset-right));
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+    padding-left: max(12px, env(safe-area-inset-left));
   }
 
   .booking-calendar .calendar-agenda {

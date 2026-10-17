@@ -27,6 +27,7 @@ function harness(panel = {}) {
     Error,
     calendarPanelRef: { current: panel },
     calendarFullscreen: false,
+    compactCalendar: false,
     calendarFullscreenError: '',
     activeTab: 'calendar',
     selectedCalendarEvent: null,
@@ -172,4 +173,26 @@ test('leaving the calendar resets viewport mode and inactive layouts do not lock
   assert.equal(context.document.body.style.overflow, 'auto');
   run('navigation');
   assert.equal(context.calendarFullscreen, false);
+});
+
+test('mobile calendar navigation automatically fits the viewport without requesting native fullscreen', () => {
+  const { context, run } = harness({
+    requestFullscreen() { assert.fail('Automatic mobile layout must not request native fullscreen'); },
+  });
+  context.compactCalendar = true;
+  run('navigation');
+  assert.equal(context.calendarFullscreen, true);
+  context.activeTab = 'schedule';
+  run('navigation');
+  assert.equal(context.calendarFullscreen, false);
+  context.activeTab = 'calendar';
+  run('navigation');
+  assert.equal(context.calendarFullscreen, true);
+  context.compactCalendar = false;
+  run('navigation');
+  assert.equal(context.calendarFullscreen, false);
+  context.calendarFullscreen = true;
+  context.document.fullscreenElement = context.calendarPanelRef.current;
+  run('navigation');
+  assert.equal(context.calendarFullscreen, true, 'Desktop native fullscreen remains supported');
 });

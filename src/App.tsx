@@ -770,7 +770,7 @@ export default function App() {
           </button>
         </div>
       )}
-      <header className={`sticky top-0 z-40 flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3 shadow-sm sm:px-6 ${viewMode === 'therapist' ? 'border-slate-800 bg-black text-white' : 'border-slate-200 bg-white text-slate-900'}`}>
+      <header className={`${viewMode === 'customer' ? 'flex' : 'hidden lg:flex'} sticky top-0 z-40 flex-wrap items-center justify-between gap-3 border-b px-4 py-3 shadow-sm sm:px-6 ${viewMode === 'therapist' ? 'border-slate-800 bg-black text-white' : 'border-slate-200 bg-white text-slate-900'}`}>
         <div className="flex items-center space-x-2 font-semibold tracking-wide">
           <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-950 text-xs font-black tracking-tight text-white shadow-sm">M</span>
           <span className={`text-lg font-bold tracking-tight ${viewMode === 'therapist' ? 'text-white' : 'text-slate-950'}`}>MedBook</span>
@@ -849,7 +849,15 @@ export default function App() {
       </main>
 
       {/* Footer */}
-      <footer className={`${viewMode === 'customer' ? 'border-slate-800 bg-slate-950 text-slate-400' : 'border-stone-800 bg-stone-900 text-stone-400'} border-t px-6 py-4 text-center text-xs`}>
+      <footer className={`${viewMode === 'customer' ? 'border-slate-800 bg-slate-950 text-slate-400' : 'staff-platform-footer border-stone-800 bg-stone-900 text-stone-400'} border-t px-6 py-4 text-center text-xs`}>
+        {entry.staffNavigation && viewMode !== 'customer' && <label className="mb-3 block lg:hidden">
+          <span className="sr-only">{tr('Staff platform views')}</span>
+          <select aria-label={tr('Staff platform views')} value={viewMode} onChange={(event) => setViewMode(event.target.value)} className="min-h-11 max-w-full rounded-lg border border-stone-600 bg-stone-900 px-3 text-sm text-white">
+            <option value="customer">{tr('Booking')}</option>
+            <option value="admin">{tr('Dashboard')}</option>
+            <option value="therapist">{tr('Therapist')}</option>
+          </select>
+        </label>}
         <p>© 2026 MY THAI THAI MASSAGE AND WELLNESS INC. {tr('All rights reserved.')} • Toronto & Mississauga, Ontario</p>
         <nav aria-label={tr('Legal information')} className="mt-2 flex flex-wrap justify-center gap-4">
           <a href="/privacy-policy" className="underline underline-offset-4 hover:text-white">{tr('Privacy Policy')}</a>
@@ -4698,7 +4706,9 @@ function AdminPortal({
 
   useEffect(() => {
     if (activeTab !== 'calendar') setCalendarFullscreen(false);
-  }, [activeTab]);
+    else if (compactCalendar) setCalendarFullscreen(true);
+    else if (document.fullscreenElement !== calendarPanelRef.current) setCalendarFullscreen(false);
+  }, [activeTab, compactCalendar]);
 
   useEffect(() => {
     if (!calendarFullscreen || activeTab !== 'calendar') return;
