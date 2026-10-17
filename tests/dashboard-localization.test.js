@@ -448,8 +448,10 @@ test('responsive staff styles stay below 1024px, with scrollable menus and 44px 
 
 test('owner menu toggles, closes after navigation and supports Escape without booking mutations', () => {
   let index = 0;
+  let gestures;
   const values = { activeTab: 'schedule', mobileNavOpen: false, hasLoadedBusinessProfile: true };
   const interactionLoad = createTsLoader({
+    './useCalendarGestures': { __esModule: true, default(options) { gestures = options; } },
     react: {
       ...React,
       useState(initial) {
@@ -533,6 +535,24 @@ test('owner menu toggles, closes after navigation and supports Escape without bo
     assert.equal(values.calendarDate, start);
   }
   assert.equal(values.calendarTherapist, '1', 'Date navigation preserves therapist filtering');
+  tree();
+  assert.equal(gestures.enabled, true);
+  assert.equal(gestures.fullscreen, true);
+  assert.equal(gestures.blocked, false);
+  const beforeGesture = values.calendarDate;
+  gestures.onNavigate(1);
+  assert.notEqual(values.calendarDate, beforeGesture);
+  assert.equal(values.calendarTherapist, '1', 'Swipe navigation preserves therapist filtering');
+  for (const [key, value] of [
+    ['isLoadingCalendar', true], ['calendarLoadError', 'Unable to load'],
+    ['mobileNavOpen', true], ['selectedCalendarEvent', {}], ['quickBooking', {}], ['editingBooking', {}],
+  ]) {
+    const prior = values[key];
+    values[key] = value;
+    tree();
+    assert.equal(gestures.blocked, true, `${key} pauses gestures`);
+    values[key] = prior;
+  }
   const allSections = walk(fullscreenPanel(), (node) => node.props?.id === 'dashboard-all-sections');
   allSections.props.onClick();
   const fullscreenMenu = walk(fullscreenPanel(), (node) => node.props?.id === 'mobile-dashboard-menu');

@@ -186,6 +186,14 @@ filters; the date/filter row stays visible while scrolling the expanded mobile
 calendar. Selecting Calendar again reopens the expanded view after visiting
 another section. Device safe areas are respected.
 
+On mobile, swipe left/right on calendar content for the next/previous day.
+Scrolling down to the bottom advances to the next day and returns the calendar
+to the top. This requires a user scroll, so short or empty days do not repeatedly
+advance on their own. Gestures pause during loading, errors, open navigation,
+and booking dialogs; controls retain their normal touch behavior. Date arrows
+and the picker remain available, and filters stay selected. Desktop scrolling
+is unchanged.
+
 The dashboard **Booking Calendar** includes appointment search, Daily/Agenda
 views, branch and therapist filters, display/auto-refresh settings, and
 **Manage** and **Add** menus. **Add > Quick Sale** and **Add > Appointment**

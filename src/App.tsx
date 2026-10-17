@@ -3,6 +3,7 @@
 // @ts-nocheck
 import MobileHelp from './MobileHelp';
 import ResponsiveTable from './ResponsiveTable';
+import useCalendarGestures from './useCalendarGestures';
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { 
@@ -6749,6 +6750,15 @@ function AdminPortal({
       return date.toISOString().slice(0, 10);
     });
   };
+  useCalendarGestures({
+    panelRef: calendarPanelRef,
+    enabled: compactCalendar && activeTab === 'calendar',
+    fullscreen: calendarFullscreen,
+    blocked: isLoadingCalendar || Boolean(calendarLoadError) || mobileNavOpen
+      || Boolean(selectedCalendarEvent || quickBooking || editingBooking),
+    date: calendarDate,
+    onNavigate: moveCalendarDate,
+  });
 
   return (
     <div data-section={activeTab} className={`staff-dashboard min-h-[calc(100vh-58px)] bg-[#f1f3f7] lg:flex ${dashboardUser.role === 'owner' ? 'owner-dashboard' : ''}`}>
