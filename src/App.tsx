@@ -8,7 +8,7 @@ import { createPortal } from 'react-dom';
 import { 
   Calendar as CalendarIcon, Clock, User, MapPin, CreditCard, CheckCircle2, Globe, Settings, 
   Plus, Edit, Trash2, Building, FileText, Phone, Mail, Search, Filter, 
-  TrendingUp, ChevronRight, AlertCircle, Sparkles, ShieldCheck, Check, X,
+  TrendingUp, ChevronLeft, ChevronRight, AlertCircle, Sparkles, ShieldCheck, Check, X,
   DollarSign, Users, Award, Briefcase, RefreshCw, Layers, CheckSquare, Stethoscope, Database,
   Menu, Home, CalendarDays, UserRound, BarChart3, ChevronRight as ChevronRightIcon, Maximize2, Minimize2,
   Megaphone, ReceiptText, Download, Eye, MousePointerClick, Upload, Crown, Star, CalendarX, CalendarOff, Ban, Copy, UserCheck, Bell
@@ -4756,7 +4756,7 @@ function AdminPortal({
         await document.exitFullscreen();
       } else if (calendarFullscreen) {
         setCalendarFullscreen(false);
-      } else if (typeof panel.requestFullscreen === 'function' &&
+      } else if (!compactCalendar && typeof panel.requestFullscreen === 'function' &&
                  typeof document.exitFullscreen === 'function' && document.fullscreenEnabled !== false) {
         await panel.requestFullscreen();
       } else {
@@ -6711,6 +6711,45 @@ function AdminPortal({
     'business-profile': 'Business profile',
   }[activeTab] || 'Owner dashboard';
 
+  const mobileCalendarFullscreen = compactCalendar && calendarFullscreen && activeTab === 'calendar';
+  const mobileDashboardMenu = mobileNavOpen && (
+    <nav id="mobile-dashboard-menu" aria-label={tr(dashboardUser.role === 'owner' ? "Mobile owner dashboard navigation" : "Mobile staff dashboard navigation")} onKeyDown={(event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setMobileNavOpen(false);
+        event.currentTarget.closest('.staff-dashboard')?.querySelector('#dashboard-all-sections')?.focus();
+      }
+    }} className={`dashboard-mobile-menu ${mobileCalendarFullscreen ? 'calendar-mobile-menu fixed inset-x-3 z-40 rounded-xl border border-slate-200 bg-white p-3 shadow-xl' : 'mt-3 border-t border-slate-100 pt-3'} space-y-4 overflow-y-auto overscroll-contain lg:hidden`}>
+      {navigationSections.map((section) => (
+        <section key={section} aria-label={tr(section)}>
+          <h2 className="mb-2 px-2 text-xs font-bold uppercase tracking-wider text-slate-500">{tr(section)}</h2>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+            {visibleAdminNavigation.filter((item) => item.section === section).map((item) => {
+              const Icon = item.icon;
+              return <button key={item.id} type="button" aria-label={tr(item.label)} title={tr(item.label)} aria-current={activeTab === item.id ? 'page' : undefined} onClick={() => { setActiveTab(item.id); setMobileNavOpen(false); }} className={`flex min-h-11 items-center gap-2 rounded-xl px-3 py-3 text-left text-sm font-semibold ${activeTab === item.id ? 'bg-emerald-950 text-white' : 'bg-slate-50 text-slate-700 hover:bg-slate-100'}`}><Icon aria-hidden="true" className="h-4 w-4 shrink-0" /><span className="min-w-0 break-words">{tr(item.label)}</span>{item.badge > 0 && <span className="ml-auto rounded-full bg-amber-400 px-1.5 text-[10px] font-bold text-slate-950">{item.badge}</span>}</button>;
+            })}
+          </div>
+        </section>
+      ))}
+    </nav>
+  );
+  const mobileDashboardShortcuts = (
+    <nav aria-label={tr(dashboardUser.role === 'owner' ? "Owner dashboard shortcuts" : "Staff dashboard shortcuts")} className="dashboard-shortcuts fixed inset-x-0 bottom-0 z-30 grid auto-cols-fr grid-flow-col gap-1 border-t border-slate-200 bg-white px-3 pt-2 shadow-lg lg:hidden">
+      {visibleAdminNavigation.filter((item) => ['schedule', 'calendar', 'alerts', 'reports'].includes(item.id)).map((item) => {
+        const Icon = item.icon;
+        return <button key={item.id} type="button" aria-label={tr(item.label)} title={tr(item.label)} aria-current={activeTab === item.id ? 'page' : undefined} onClick={() => { setActiveTab(item.id); setMobileNavOpen(false); }} className={`relative flex min-h-11 items-center justify-center rounded-xl p-3 ${activeTab === item.id ? 'bg-emerald-950 text-white' : 'text-slate-600 hover:bg-slate-100'}`}><Icon aria-hidden="true" className="h-5 w-5 shrink-0" /><span className="sr-only">{tr(item.label)}</span>{item.badge > 0 && <span className="absolute right-1 top-0 rounded-full bg-amber-400 px-1 text-[10px] font-bold text-slate-950">{item.badge}</span>}</button>;
+      })}
+      <button id="dashboard-all-sections" type="button" aria-label={tr("All sections")} title={tr("All sections")} aria-expanded={mobileNavOpen} aria-controls="mobile-dashboard-menu" onClick={() => setMobileNavOpen((open) => !open)} className={`flex min-h-11 items-center justify-center rounded-xl p-3 ${mobileNavOpen ? 'bg-emerald-100 text-emerald-950' : 'text-slate-600 hover:bg-slate-100'}`}><Menu aria-hidden="true" className="h-5 w-5" /><span className="sr-only">{tr("All sections")}</span></button>
+    </nav>
+  );
+  const moveCalendarDate = (days: number) => {
+    setCalendarDate((current) => {
+      const date = new Date(`${current}T00:00:00Z`);
+      date.setUTCDate(date.getUTCDate() + days);
+      return date.toISOString().slice(0, 10);
+    });
+  };
+
   return (
     <div data-section={activeTab} className={`staff-dashboard min-h-[calc(100vh-58px)] bg-[#f1f3f7] lg:flex ${dashboardUser.role === 'owner' ? 'owner-dashboard' : ''}`}>
       <BookingNotifications userId={dashboardUser.id || dashboardUser.email} portalTarget={calendarFullscreen ? calendarPanelRef.current : null} />
@@ -6779,30 +6818,10 @@ function AdminPortal({
               <div className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-100 text-[10px] font-bold text-emerald-950">MT</div>
             </div>
           </div>
-          {mobileNavOpen && (
-            <nav id="mobile-dashboard-menu" aria-label={tr(dashboardUser.role === 'owner' ? "Mobile owner dashboard navigation" : "Mobile staff dashboard navigation")} onKeyDown={(event) => { if (event.key === 'Escape') { setMobileNavOpen(false); event.currentTarget.parentElement.querySelector('.dashboard-menu-toggle')?.focus(); } }} className="dashboard-mobile-menu mt-3 space-y-4 overflow-y-auto overscroll-contain border-t border-slate-100 pt-3 lg:hidden">
-              {navigationSections.map((section) => (
-                <section key={section} aria-label={tr(section)}>
-                  <h2 className="mb-2 px-2 text-xs font-bold uppercase tracking-wider text-slate-500">{tr(section)}</h2>
-                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                    {visibleAdminNavigation.filter((item) => item.section === section).map((item) => {
-                      const Icon = item.icon;
-                      return <button key={item.id} type="button" aria-label={tr(item.label)} title={tr(item.label)} aria-current={activeTab === item.id ? 'page' : undefined} onClick={() => { setActiveTab(item.id); setMobileNavOpen(false); }} className={`flex min-h-11 items-center gap-2 rounded-xl px-3 py-3 text-left text-sm font-semibold ${activeTab === item.id ? 'bg-emerald-950 text-white' : 'bg-slate-50 text-slate-700 hover:bg-slate-100'}`}><Icon aria-hidden="true" className="h-4 w-4 shrink-0" /><span className="min-w-0 break-words">{tr(item.label)}</span>{item.badge > 0 && <span className="ml-auto rounded-full bg-amber-400 px-1.5 text-[10px] font-bold text-slate-950">{item.badge}</span>}</button>;
-                    })}
-                  </div>
-                </section>
-              ))}
-            </nav>
-          )}
+          {!mobileCalendarFullscreen && mobileDashboardMenu}
         </div>
 
-        <nav aria-label={tr(dashboardUser.role === 'owner' ? "Owner dashboard shortcuts" : "Staff dashboard shortcuts")} className="dashboard-shortcuts fixed inset-x-0 bottom-0 z-30 grid auto-cols-fr grid-flow-col gap-1 border-t border-slate-200 bg-white px-3 pt-2 shadow-lg lg:hidden">
-          {visibleAdminNavigation.filter((item) => ['schedule', 'calendar', 'alerts', 'reports'].includes(item.id)).map((item) => {
-            const Icon = item.icon;
-            return <button key={item.id} type="button" aria-label={tr(item.label)} title={tr(item.label)} aria-current={activeTab === item.id ? 'page' : undefined} onClick={() => { setActiveTab(item.id); setMobileNavOpen(false); }} className={`relative flex min-h-11 items-center justify-center rounded-xl p-3 ${activeTab === item.id ? 'bg-emerald-950 text-white' : 'text-slate-600 hover:bg-slate-100'}`}><Icon aria-hidden="true" className="h-5 w-5 shrink-0" /><span className="sr-only">{tr(item.label)}</span>{item.badge > 0 && <span className="absolute right-1 top-0 rounded-full bg-amber-400 px-1 text-[10px] font-bold text-slate-950">{item.badge}</span>}</button>;
-          })}
-          <button type="button" aria-label={tr("All sections")} title={tr("All sections")} aria-expanded={mobileNavOpen} aria-controls="mobile-dashboard-menu" onClick={() => setMobileNavOpen((open) => !open)} className={`flex min-h-11 items-center justify-center rounded-xl p-3 ${mobileNavOpen ? 'bg-emerald-100 text-emerald-950' : 'text-slate-600 hover:bg-slate-100'}`}><Menu aria-hidden="true" className="h-5 w-5" /><span className="sr-only">{tr("All sections")}</span></button>
-        </nav>
+        {!mobileCalendarFullscreen && mobileDashboardShortcuts}
 
         <main className="dashboard-content mx-auto max-w-[1600px] space-y-6 p-4 sm:p-6 xl:p-8">
           <CheckInReminders
@@ -7084,6 +7103,8 @@ function AdminPortal({
         <div ref={calendarPanelRef} className={calendarFullscreen
           ? 'booking-calendar calendar-fullscreen fixed inset-0 z-[60] flex h-dvh flex-col gap-3 overflow-hidden bg-white p-3 sm:p-4'
           : 'booking-calendar space-y-4 rounded-2xl border border-stone-200 bg-white p-6 shadow-sm'}>
+          {mobileCalendarFullscreen && mobileDashboardMenu}
+          {mobileCalendarFullscreen && mobileDashboardShortcuts}
           <div className="calendar-heading flex shrink-0 flex-wrap items-end justify-between gap-3">
             <div>
               <h2 className="text-lg font-bold text-stone-900">{tr("Booking Calendar")}</h2>
@@ -7138,8 +7159,11 @@ function AdminPortal({
             </div>
           </div>
           <div className="calendar-filters flex shrink-0 flex-wrap items-end gap-2 border-t-2 border-blue-600 pt-4">
-              <label className="text-xs font-semibold text-stone-600">{tr("Date")}<input type="date" value={calendarDate} onChange={(event) => setCalendarDate(event.target.value)} className="block mt-1 p-2 rounded-lg border border-stone-300" />
-              </label>
+              <div className="calendar-date-navigation flex items-end gap-1">
+                <button type="button" aria-label={tr("Previous day")} title={tr("Previous day")} onClick={() => moveCalendarDate(-1)} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-blue-200 text-blue-700 hover:bg-blue-50"><ChevronLeft aria-hidden="true" className="h-5 w-5" /></button>
+                <label className="min-w-0 text-xs font-semibold text-stone-600">{tr("Date")}<input type="date" value={calendarDate} onChange={(event) => { if (event.target.value) setCalendarDate(event.target.value); }} className="mt-1 block w-full rounded-lg border border-stone-300 p-2" /></label>
+                <button type="button" aria-label={tr("Next day")} title={tr("Next day")} onClick={() => moveCalendarDate(1)} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-blue-200 text-blue-700 hover:bg-blue-50"><ChevronRight aria-hidden="true" className="h-5 w-5" /></button>
+              </div>
               {calendarFiltersOpen && <label className="text-xs font-semibold text-stone-600">{tr("Branch")}<select value={calendarBranch} onChange={(event) => setCalendarBranch(event.target.value)} className="block mt-1 p-2 rounded-lg border border-stone-300">
                   <option value="all">{tr("All branches")}</option>
                   {dashboardBranches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}

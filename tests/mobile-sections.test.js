@@ -134,6 +134,10 @@ test('compact section styles are mobile-only, preserve desktop tables and respec
   assert.match(declarations('.staff-dashboard .dashboard-shortcuts')['padding-bottom'], /safe-area-inset-bottom/);
   assert.equal(declarations('.staff-dashboard .dashboard-toolbar').top, '0');
   assert.match(declarations('.booking-calendar.calendar-fullscreen')['padding-top'], /safe-area-inset-top/);
+  assert.match(declarations('.booking-calendar.calendar-fullscreen')['padding-bottom'], /88px \+ env\(safe-area-inset-bottom\)/);
+  assert.equal(declarations('.booking-calendar.calendar-fullscreen .calendar-filters').position, 'sticky');
+  assert.equal(declarations('.staff-dashboard .booking-calendar .calendar-mobile-menu')['max-height'], 'none');
+  assert.match(declarations('.staff-dashboard .booking-calendar .calendar-mobile-menu').bottom, /safe-area-inset-bottom/);
 });
 
 test('staff mobile header is hidden while desktop and public headers and platform switching remain available', () => {

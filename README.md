@@ -178,9 +178,13 @@ Mobile staff views hide the MedBook platform header by default. Platform
 switching remains available in the footer; desktop and public booking headers
 are unchanged. Selecting Booking Calendar on mobile automatically opens the
 full-viewport calendar without requesting the browser fullscreen API. **Exit
-fullscreen** returns to the dashboard layout so the bottom navigation is
-available again. Selecting Calendar again reopens the expanded view after
-visiting another section. Device safe areas are respected.
+fullscreen** returns to the dashboard layout. The bottom icon navigation and
+**All sections** menu remain available inside the mobile full-viewport calendar,
+so switching sections does not require exiting first. Previous/next day arrows
+beside the date picker let staff browse dates in one tap while preserving their
+filters; the date/filter row stays visible while scrolling the expanded mobile
+calendar. Selecting Calendar again reopens the expanded view after visiting
+another section. Device safe areas are respected.
 
 The dashboard **Booking Calendar** includes appointment search, Daily/Agenda
 views, branch and therapist filters, display/auto-refresh settings, and

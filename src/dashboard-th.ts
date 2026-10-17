@@ -199,6 +199,8 @@ export const dashboardThai: Record<string, string> = {
   'Exit fullscreen calendar': 'ออกจากโหมดเต็มหน้าจอ',
   'Fit to screen': 'เต็มหน้าจอ',
   'Exit fullscreen': 'ออกจากเต็มหน้าจอ',
+  'Previous day': 'วันก่อนหน้า',
+  'Next day': 'วันถัดไป',
   'Daily': 'รายวัน',
   'Agenda': 'รายการนัดหมาย',
   'Calendar filters': 'ตัวกรองปฏิทิน',

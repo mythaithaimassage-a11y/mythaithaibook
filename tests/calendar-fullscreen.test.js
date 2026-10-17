@@ -78,6 +78,17 @@ test('disabled or incomplete fullscreen implementations use the viewport layout'
   }
 });
 
+test('mobile fit uses viewport mode even when native fullscreen is available, keeping dashboard navigation visible', async () => {
+  const { context, run } = harness({
+    requestFullscreen() { assert.fail('Mobile calendar must retain app navigation'); },
+  });
+  context.compactCalendar = true;
+  context.document.exitFullscreen = async () => {};
+  await run('toggle');
+  assert.equal(context.calendarFullscreen, true);
+  await run('toggle');
+  assert.equal(context.calendarFullscreen, false);
+});
 test('supported browsers enter native fullscreen, track browser exit and clean up listeners', async () => {
   const { context, run, listeners } = harness();
   const panel = context.calendarPanelRef.current;

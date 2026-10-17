@@ -143,6 +143,25 @@ test('all dashboard sections retain a current title and usable mobile navigation
   assert.match(render('patient-history', 'en', { compactCalendar: true }), /Confidential health information/);
 });
 
+test('expanded mobile calendar retains one permission-filtered navigation and menu inside its panel', () => {
+  for (const [role, sections] of [['owner', 20], ['branch_manager', 6], ['branch_receptionist', 4]]) {
+    const html = render('calendar', 'en', { compactCalendar: true, calendarFullscreen: true, mobileNavOpen: true }, {
+      dashboardUser: { role, branchIds: ['1'] },
+    });
+    assert.equal((html.match(/id="mobile-dashboard-menu"/g) || []).length, 1);
+    assert.equal((html.match(/aria-label="(?:Owner|Staff) dashboard shortcuts"/g) || []).length, 1);
+    const panel = html.slice(html.indexOf('booking-calendar calendar-fullscreen'));
+    const menu = panel.match(/<nav id="mobile-dashboard-menu"[\s\S]*?<\/nav>/)?.[0];
+    assert.ok(menu);
+    assert.equal((menu.match(/<button /g) || []).length, sections);
+    assert.match(panel, /aria-label="(?:Owner|Staff) dashboard shortcuts"/);
+    assert.match(panel, /aria-label="Previous day"/);
+    assert.match(panel, /aria-label="Next day"/);
+    if (role !== 'owner') assert.doesNotMatch(menu, /Service catalogue|Patient Summary|Email marketing|Therapist approvals/);
+    if (role === 'branch_receptionist') assert.doesNotMatch(menu, /Sales &amp; reports/);
+  }
+});
+
 test('mobile therapist filter is visible without expanding filters and retains its selection', () => {
   const filter = (html) => html.match(/<label class="text-xs font-semibold text-stone-600">Therapist<select[\s\S]*?<\/select>/g) || [];
   const mobile = render('calendar', 'en', { compactCalendar: true, calendarFiltersOpen: false });
@@ -480,7 +499,8 @@ test('owner menu toggles, closes after navigation and supports Escape without bo
   let focused = false;
   walk(tree(), (node) => node.props?.id === 'mobile-dashboard-menu').props.onKeyDown({
     key: 'Escape',
-    currentTarget: { parentElement: { querySelector: () => ({ focus() { focused = true; } }) } },
+    preventDefault() {},
+    currentTarget: { closest: () => ({ querySelector: () => ({ focus() { focused = true; } }) }) },
   });
   assert.equal(values.mobileNavOpen, false);
   assert.equal(focused, true);
@@ -495,6 +515,38 @@ test('owner menu toggles, closes after navigation and supports Escape without bo
   therapistFilter.props.onChange({ target: { value: '1' } });
   assert.equal(values.calendarTherapist, '1');
   assert.equal(values.calendarFiltersOpen, false);
+  values.calendarFullscreen = true;
+  values.calendarDate = '2026-12-31';
+  const fullscreenPanel = () => walk(tree(), (node) => node.props?.className?.includes('booking-calendar calendar-fullscreen'));
+  assert.ok(walk(fullscreenPanel(), (node) => node.props?.['aria-label'] === 'Owner dashboard shortcuts'),
+    'Bottom navigation is inside the expanded calendar');
+  const dayButton = (label) => walk(fullscreenPanel(), (node) => node.props?.['aria-label'] === label);
+  dayButton('Next day').props.onClick();
+  assert.equal(values.calendarDate, '2027-01-01');
+  dayButton('Previous day').props.onClick();
+  assert.equal(values.calendarDate, '2026-12-31');
+  for (const [start, next] of [['2028-02-28', '2028-02-29'], ['2028-02-29', '2028-03-01'], ['2026-03-08', '2026-03-09'], ['2026-11-01', '2026-11-02']]) {
+    values.calendarDate = start;
+    dayButton('Next day').props.onClick();
+    assert.equal(values.calendarDate, next);
+    dayButton('Previous day').props.onClick();
+    assert.equal(values.calendarDate, start);
+  }
+  assert.equal(values.calendarTherapist, '1', 'Date navigation preserves therapist filtering');
+  const allSections = walk(fullscreenPanel(), (node) => node.props?.id === 'dashboard-all-sections');
+  allSections.props.onClick();
+  const fullscreenMenu = walk(fullscreenPanel(), (node) => node.props?.id === 'mobile-dashboard-menu');
+  assert.ok(fullscreenMenu, 'All sections opens within fullscreen rather than behind it');
+  let preventedEscape = false;
+  fullscreenMenu.props.onKeyDown({
+    key: 'Escape', preventDefault() { preventedEscape = true; },
+    currentTarget: { closest: () => ({ querySelector: () => ({ focus() {} }) }) },
+  });
+  assert.equal(preventedEscape, true, 'Closing the menu must not also exit fullscreen');
+  assert.equal(values.mobileNavOpen, false);
+  walk(fullscreenPanel(), (node) => node.props?.['aria-label'] === 'Home').props.onClick();
+  assert.equal(values.activeTab, 'schedule', 'Home works without using Exit fullscreen');
+  assert.equal(values.mobileNavOpen, false);
 });
 
 test('managers and receptionists can edit bookings and issue receipts without manual discounts or medical access', () => {
