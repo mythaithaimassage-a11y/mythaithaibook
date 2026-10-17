@@ -283,7 +283,7 @@ async function notifyStaffOfBookingChange(sheets, bigquery, row, { heading, intr
       getBranches(sheets),
       (async () => {
         await ensureDashboardAuthTables(bigquery);
-        return bigquery.query({ query: `SELECT email, role, branch_ids, status FROM ${dashboardUsersTableRef()} WHERE status = 'active'` });
+        return bigquery.query({ query: `SELECT email, role, branch_ids, status, receives_alerts FROM ${dashboardUsersTableRef()} WHERE status = 'active'` });
       })(),
     ]);
     const branch = branches.find((item) => item.name === row[4] || item.address === row[4]);
@@ -1643,7 +1643,8 @@ async function ensureDashboardAuthTables(bigquery = getBigQueryClient()) {
           { name: 'id', type: 'STRING' }, { name: 'email', type: 'STRING' },
           { name: 'name', type: 'STRING' }, { name: 'password_hash', type: 'STRING' },
           { name: 'role', type: 'STRING' }, { name: 'branch_ids', type: 'STRING' },
-          { name: 'status', type: 'STRING' }, { name: 'created_at', type: 'STRING' },
+          { name: 'status', type: 'STRING' }, { name: 'receives_alerts', type: 'BOOLEAN' },
+          { name: 'created_at', type: 'STRING' },
           { name: 'updated_at', type: 'STRING' },
         ]],
         [DASHBOARD_LOGIN_CHALLENGES_TABLE, [
@@ -1661,6 +1662,15 @@ async function ensureDashboardAuthTables(bigquery = getBigQueryClient()) {
             });
           } catch (error) {
             if (error.code !== 409 && error.status !== 409) throw error;
+          }
+        }
+        if (tableName === DASHBOARD_USERS_TABLE) {
+          const [metadata] = await table.getMetadata();
+          const existingFields = metadata.schema?.fields || [];
+          if (!existingFields.some((field) => field.name === 'receives_alerts')) {
+            await table.setMetadata({
+              schema: { fields: [...existingFields, { name: 'receives_alerts', type: 'BOOLEAN', mode: 'NULLABLE' }] },
+            });
           }
         }
       }
@@ -5105,7 +5115,7 @@ export default async function handler(req, res) {
     const ownerOnlyRequest =
       ['therapist-name-merge', 'wix-contacts', 'wix-contacts-import', 'wix-bookings-import', ...packageViews, ...historyViews, ...wixCalendarViews].includes(view) ||
       (req.method === 'GET' && ['patient-history', 'appointment-notes', 'business-profile', 'appointment-config-status', 'google-ads-report', 'loyalty-dashboard', 'google-reviews', 'unavailability', 'campaign-log', 'campaign-audience-options', 'review-request-audience', 'therapist-accounts'].includes(view)) ||
-      ['business-profile', 'appointment-config-migrate', 'dashboard-user', 'dashboard-user-status', 'dashboard-user-password', 'therapist-account-status', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-clear-ledger', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'company-portal-link', 'unavailability-delete', 'review-request-send', 'branches-migrate'].includes(view) ||
+      ['business-profile', 'appointment-config-migrate', 'dashboard-user', 'dashboard-user-update', 'dashboard-user-status', 'dashboard-user-password', 'therapist-account-status', 'complete-booking-details', 'delete-booking', 'delete-patient-history', 'appointment-note', 'campaign-audience', 'campaign-generate', 'campaign-send', 'loyalty-settings', 'loyalty-migrate', 'loyalty-member', 'loyalty-remove-member', 'loyalty-remove-company', 'loyalty-clear-ledger', 'loyalty-payment', 'loyalty-topup', 'loyalty-award', 'loyalty-redeem', 'company-portal-link', 'unavailability-delete', 'review-request-send', 'branches-migrate'].includes(view) ||
       (req.method === 'POST' && ['branches', 'services', 'therapists', 'unavailability'].includes(view));
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
     const dashboardSession = await getOwnerSession(req);
@@ -5183,11 +5193,12 @@ export default async function handler(req, res) {
       const bigquery = getBigQueryClient();
       await ensureDashboardAuthTables(bigquery);
       const [rows] = await bigquery.query({
-        query: `SELECT id, email, name, role, branch_ids, status, created_at, updated_at FROM ${dashboardUsersTableRef()} ORDER BY email`,
+        query: `SELECT id, email, name, role, branch_ids, status, receives_alerts, created_at, updated_at FROM ${dashboardUsersTableRef()} ORDER BY email`,
       });
       const users = rows.map((row) => ({
           id: row.id, email: row.email, name: row.name, role: row.role,
           branchIds: JSON.parse(row.branch_ids || '[]'), status: row.status,
+          receivesAlerts: row.receives_alerts !== false,
           createdAt: row.created_at, updatedAt: row.updated_at,
         }));
       return res.status(200).json({
@@ -5212,6 +5223,38 @@ export default async function handler(req, res) {
         params: { id, status, updated_at: new Date().toISOString() },
       });
       return res.status(200).json({ status });
+    }
+    if (req.method === 'POST' && view === 'dashboard-user-update') {
+      if (!isSameOriginRequest(req)) return res.status(403).json({ message: 'Dashboard user request origin is not allowed' });
+      const id = String(req.body?.id || '');
+      const email = String(req.body?.email || '').trim().toLowerCase();
+      const name = String(req.body?.name || '').trim();
+      const receivesAlerts = req.body?.receivesAlerts;
+      if (!/^[0-9a-f-]{36}$/i.test(id) || !/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(email)
+          || !name || name.length > 120
+          || typeof receivesAlerts !== 'boolean') {
+        return res.status(400).json({ message: 'Enter a valid staff name, email and alert preference.' });
+      }
+      const bigquery = getBigQueryClient();
+      await ensureDashboardAuthTables(bigquery);
+      const [existing] = await bigquery.query({
+        query: `SELECT id FROM ${dashboardUsersTableRef()} WHERE LOWER(email) = @email AND id != @id LIMIT 1`,
+        params: { id, email },
+      });
+      if (existing.length) return res.status(409).json({ message: 'A dashboard account already exists for this email.' });
+      const [target] = await bigquery.query({
+        query: `SELECT id, email FROM ${dashboardUsersTableRef()} WHERE id = @id LIMIT 1`,
+        params: { id },
+      });
+      if (!target.length) return res.status(404).json({ message: 'Dashboard account not found.' });
+      if (email === OWNER_ADMIN_EMAIL && String(target[0].email || '').toLowerCase() !== email) {
+        return res.status(400).json({ message: 'Enter a valid staff email different from the configured owner email.' });
+      }
+      await bigquery.query({
+        query: `UPDATE ${dashboardUsersTableRef()} SET email = @email, name = @name, receives_alerts = @receives_alerts, updated_at = @updated_at WHERE id = @id`,
+        params: { id, email, name, receives_alerts: receivesAlerts, updated_at: new Date().toISOString() },
+      });
+      return res.status(200).json({ email, name, receivesAlerts });
     }
     if (req.method === 'POST' && view === 'dashboard-user-password') {
       if (!isSameOriginRequest(req)) return res.status(403).json({ message: 'Dashboard user request origin is not allowed' });
@@ -5657,6 +5700,7 @@ export default async function handler(req, res) {
       const name = String(req.body?.name || '').trim();
       const password = String(req.body?.password || '');
       const role = String(req.body?.role || '');
+      const receivesAlerts = req.body?.receivesAlerts === undefined ? true : req.body.receivesAlerts;
       const branchIds = Array.isArray(req.body?.branchIds) ? [...new Set(req.body.branchIds.map(String))] : [];
       if (!/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(email) || email === OWNER_ADMIN_EMAIL) {
         return res.status(400).json({ message: 'Enter a valid staff email different from the configured owner email.' });
@@ -5666,6 +5710,9 @@ export default async function handler(req, res) {
       }
       if (!['owner', 'branch_manager', 'branch_receptionist'].includes(role)) {
         return res.status(400).json({ message: 'Choose a valid dashboard role.' });
+      }
+      if (typeof receivesAlerts !== 'boolean') {
+        return res.status(400).json({ message: 'Choose a valid staff alert preference.' });
       }
       if (role !== 'owner' && !branchIds.length) {
         return res.status(400).json({ message: 'Assign at least one branch to branch staff.' });
@@ -5684,13 +5731,14 @@ export default async function handler(req, res) {
       const id = crypto.randomUUID();
       const timestamp = new Date().toISOString();
       await bigquery.query({
-        query: `INSERT INTO ${dashboardUsersTableRef()} (id, email, name, password_hash, role, branch_ids, status, created_at, updated_at) VALUES (@id, @email, @name, @password_hash, @role, @branch_ids, 'active', @created_at, @updated_at)`,
+        query: `INSERT INTO ${dashboardUsersTableRef()} (id, email, name, password_hash, role, branch_ids, status, receives_alerts, created_at, updated_at) VALUES (@id, @email, @name, @password_hash, @role, @branch_ids, 'active', @receives_alerts, @created_at, @updated_at)`,
         params: {
           id, email, name, password_hash: hashPassword(password), role,
-          branch_ids: JSON.stringify(branchIds), created_at: timestamp, updated_at: timestamp,
+          branch_ids: JSON.stringify(branchIds), receives_alerts: receivesAlerts,
+          created_at: timestamp, updated_at: timestamp,
         },
       });
-      return res.status(201).json({ user: { id, email, name, role, branchIds, status: 'active' } });
+      return res.status(201).json({ user: { id, email, name, role, branchIds, status: 'active', receivesAlerts } });
     }
 
     if (req.method === 'GET' && view === 'business-name') {
@@ -10462,7 +10510,7 @@ export default async function handler(req, res) {
       const bigquery = getBigQueryClient();
       await ensureDashboardAuthTables(bigquery);
       const [users] = await bigquery.query({
-        query: `SELECT email, role, branch_ids, status FROM ${dashboardUsersTableRef()} WHERE status = 'active'`,
+        query: `SELECT email, role, branch_ids, status, receives_alerts FROM ${dashboardUsersTableRef()} WHERE status = 'active'`,
       });
       const recipients = bookingAlertRecipients(users, selectedBranch.id, isOwnerAuthConfigured() ? OWNER_ADMIN_EMAIL : '');
       const delivery = await deliverBookingAlerts(recipients, (email) => sendFormattedLoyaltyEmail(createGmailApi(), {

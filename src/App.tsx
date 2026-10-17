@@ -4305,8 +4305,10 @@ function AdminPortal({
   const [dashboardUserError, setDashboardUserError] = useState('');
   const [dashboardUserMessage, setDashboardUserMessage] = useState('');
   const [savingDashboardUser, setSavingDashboardUser] = useState(false);
+  const [editingDashboardUser, setEditingDashboardUser] = useState(null);
+  const [savingDashboardUserEdit, setSavingDashboardUserEdit] = useState(false);
   const [newDashboardUser, setNewDashboardUser] = useState({
-    name: '', email: '', password: '', role: 'branch_manager', branchIds: [],
+    name: '', email: '', password: '', role: 'branch_manager', branchIds: [], receivesAlerts: true,
   });
   const [branchForm, setBranchForm] = useState(() => branches.map((branch) => ({ ...branch })));
   const [isSavingBranches, setIsSavingBranches] = useState(false);
@@ -5341,12 +5343,47 @@ function AdminPortal({
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || 'Unable to create dashboard account.');
       setDashboardUserMessage(message("Created {value0} access for {value1}. Share the initial password through a secure channel.", { value0: message(data.user.role.replaceAll('_', ' ')), value1: data.user.email }));
-      setNewDashboardUser({ name: '', email: '', password: '', role: 'branch_manager', branchIds: [] });
+      setNewDashboardUser({ name: '', email: '', password: '', role: 'branch_manager', branchIds: [], receivesAlerts: true });
       await loadDashboardUsers();
     } catch (error) {
       setDashboardUserError(error.message || 'Unable to create dashboard account.');
     } finally {
       setSavingDashboardUser(false);
+    }
+  };
+
+  const editDashboardUser = (account) => {
+    setDashboardUserError('');
+    setEditingDashboardUser({
+      id: account.id,
+      name: account.name,
+      email: account.email,
+      receivesAlerts: account.receivesAlerts !== false,
+    });
+  };
+
+  const saveDashboardUserEdit = async (event) => {
+    event.preventDefault();
+    setSavingDashboardUserEdit(true);
+    setDashboardUserError('');
+    setDashboardUserMessage('');
+    try {
+      const response = await fetch('/api/booking?view=dashboard-user-update', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(editingDashboardUser),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Unable to update dashboard account.');
+      setDashboardUsers((current) => current.map((user) => user.id === editingDashboardUser.id
+        ? { ...user, ...data }
+        : user));
+      setDashboardUserMessage(tr("Dashboard account updated."));
+      setEditingDashboardUser(null);
+    } catch (error) {
+      setDashboardUserError(error.message || 'Unable to update dashboard account.');
+    } finally {
+      setSavingDashboardUserEdit(false);
     }
   };
 
@@ -6788,6 +6825,10 @@ function AdminPortal({
                   <option value="branch_receptionist">{tr("Branch receptionist")}</option>
                 </select>
               </label>
+              <label className="inline-flex items-center gap-2 text-sm font-medium text-slate-700 sm:col-span-2">
+                <input type="checkbox" checked={newDashboardUser.receivesAlerts} onChange={(event) => setNewDashboardUser((current) => ({ ...current, receivesAlerts: event.target.checked }))} />
+                {tr("Receive booking alerts by email")}
+              </label>
               {newDashboardUser.role !== 'owner' && <fieldset className="sm:col-span-2">
                 <legend className="text-xs font-semibold text-slate-600">{tr("Assigned branches")}</legend>
                 <div className="mt-2 flex flex-wrap gap-2">
@@ -6815,11 +6856,27 @@ function AdminPortal({
             <div className="mt-3 divide-y divide-slate-100">
               {dashboardUsers.length ? dashboardUsers.map((account) => (
                 <div key={account.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
-                  <div className="min-w-0">
+                  <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-semibold text-slate-900">{account.name} · {account.email}</p>
                     <p className="mt-1 text-xs capitalize text-slate-500">{tr(account.role.replaceAll('_', ' '))} · {account.branchIds.map((id) => branches.find((branch) => String(branch.id) === String(id))?.name).filter(Boolean).join(', ') || tr("All branches")} · {tr(account.status)}</p>
+                    <p className="mt-1 text-xs text-slate-500">{tr(account.receivesAlerts === false ? "Email alerts off" : "Receives booking alerts")}</p>
+                    {editingDashboardUser?.id === account.id && (
+                      <form onSubmit={saveDashboardUserEdit} className="mt-3 grid max-w-2xl gap-3 sm:grid-cols-2">
+                        <label className="text-xs font-semibold text-slate-600">{tr("Name")}<input required maxLength={120} value={editingDashboardUser.name} onChange={(event) => setEditingDashboardUser((current) => ({ ...current, name: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
+                        <label className="text-xs font-semibold text-slate-600">{tr("Email")}<input required type="email" value={editingDashboardUser.email} onChange={(event) => setEditingDashboardUser((current) => ({ ...current, email: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
+                        <label className="inline-flex items-center gap-2 text-sm font-medium text-slate-700 sm:col-span-2">
+                          <input type="checkbox" checked={editingDashboardUser.receivesAlerts} onChange={(event) => setEditingDashboardUser((current) => ({ ...current, receivesAlerts: event.target.checked }))} />
+                          {tr("Receive booking alerts by email")}
+                        </label>
+                        <div className="flex gap-2 sm:col-span-2">
+                          <button type="submit" disabled={savingDashboardUserEdit} className="rounded-lg bg-emerald-950 px-3 py-2 text-xs font-bold text-white disabled:opacity-50">{savingDashboardUserEdit ? tr("Saving…") : tr("Save changes")}</button>
+                          <button type="button" disabled={savingDashboardUserEdit} onClick={() => setEditingDashboardUser(null)} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 disabled:opacity-50">{tr("Cancel")}</button>
+                        </div>
+                      </form>
+                    )}
                   </div>
                   <div className="flex flex-wrap justify-end gap-2">
+                    {dashboardUser.role === 'owner' && editingDashboardUser?.id !== account.id && <button type="button" onClick={() => editDashboardUser(account)} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50">{tr("Edit")}</button>}
                     {dashboardUser.role === 'owner' && <button type="button" onClick={() => updateDashboardUserPassword(account)} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50">{tr("Reset password")}</button>}
                     {((dashboardUser.role === 'owner' && account.role === 'branch_manager') || (dashboardUser.role === 'branch_manager' && account.role === 'branch_receptionist')) && <button type="button" onClick={() => promoteDashboardUser(account)} className="rounded-lg border border-emerald-200 px-3 py-2 text-xs font-bold text-emerald-800 hover:bg-emerald-50">{tr("Promote")}</button>}
                     {dashboardUser.role === 'owner' && <button type="button" onClick={() => updateDashboardUserStatus(account)} className={`rounded-lg px-3 py-2 text-xs font-bold ${account.status === 'active' ? 'border border-rose-200 text-rose-700 hover:bg-rose-50' : 'border border-emerald-200 text-emerald-800 hover:bg-emerald-50'}`}>{account.status === 'active' ? tr("Disable access") : tr("Restore access")}</button>}

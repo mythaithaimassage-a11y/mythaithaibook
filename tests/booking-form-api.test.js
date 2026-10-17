@@ -243,7 +243,13 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
         return [dashboardUsers.filter((user) => user.email === params.email && user.status === 'active')];
       }
       if (query.startsWith('SELECT id FROM') && query.includes('LOWER(email)')) {
-        return [dashboardUsers.filter((user) => user.email === params.email).map(({ id }) => ({ id }))];
+        return [dashboardUsers.filter((user) => user.email === params.email && user.id !== params.id).map(({ id }) => ({ id }))];
+      }
+      if (query.startsWith('SELECT id FROM') && query.includes('WHERE id = @id')) {
+        return [dashboardUsers.filter((user) => user.id === params.id).map(({ id }) => ({ id }))];
+      }
+      if (query.startsWith('SELECT id, email FROM') && query.includes('WHERE id = @id')) {
+        return [dashboardUsers.filter((user) => user.id === params.id).map(({ id, email }) => ({ id, email }))];
       }
       if (query.startsWith('SELECT role, branch_ids')) {
         return [dashboardUsers.filter((user) => user.id === params.id)];
@@ -268,6 +274,9 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
           if (params.role) user.role = params.role;
           if (params.branch_ids) user.branch_ids = params.branch_ids;
           if (params.password_hash) user.password_hash = params.password_hash;
+          if (params.email) user.email = params.email;
+          if (params.name) user.name = params.name;
+          if (params.receives_alerts !== undefined) user.receives_alerts = params.receives_alerts;
         }
         return [[]];
       }
@@ -575,6 +584,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   assert.equal(managerCreated.code, 201, JSON.stringify(managerCreated.data));
   assert.equal(managerCreated.data.user.role, 'branch_manager');
   assert.deepEqual(managerCreated.data.user.branchIds, ['1']);
+  assert.equal(managerCreated.data.user.receivesAlerts, true);
   const managerLogin = await request('owner-login', {
     email: managerCreated.data.user.email, password: 'synthetic-manager-password',
   });
@@ -603,6 +613,10 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   });
   const ownerCookie = cookie;
   assert.equal(receptionistCreated.code, 201, JSON.stringify(receptionistCreated.data));
+  assert.equal(receptionistCreated.data.user.receivesAlerts, true);
+  const ownerUsers = await request('dashboard-users', null, { method: 'GET' });
+  assert.equal(ownerUsers.code, 200, JSON.stringify(ownerUsers.data));
+  assert.equal(ownerUsers.data.users.find((user) => user.id === receptionistCreated.data.user.id).receivesAlerts, true);
   const receptionistLogin = await request('owner-login', {
     email: receptionistCreated.data.user.email, password: 'synthetic-reception-password',
   });
@@ -634,9 +648,27 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
     id: managerCreated.data.user.id, password: 'synthetic-promoted-password',
   });
   assert.equal(resetPassword.code, 200, JSON.stringify(resetPassword.data));
+  const editedAccount = await request('dashboard-user-update', {
+    id: managerCreated.data.user.id, name: 'Updated Manager', email: 'updated-manager@example.com', receivesAlerts: false,
+  });
+  assert.equal(editedAccount.code, 200, JSON.stringify(editedAccount.data));
+  assert.deepEqual(editedAccount.data, {
+    email: 'updated-manager@example.com', name: 'Updated Manager', receivesAlerts: false,
+  });
+  const duplicateEmail = await request('dashboard-user-update', {
+    id: managerCreated.data.user.id, name: 'Updated Manager', email: 'reception@example.com', receivesAlerts: false,
+  });
+  assert.equal(duplicateEmail.code, 409);
+  const restoredAccount = await request('dashboard-user-update', {
+    id: managerCreated.data.user.id, name: 'Branch Manager', email: 'manager@example.com', receivesAlerts: true,
+  });
+  assert.equal(restoredAccount.code, 200, JSON.stringify(restoredAccount.data));
   cookie = receptionistCookie;
   assert.equal((await request('dashboard-user-password', {
     id: managerCreated.data.user.id, password: 'synthetic-rejected-password',
+  })).code, 403);
+  assert.equal((await request('dashboard-user-update', {
+    id: managerCreated.data.user.id, name: 'Unauthorized edit', email: 'unauthorized@example.com', receivesAlerts: true,
   })).code, 403);
   const restoredManager = dashboardUsers.find((user) => user.id === managerCreated.data.user.id);
   restoredManager.role = 'branch_manager';

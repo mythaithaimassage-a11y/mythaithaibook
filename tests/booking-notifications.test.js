@@ -8,10 +8,16 @@ test('active dashboard owners and branch staff receive deduplicated alerts, not 
     { email: 'front@example.com', role: 'branch_receptionist', status: 'active', branch_ids: '[1]' },
     { email: 'manager@example.com', role: 'branch_manager', status: 'active', branch_ids: '["1"]' },
     { email: 'other@example.com', role: 'branch_receptionist', status: 'active', branch_ids: '[2]' },
+    { email: 'no-alerts@example.com', role: 'branch_receptionist', status: 'active', branch_ids: '[1]', receives_alerts: false },
     { email: 'disabled@example.com', role: 'owner', status: 'inactive' },
     { email: 'therapist@example.com', role: 'therapist', status: 'active' },
   ];
   assert.deepEqual(bookingAlertRecipients(users, 1, 'owner@example.com'), ['owner@example.com', 'front@example.com', 'manager@example.com']);
+  assert.deepEqual(bookingAlertRecipients([
+    { email: 'owner@example.com', role: 'owner', status: 'active', receives_alerts: false },
+    { email: 'front@example.com', role: 'branch_receptionist', status: 'active', branch_ids: '[1]', receives_alerts: false },
+  ], 1, 'owner@example.com'), []);
+  assert.deepEqual(bookingAlertRecipients([], 1, 'owner@example.com'), ['owner@example.com']);
   assert.throws(() => bookingAlertRecipients([{ ...users[1], branch_ids: '{}' }], 1), /Invalid dashboard/);
 });
 
