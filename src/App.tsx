@@ -4,6 +4,7 @@
 import MobileHelp from './MobileHelp';
 import ResponsiveTable from './ResponsiveTable';
 import useCalendarGestures from './useCalendarGestures';
+import useCalendarDropdowns from './useCalendarDropdowns';
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { 
@@ -6831,6 +6832,7 @@ function AdminPortal({
       return date.toISOString().slice(0, 10);
     });
   };
+  useCalendarDropdowns(calendarPanelRef, activeTab === 'calendar');
   useCalendarGestures({
     panelRef: calendarPanelRef,
     enabled: compactCalendar && activeTab === 'calendar' && resolvedCalendarViewMode !== 'agenda',

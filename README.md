@@ -219,6 +219,10 @@ Calendar with the selected branch. Use **Add > Appointment** or the daily
 calendar's **Book** buttons there to open the quick booking form.
 On mobile, open calendar action menus appear above the sticky date and
 previous/next-day controls so their appointment options remain tappable.
+Calendar Settings, Manage and Add menus close on an outside tap, action
+selection, Escape, or five seconds of inactivity. Opening a menu closes the
+previous one. Interaction resets the idle timer, and focused menu controls
+stay open for keyboard users; Escape returns focus to the menu button.
 
 Open an appointment's details and select **Cancel appointment** to cancel
 without deleting its booking record. Owners, managers and receptionists can
