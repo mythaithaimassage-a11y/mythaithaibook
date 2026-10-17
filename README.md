@@ -858,12 +858,25 @@ BigQuery" below).
 The admin dashboard includes a live Google Calendar tab with date and branch
 filters, a native embedded Google Calendar view for
 `mythaithaimassage@gmail.com`, and a filtered appointment list. Dashboard
-sign-in requires an account email and password followed by a six-digit OTP
+sign-in on unregistered browsers requires an account email and password followed by a six-digit OTP
 sent through the configured Gmail sender. Codes expire after 10 minutes and
 allow at most five attempts; sessions expire after eight hours. Set
 `OWNER_ADMIN_EMAIL`, `OWNER_ADMIN_PASSWORD`, and `OWNER_ADMIN_SESSION_SECRET`
 in Vercel. Use a unique owner password of at least 16 characters and generate
 the session secret with `openssl rand -hex 32`.
+
+After verifying the email code, dashboard staff may opt in to **Remember this
+device for 90 days**. That browser then skips OTP on subsequent password logins
+until the fixed 90-day expiry; the eight-hour session limit is unchanged.
+Registration uses a signed, Secure, HttpOnly, SameSite=Strict cookie, not local
+storage, and remains valid across ordinary sign-outs. Password changes,
+clearing cookies, or **Forget this device and sign out** require OTP again.
+Disabled accounts cannot use device registration, and current roles and branch
+permissions are still checked. Trust applies only to the registered browser
+and account, not every browser or app on the physical device. Do not register
+shared devices. Changing `OWNER_ADMIN_SESSION_SECRET` invalidates all registered
+devices as well as existing sessions. Public booking and therapist login are
+unchanged.
 
 For first-time account setup instead of environment-based owner credentials,
 set `OWNER_INITIAL_SETUP_SECRET` to a separate random value of at least 32

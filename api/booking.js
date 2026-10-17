@@ -1623,6 +1623,43 @@ function ownerCookie(value, maxAge) {
   return `mtt_owner_session=${encodeURIComponent(value)}; Max-Age=${maxAge}; Path=/; HttpOnly; SameSite=Strict; Secure`;
 }
 
+const DASHBOARD_DEVICE_MAX_AGE = 90 * 24 * 60 * 60;
+
+function dashboardDeviceCookie(value, maxAge = DASHBOARD_DEVICE_MAX_AGE) {
+  return `mtt_dashboard_device=${encodeURIComponent(value)}; Max-Age=${maxAge}; Path=/; HttpOnly; SameSite=Strict; Secure`;
+}
+
+function dashboardDeviceSignature(payload, account) {
+  const credential = account.id === 'env-owner' ? OWNER_ADMIN_PASSWORD : account.passwordHash;
+  return crypto.createHmac('sha256', OWNER_ADMIN_SESSION_SECRET)
+    .update(JSON.stringify(['dashboard-device-v1', payload, account.id, account.email, credential]))
+    .digest('base64url');
+}
+
+function signDashboardDevice(account) {
+  const payload = Buffer.from(JSON.stringify({
+    expiresAt: Date.now() + DASHBOARD_DEVICE_MAX_AGE * 1000,
+  })).toString('base64url');
+  return `${payload}.${dashboardDeviceSignature(payload, account)}`;
+}
+
+function isRegisteredDashboardDevice(req, account) {
+  const value = parseCookies(req).mtt_dashboard_device || '';
+  if (value.length > 512) return false;
+  const [payload, signature, extra] = value.split('.');
+  if (!payload || !signature || extra !== undefined) return false;
+  const expected = Buffer.from(dashboardDeviceSignature(payload, account));
+  const provided = Buffer.from(signature);
+  if (provided.length !== expected.length || !crypto.timingSafeEqual(provided, expected)) return false;
+  try {
+    const { expiresAt } = JSON.parse(Buffer.from(payload, 'base64url').toString());
+    return Number.isFinite(expiresAt) && expiresAt > Date.now()
+      && expiresAt <= Date.now() + DASHBOARD_DEVICE_MAX_AGE * 1000;
+  } catch {
+    return false;
+  }
+}
+
 function dashboardUsersTableRef() {
   return `\`${BIGQUERY_PROJECT_ID}.${BIGQUERY_DATASET_ID}.${DASHBOARD_USERS_TABLE}\``;
 }
@@ -5014,6 +5051,14 @@ export default async function handler(req, res) {
       if (!account || !verifyDashboardPassword(password, account)) {
         return res.status(401).json({ message: 'Incorrect email or password.' });
       }
+      res.setHeader('Cache-Control', 'no-store');
+      if (isRegisteredDashboardDevice(req, account)) {
+        res.setHeader('Set-Cookie', ownerCookie(signOwnerSession(account), 8 * 60 * 60));
+        return res.status(200).json({
+          authenticated: true,
+          user: { id: account.id, email: account.email, name: account.name, role: account.role, branchIds: account.branchIds },
+        });
+      }
       const bigquery = getBigQueryClient();
       await ensureDashboardAuthTables(bigquery);
       const [recentChallenges] = await bigquery.query({
@@ -5089,7 +5134,9 @@ export default async function handler(req, res) {
       const account = await findDashboardUser(challenge.email);
       if (!account) return res.status(401).json({ message: 'This dashboard account is no longer active.' });
       res.setHeader('Cache-Control', 'no-store');
-      res.setHeader('Set-Cookie', ownerCookie(signOwnerSession(account), 8 * 60 * 60));
+      const cookies = [ownerCookie(signOwnerSession(account), 8 * 60 * 60)];
+      if (req.body?.rememberDevice === true) cookies.push(dashboardDeviceCookie(signDashboardDevice(account)));
+      res.setHeader('Set-Cookie', cookies.length === 1 ? cookies[0] : cookies);
       return res.status(200).json({
         authenticated: true,
         user: { id: account.id, email: account.email, name: account.name, role: account.role, branchIds: account.branchIds },
@@ -5100,7 +5147,10 @@ export default async function handler(req, res) {
       if (!isSameOriginRequest(req)) {
         return res.status(403).json({ message: 'Sign-out request origin is not allowed' });
       }
-      res.setHeader('Set-Cookie', ownerCookie('', 0));
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('Set-Cookie', req.body?.forgetDevice === true
+        ? [ownerCookie('', 0), dashboardDeviceCookie('', 0)]
+        : ownerCookie('', 0));
       return res.status(200).json({ authenticated: false });
     }
 

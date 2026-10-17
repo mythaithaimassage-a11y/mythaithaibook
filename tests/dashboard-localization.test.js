@@ -659,12 +659,74 @@ test('sign-out and sign-in remain Thai inside the shared dashboard language prov
   const authenticated = renderToStaticMarkup(React.createElement(LanguageProvider, { language: 'th' },
     React.createElement(AdminGate, null, React.createElement('div', null, 'User content'))));
   assert.match(authenticated, /ออกจากระบบ/);
+  assert.match(authenticated, /ลืมอุปกรณ์นี้และออกจากระบบ/);
   fixtures = { isCheckingSession: false };
   stateIndex = 0;
   const login = renderToStaticMarkup(React.createElement(LanguageProvider, { language: 'th' },
     React.createElement(AdminGate, null, React.createElement('div'))));
   assert.match(login, /เข้าสู่แผงควบคุม/);
   assert.match(login, /ใส่รหัสผ่านของคุณ/);
+});
+
+test('device registration is optional on the OTP step and localized', () => {
+  activeStates = stateNames(ast.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === 'AdminGate'));
+  for (const language of ['en', 'th']) {
+    fixtures = { isCheckingSession: false, challengeId: 'challenge', email: 'staff@example.com' };
+    stateIndex = 0;
+    const html = renderToStaticMarkup(React.createElement(LanguageProvider, { language },
+      React.createElement(AdminGate, null, React.createElement('div'))));
+    assert.match(html, /type="checkbox"/);
+    assert.doesNotMatch(html, /type="checkbox"[^>]*(?:checked|required)/);
+    assert.match(html, language === 'en' ? /Remember this device for 90 days/ : /จดจำอุปกรณ์นี้เป็นเวลา 90 วัน/);
+    assert.match(html, language === 'en' ? /Do not use on shared devices/ : /ห้ามใช้กับอุปกรณ์ที่ใช้ร่วมกัน/);
+  }
+});
+
+test('login submits device consent only during OTP verification and supports both sign-out actions', async () => {
+  const gate = ast.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === 'AdminGate');
+  let submit;
+  function visit(node) {
+    if (ts.isJsxAttribute(node) && node.name.text === 'onSubmit') submit = node.initializer.expression;
+    ts.forEachChild(node, visit);
+  }
+  visit(gate);
+  const signOut = gate.body.statements.flatMap((statement) =>
+    ts.isVariableStatement(statement) ? [...statement.declarationList.declarations] : [])
+    .find((node) => node.name.getText(ast) === 'signOut').initializer;
+  const requests = [];
+  const context = vm.createContext({
+    setupMode: false, challengeId: '', email: 'staff@example.com', password: 'password',
+    otpCode: '123456', rememberDevice: false,
+    fetch: async (url, options) => {
+      requests.push({ url, body: JSON.parse(options.body) });
+      return { ok: true, json: async () => ({ user: { role: 'owner' } }) };
+    },
+    setIsSigningIn() {}, setError(value) { assert.equal(value, ''); },
+    setSuccessMessage() {}, setDashboardUser() {}, setPassword() {}, setOtpCode() {},
+    setChallengeId() {}, setEmail() {}, setSetupMode() {}, setRememberDevice() {},
+  });
+  vm.runInContext(ts.transpileModule(`const submit = ${submit.getText(ast)}; const signOut = ${signOut.getText(ast)};`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText, context);
+  await vm.runInContext('submit({ preventDefault() {} })', context);
+  assert.deepEqual(requests.at(-1), {
+    url: '/api/booking?view=owner-login', body: { email: 'staff@example.com', password: 'password' },
+  });
+  context.challengeId = 'challenge';
+  for (const consent of [false, true]) {
+    context.rememberDevice = consent;
+    await vm.runInContext('submit({ preventDefault() {} })', context);
+    assert.deepEqual(requests.at(-1), {
+      url: '/api/booking?view=owner-verify',
+      body: { challengeId: 'challenge', code: '123456', rememberDevice: consent },
+    });
+  }
+  await vm.runInContext('signOut()', context);
+  assert.deepEqual(requests.at(-1).body, { forgetDevice: false });
+  await vm.runInContext('signOut(true)', context);
+  assert.deepEqual(requests.at(-1), {
+    url: '/api/booking?view=owner-logout', body: { forgetDevice: true },
+  });
 });
 
 test('printable receipt follows Thai labels, preserves amounts and escapes customer content', () => {

@@ -2277,6 +2277,7 @@ function AdminGate({ children }) {
   const [password, setPassword] = useState('');
   const [challengeId, setChallengeId] = useState('');
   const [otpCode, setOtpCode] = useState('');
+  const [rememberDevice, setRememberDevice] = useState(false);
   const [error, setError] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
   const [setupAvailable, setSetupAvailable] = useState(false);
@@ -2300,14 +2301,19 @@ function AdminGate({ children }) {
       .finally(() => setIsCheckingSession(false));
   }, []);
 
-  const signOut = async () => {
+  const signOut = async (forgetDevice = false) => {
     try {
-      const response = await fetch('/api/booking?view=owner-logout', { method: 'POST' });
+      const response = await fetch('/api/booking?view=owner-logout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ forgetDevice }),
+      });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || 'Unable to sign out.');
       setDashboardUser(null);
       setChallengeId('');
       setOtpCode('');
+      setRememberDevice(false);
       setEmail('');
       setPassword('');
       setError('');
@@ -2321,9 +2327,14 @@ function AdminGate({ children }) {
   if (dashboardUser) {
     return (
       <div>
-        <div className="flex justify-end mb-2">
+        {error && <p role="alert" className="px-3 py-2 text-sm text-rose-800">{tr(error)}</p>}
+        <div className="mb-2 flex flex-wrap justify-end gap-2">
           <button
-            onClick={signOut}
+            onClick={() => signOut(true)}
+            className="rounded-lg px-3 py-2 text-xs font-semibold text-slate-500 transition hover:bg-white hover:text-slate-900"
+          >{tr("Forget this device and sign out")}</button>
+          <button
+            onClick={() => signOut()}
             className="rounded-lg px-3 py-2 text-xs font-semibold text-slate-500 transition hover:bg-white hover:text-slate-900"
           >{tr("Sign out")}</button>
         </div>
@@ -2349,7 +2360,7 @@ function AdminGate({ children }) {
         </div>
         <p className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-100">{tr("MY THAI THAI")}</p>
         <h1 className="mt-2 text-2xl font-bold">{setupMode ? tr("Set up owner account") : tr("Dashboard sign in")}</h1>
-        <p className="mt-2 text-sm leading-6 text-emerald-50/80">{setupMode ? tr("Create the first owner account using the one-time setup key from your administrator.") : tr("Sign in with your account and verify using a code sent to your email.")}</p>
+        <p className="mt-2 text-sm leading-6 text-emerald-50/80">{setupMode ? tr("Create the first owner account using the one-time setup key from your administrator.") : tr("Sign in with your password. Unregistered devices also need an email verification code.")}</p>
       </div>
       <form onSubmit={async (event) => {
         event.preventDefault();
@@ -2366,7 +2377,7 @@ function AdminGate({ children }) {
               password: setupPassword,
               confirmPassword: setupPasswordConfirmation,
             }
-            : challengeId ? { challengeId, code: otpCode } : { email, password };
+            : challengeId ? { challengeId, code: otpCode, rememberDevice } : { email, password };
           const response = await fetch(`/api/booking?view=${view}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -2420,10 +2431,15 @@ function AdminGate({ children }) {
           <p role="status" className="rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-900">{tr("A six-digit verification code was sent to")} {email}.</p>
           <label htmlFor="dashboard-otp" className="block text-sm font-semibold text-slate-700">{tr("Email verification code")}</label>
           <input id="dashboard-otp" type="text" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} value={otpCode} onChange={(event) => setOtpCode(event.target.value.replace(/\D/g, '').slice(0, 6))} autoComplete="one-time-code" required className="w-full rounded-xl border border-slate-300 px-4 py-3 text-center font-mono text-lg tracking-[0.4em] outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" placeholder="000000" />
+          <label className="flex min-h-11 items-center gap-3 text-sm font-semibold text-slate-700">
+            <input type="checkbox" checked={rememberDevice} onChange={(event) => setRememberDevice(event.target.checked)} className="h-5 w-5 accent-emerald-800" />
+            {tr("Remember this device for 90 days")}
+          </label>
+          <p className="text-xs leading-5 text-slate-500">{tr("Skip email codes on this browser; your password is still required. Do not use on shared devices.")}</p>
           <button type="button" onClick={() => { setChallengeId(''); setOtpCode(''); setError(''); }} className="text-xs font-semibold text-emerald-800 underline">{tr("Back to email and password")}</button>
         </>}
         <button type="submit" disabled={isSigningIn} className="w-full rounded-xl bg-emerald-900 py-3 text-sm font-bold text-white shadow-lg shadow-emerald-950/15 transition hover:bg-emerald-800 disabled:cursor-wait disabled:opacity-60">
-          {isSigningIn ? tr("Please wait…") : setupMode ? tr("Create owner account") : challengeId ? tr("Verify and sign in") : tr("Continue to email verification")}
+          {isSigningIn ? tr("Please wait…") : setupMode ? tr("Create owner account") : challengeId ? tr("Verify and sign in") : tr("Sign in")}
         </button>
         {setupAvailable && !challengeId && (
           <button
