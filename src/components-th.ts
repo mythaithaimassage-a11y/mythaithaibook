@@ -1,4 +1,7 @@
 export const componentThai: Record<string, string> = {
+  'Help': 'ช่วยเหลือ',
+  'Staff dashboard shortcuts': 'ทางลัดแผงควบคุมพนักงาน',
+  'Mobile staff dashboard navigation': 'เมนูแผงควบคุมพนักงานบนมือถือ',
   'Enter at least one email address or phone number.': 'กรอกอีเมลหรือหมายเลขโทรศัพท์อย่างน้อยหนึ่งอย่าง',
   'Enter a valid email address.': 'กรอกอีเมลที่ถูกต้อง',
   'Enter a valid phone number (7 to 15 digits).': 'กรอกหมายเลขโทรศัพท์ที่ถูกต้อง (7 ถึง 15 หลัก)',

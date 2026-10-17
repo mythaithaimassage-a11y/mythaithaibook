@@ -1,3 +1,4 @@
+import MobileHelp from './MobileHelp';
 import { useEffect, useState } from 'react';
 import { useTranslation } from './localization';
 import { readWixResponse } from './wixImportApi';
@@ -102,7 +103,7 @@ export default function TherapistNameMerge({ therapists, onMerged }: {
   function resetReview() { setPreview(null); setConfirmed(false); setProgress(''); }
   return <section className="space-y-3 rounded-xl border border-amber-200 bg-amber-50 p-4">
     <h3 className="text-sm font-bold text-stone-900">{tr('Merge historical therapist name')}</h3>
-    <p className="text-xs text-stone-600">{tr('Map an old therapist label to an existing therapist across past and future bookings, Calendar and availability. Issued receipts, original Wix source details and treatment notes are preserved. Separate login accounts require manual review. Old roster entries are deactivated, not deleted.')}</p>
+    <MobileHelp><p className="text-xs text-stone-600">{tr('Map an old therapist label to an existing therapist across past and future bookings, Calendar and availability. Issued receipts, original Wix source details and treatment notes are preserved. Separate login accounts require manual review. Old roster entries are deactivated, not deleted.')}</p></MobileHelp>
     <div className="grid gap-3 sm:grid-cols-2">
       <label className="text-xs font-semibold">{tr('Historical therapist name')}
         <input list="historical-therapist-names" maxLength={150} disabled={busy} value={sourceName} onChange={(event) => { setSourceName(event.target.value); resetReview(); }} className="mt-1 w-full rounded-lg border border-stone-300 bg-white p-2" />

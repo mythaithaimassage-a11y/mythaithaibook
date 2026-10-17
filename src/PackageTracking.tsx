@@ -1,3 +1,5 @@
+import MobileHelp from './MobileHelp';
+import ResponsiveTable from './ResponsiveTable';
 import { useEffect, useState } from 'react';
 import { readWixResponse } from './wixImportApi';
 import { message, useTranslation, type TranslationMessage } from './localization';
@@ -157,7 +159,7 @@ export default function PackageTracking({ onViewBookings }: { onViewBookings: ()
 
   return <section className="space-y-5 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
     <h2 className="text-lg font-bold">{tr('Four-session package tracking')}</h2>
-    <p className="text-sm text-slate-600">{tr('Register an owner-verified purchase and remaining balance. Then link each completed visit once to deduct a session. Wix exports do not establish package purchases. Register a new purchase with a different reference; reusing a reference never replenishes a balance.')}</p>
+    <MobileHelp><p className="text-sm text-slate-600">{tr('Register an owner-verified purchase and remaining balance. Then link each completed visit once to deduct a session. Wix exports do not establish package purchases. Register a new purchase with a different reference; reusing a reference never replenishes a balance.')}</p></MobileHelp>
     <p className="rounded-lg bg-amber-50 p-3 text-xs text-amber-900">{tr('If entering a remaining balance that already accounts for old visits, do not deduct those visits again. To link old visits for receipt tracking, register the verified balance before those visits and link them chronologically. Use the actual package purchase price. A linked receipt records an allocated prepaid session value, not a new charge.')}</p>
     {error && <p role="alert" className="text-sm text-red-700">{tr(error)}</p>}
     {notice && <p role="status" className="text-sm text-emerald-800">{tr(notice)}</p>}
@@ -199,7 +201,7 @@ export default function PackageTracking({ onViewBookings }: { onViewBookings: ()
       <input aria-label={tr('Search packages by customer, email or purchase reference')} value={search} maxLength={200} onChange={(event) => setSearch(event.target.value)} placeholder={tr('Find customer / email / purchase reference')} className="min-w-0 flex-1 rounded-lg border px-3 py-2 text-sm" />
       <button className="rounded-lg border px-3 text-sm font-semibold">{tr('Search / refresh')}</button>
     </form>
-    {loading ? <p role="status">{tr('Loading packages...')}</p> : <div className="overflow-x-auto"><table className="w-full text-left text-xs">
+    {loading ? <p role="status">{tr('Loading packages...')}</p> : <div className="overflow-x-auto"><ResponsiveTable className="w-full text-left text-xs">
       <thead><tr>{['Customer', 'Package / purchase', 'Balance', 'Tracked visits', 'Action'].map((label) => <th key={label} className="p-3">{tr(label)}</th>)}</tr></thead>
       <tbody>{packages.map((pkg) => <tr key={pkg.package_id} className="border-t">
         <td className="p-3">{pkg.customer_name}<span className="block">{pkg.email}</span>{pkg.customer_phone && <span className="block">{pkg.customer_phone}</span>}</td>
@@ -208,7 +210,7 @@ export default function PackageTracking({ onViewBookings }: { onViewBookings: ()
         <td className="p-3">{tr('{count} linked visits', { count: pkg.usages.length })}</td>
         <td className="p-3"><button type="button" disabled={busy} className="rounded border px-3 py-2" onClick={() => { setSelectedId(pkg.package_id); setBookingId(''); setSessionNumber(''); setConfirmUse(false); }}>{tr('View / deduct')}</button></td>
       </tr>)}</tbody>
-    </table>{!packages.length && <p className="p-3 text-sm">{tr('No matching packages.')}</p>}</div>}
+    </ResponsiveTable>{!packages.length && <p className="p-3 text-sm">{tr('No matching packages.')}</p>}</div>}
     <div className="flex items-center gap-3 text-sm"><button disabled={busy || offset === 0} onClick={() => { setOffset(Math.max(0, offset - 50)); setSelectedId(''); }} className="rounded border p-2 disabled:opacity-40">{tr('Previous')}</button><span>{tr('{count} packages', { count: total })}</span><button disabled={busy || offset + 50 >= total} onClick={() => { setOffset(offset + 50); setSelectedId(''); }} className="rounded border p-2 disabled:opacity-40">{tr('Next')}</button></div>
     {selected && <div className="space-y-3 rounded-xl border p-4">
       <h3 className="font-semibold">{tr('{package} - {remaining} sessions remaining', { package: tr(selected.package_name), remaining: selected.remaining_sessions })}</h3>

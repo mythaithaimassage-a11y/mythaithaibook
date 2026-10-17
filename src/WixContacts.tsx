@@ -1,3 +1,5 @@
+import MobileHelp from './MobileHelp';
+import ResponsiveTable from './ResponsiveTable';
 import { useEffect, useState } from 'react';
 import { RefreshCw, Upload } from 'lucide-react';
 import { readWixResponse as readResponse } from './wixImportApi';
@@ -116,7 +118,7 @@ export default function WixContacts() {
     <section className="space-y-5 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
       <div>
         <h2 className="text-lg font-bold text-slate-900">{tr('Historical Wix contacts')}</h2>
-        <p className="mt-1 text-sm text-slate-600">{tr('Import a Wix contacts CSV into a separate BigQuery contact archive. Existing bookings, patient records, payments and loyalty data are not changed.')}</p>
+        <MobileHelp><p className="mt-1 text-sm text-slate-600">{tr('Import a Wix contacts CSV into a separate BigQuery contact archive. Existing bookings, patient records, payments and loyalty data are not changed.')}</p></MobileHelp>
         <p className="mt-2 text-xs text-slate-500">{tr('Subscription statuses are historical only. This import does not send emails, enroll members or grant marketing consent. Duplicate primary emails (or phone numbers when email is missing) are skipped; existing imported contacts are never overwritten.')}</p>
       </div>
       <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
@@ -134,7 +136,7 @@ export default function WixContacts() {
             {summary.invalidDates > 0 && <p className="text-amber-800">{tr('{count} contacts have unrecognized dates; original values are retained.', { count: summary.invalidDates })}</p>}
             {result && <p role="status" className="font-semibold text-emerald-800">{tr('Imported {imported} new contacts. Skipped {existing} contacts already in the archive.', { imported: result.imported ?? 0, existing: result.existing ?? 0 })}</p>}
             {summary.issues.length > 0 && <ul className="list-inside list-disc text-xs text-amber-800">{summary.issues.map((issue, index) => <li key={`${issue.row}-${index}`}>{tr('CSV record {row}: {message}', { row: issue.row, message: tr(issue.message) })}</li>)}</ul>}
-            {preview?.sample && <div className="overflow-x-auto"><table className="w-full text-left text-xs"><caption className="py-2 text-left font-semibold">{tr('Preview: first five valid contacts')}</caption><thead><tr><th className="p-2">{tr('Name')}</th><th className="p-2">{tr('Email')}</th><th className="p-2">{tr('Phone')}</th><th className="p-2">{tr('Email status')}</th></tr></thead><tbody>{preview.sample.map((contact) => <tr key={contact.contact_id}><td className="p-2">{contact.name || tr('Not provided')}</td><td className="p-2">{contact.email || tr('Not provided')}</td><td className="p-2">{contact.phone || tr('Not provided')}</td><td className="p-2">{tr(contact.email_subscriber_status || 'Unknown')}</td></tr>)}</tbody></table></div>}
+            {preview?.sample && <div className="overflow-x-auto"><ResponsiveTable className="w-full text-left text-xs"><caption className="py-2 text-left font-semibold">{tr('Preview: first five valid contacts')}</caption><thead><tr><th className="p-2">{tr('Name')}</th><th className="p-2">{tr('Email')}</th><th className="p-2">{tr('Phone')}</th><th className="p-2">{tr('Email status')}</th></tr></thead><tbody>{preview.sample.map((contact) => <tr key={contact.contact_id}><td className="p-2">{contact.name || tr('Not provided')}</td><td className="p-2">{contact.email || tr('Not provided')}</td><td className="p-2">{contact.phone || tr('Not provided')}</td><td className="p-2">{tr(contact.email_subscriber_status || 'Unknown')}</td></tr>)}</tbody></ResponsiveTable></div>}
             {preview && <button type="button" disabled={busy || !preview.validContacts} onClick={() => void importContacts()} className="rounded-lg bg-emerald-900 px-4 py-2 font-semibold text-white disabled:opacity-50">{tr('Import {count} contacts', { count: preview.validContacts })}</button>}
           </div>
         )}
@@ -150,7 +152,7 @@ export default function WixContacts() {
         <>
           <p className="text-sm text-slate-600">{tr('{count} matching contacts', { count: total })}</p>
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
+            <ResponsiveTable className="w-full text-left text-xs">
               <thead><tr>{['Contact', 'Phone', 'Labels', 'Wix created (UTC)', 'Email / SMS status', 'Last activity (UTC)', 'Source / locations'].map((heading) => <th key={heading} className="border-b p-3">{tr(heading)}</th>)}</tr></thead>
               <tbody>{contacts.map((contact) => <tr key={contact.contact_id} className="border-b border-slate-100">
                 <td className="p-3"><span className="block font-semibold">{contact.name || tr('Not provided')}</span>{contact.email}</td>
@@ -160,7 +162,7 @@ export default function WixContacts() {
                 <td className="p-3">{contact.last_activity}<span className="block text-slate-500">{contact.last_activity_at}</span></td>
                 <td className="max-w-xs p-3">{contact.source}<span className="block text-slate-500">{contact.linked_locations}</span></td>
               </tr>)}</tbody>
-            </table>
+            </ResponsiveTable>
             {!contacts.length && <p className="py-4 text-sm text-slate-500">{tr('No imported contacts found.')}</p>}
           </div>
           <div className="flex items-center gap-3 text-sm">

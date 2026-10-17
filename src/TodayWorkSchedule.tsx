@@ -1,3 +1,5 @@
+import MobileHelp from './MobileHelp';
+import ResponsiveTable from './ResponsiveTable';
 import { useEffect, useMemo, useState } from 'react';
 import { CalendarDays, Save, Users } from 'lucide-react';
 import { defaultTherapistShift, defaultTherapistWorkingHours, type TherapistWorkShift } from '../lib/work-schedule.js';
@@ -175,7 +177,7 @@ export default function TodayWorkSchedule({ branches, therapists, initialBranchI
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h3 className="font-bold text-slate-900">{tr("Today's therapist availability")}</h3>
-          <p className="mt-1 text-xs text-slate-500">{tr('Changes are saved to Work schedule and affect appointment availability for today.')}</p>
+          <MobileHelp><p className="mt-1 text-xs text-slate-500">{tr('Changes are saved to Work schedule and affect appointment availability for today.')}</p></MobileHelp>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <label className="text-xs font-semibold text-slate-600">{tr('Branch')}
@@ -192,7 +194,7 @@ export default function TodayWorkSchedule({ branches, therapists, initialBranchI
         : loading ? <p role="status" className="py-5 text-center text-sm text-slate-500">{tr('Loading work schedule…')}</p>
           : branchTherapists.length === 0 ? <p className="py-5 text-center text-sm text-slate-500">{tr('No active therapists are assigned to this branch.')}</p>
             : <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200">
-              <table className="min-w-full border-collapse text-left text-xs">
+              <ResponsiveTable className="min-w-full border-collapse text-left text-xs">
                 <thead className="bg-slate-50 text-slate-600"><tr>
                   <th className="min-w-40 border-b border-r p-3">{tr('Staff member')}</th>
                   <th className="min-w-44 border-b p-3 text-center"><span className="inline-flex items-center justify-center gap-1.5"><CalendarDays className="h-3.5 w-3.5" />{selectedDateLabel}</span></th>
@@ -221,7 +223,7 @@ export default function TodayWorkSchedule({ branches, therapists, initialBranchI
                     </tr>;
                   })}
                 </tbody>
-              </table>
+              </ResponsiveTable>
             </div>}
       <p className="mt-3 flex items-center gap-1.5 text-xs text-slate-500"><Users className="h-3.5 w-3.5" />{selectedBranch ? tr('{value0} · changes affect this date only', { value0: selectedBranch.name }) : ''}</p>
     </section>

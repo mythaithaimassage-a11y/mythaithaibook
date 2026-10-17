@@ -1,3 +1,4 @@
+import MobileHelp from './MobileHelp';
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from './localization';
 import { bookingActivityTitles } from './BookingNotifications';
@@ -65,7 +66,7 @@ export default function BookingActivityFeed() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h3 className="text-base font-bold text-slate-900">{tr('Booking activity')}</h3>
-          <p className="text-xs text-slate-500">{tr('New bookings, reschedules, cancellations and staff edits from the last 7 days.')}</p>
+          <MobileHelp><p className="text-xs text-slate-500">{tr('New bookings, reschedules, cancellations and staff edits from the last 7 days.')}</p></MobileHelp>
         </div>
         <button type="button" onClick={() => void load()} disabled={loading}
           className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">

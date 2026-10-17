@@ -69,7 +69,7 @@ function render(tab, language = 'th', overrides = {}, propOverrides = {}) {
 
 test('owner navigation retains each section once and identifies the current page', () => {
   const html = render('schedule', 'en', { mobileNavOpen: true });
-  const shortcuts = html.match(/<nav aria-label="Owner dashboard shortcuts"[\s\S]*?<\/nav>/)?.[0];
+  const shortcuts = html.match(/<nav aria-label="(?:Owner|Staff) dashboard shortcuts"[\s\S]*?<\/nav>/)?.[0];
   assert.ok(shortcuts);
   assert.match(shortcuts, /aria-current="page"[^>]*>[\s\S]*?Home/);
   assert.match(shortcuts, /Booking Calendar/);
@@ -99,6 +99,48 @@ test('branch migration button is shown only until BigQuery becomes the source of
   const afterImport = render('branches', 'en', {}, { ...owner, branchConfigSource: 'bigquery' });
   assert.match(afterImport, /BigQuery source of truth/);
   assert.doesNotMatch(afterImport, /One-time import to BigQuery/);
+});
+
+test('all staff roles get icon-first mobile shortcuts without gaining unauthorized sections', () => {
+  for (const [role, sections] of [['owner', 20], ['branch_manager', 6], ['branch_receptionist', 4]]) {
+    const html = render('schedule', 'en', { compactCalendar: true, mobileNavOpen: true }, {
+      dashboardUser: { role, branchIds: ['1'] },
+    });
+    const shortcuts = html.match(/<nav aria-label="(?:Owner|Staff) dashboard shortcuts"[\s\S]*?<\/nav>/)?.[0];
+    assert.ok(shortcuts);
+    const buttons = shortcuts.match(/<button[\s\S]*?<\/button>/g);
+    assert.equal(buttons.length, role === 'branch_receptionist' ? 4 : 5);
+    for (const button of buttons) {
+      assert.match(button, /aria-label="[^"]+"/);
+      assert.match(button, /title="[^"]+"/);
+      assert.match(button, /<span class="sr-only">/);
+    }
+    const menu = html.match(/<nav id="mobile-dashboard-menu"[\s\S]*?<\/nav>/)?.[0];
+    assert.equal((menu.match(/<button /g) || []).length, sections);
+    if (role !== 'owner') assert.doesNotMatch(menu, /Service catalogue|Patient Summary|Email marketing|Therapist approvals/);
+    assert.match(html, /<details><summary class="calendar-context-toggle/);
+  }
+});
+
+test('all dashboard sections retain a current title and usable mobile navigation', () => {
+  for (const tab of [
+    'schedule', 'calendar', 'alerts', 'reports', 'services', 'staff', 'branches',
+    'availability', 'work-schedule', 'patient-history', 'wix-contacts', 'wix-bookings',
+    'packages', 'therapist-approvals', 'dashboard-users', 'business-profile',
+    'loyalty', 'marketing', 'google-ads', 'reviews',
+  ]) {
+    for (const language of ['en', 'th']) {
+      const html = render(tab, language, { compactCalendar: true });
+      assert.ok(html.includes(`data-section="${tab}"`), tab);
+      assert.match(html, /class="dashboard-page-title /);
+      assert.match(html, /class="dashboard-shortcuts /);
+      assert.doesNotMatch(html, /id="mobile-dashboard-menu"/);
+    }
+  }
+  const service = render('services', 'en', { compactCalendar: true });
+  assert.match(service, /mobile-data-table/);
+  for (const label of ['Service Name', 'Duration (min)', 'Price ($)', 'Active']) assert.ok(service.includes(label));
+  assert.match(render('patient-history', 'en', { compactCalendar: true }), /Confidential health information/);
 });
 
 test('appointment settings migration button disappears after BigQuery takes over', () => {
@@ -242,12 +284,12 @@ test('mobile booking cards retain all nine fields, booking data and existing act
   assert.match(render('schedule', 'th'), /data-label="ลูกค้า"/);
 });
 
-test('responsive styles are owner-only, below 1024px, with scrollable menus and 44px touch controls', () => {
+test('responsive staff styles stay below 1024px, with scrollable menus and 44px touch controls', () => {
   const css = postcss.parse(readFileSync(new URL('../src/index.css', import.meta.url), 'utf8'));
   const media = css.nodes.findLast((node) => node.type === 'atrule' && node.name === 'media' && node.params === '(max-width: 1023px)');
   assert.equal(media.params, '(max-width: 1023px)');
   media.walkRules((rule) => {
-    for (const selector of rule.selectors) assert.ok(selector.startsWith('.owner-dashboard '), selector);
+    for (const selector of rule.selectors) assert.ok(selector.startsWith('.staff-dashboard '), selector);
   });
 
   test('phone calendars default to agenda, retain all appointments and allow explicit view choices', () => {
@@ -332,7 +374,8 @@ test('responsive styles are owner-only, below 1024px, with scrollable menus and 
 
   test('phone layout fits the grid without altering appointment geometry or hiding warnings', () => {
     const css = postcss.parse(readFileSync(new URL('../src/index.css', import.meta.url), 'utf8'));
-    const media = css.nodes.find((node) => node.type === 'atrule' && node.params === '(max-width: 1023px)');
+    const media = css.nodes.find((node) => node.type === 'atrule' && node.params === '(max-width: 1023px)' &&
+      node.nodes.some((rule) => rule.selector === '.calendar-context-toggle'));
     assert.ok(media);
     const declarations = (selector) => {
       const result = {};
@@ -356,15 +399,17 @@ test('responsive styles are owner-only, below 1024px, with scrollable menus and 
     });
     return result;
   };
-  assert.equal(declarations('.owner-dashboard .dashboard-toolbar button')['min-height'], '44px');
-  assert.equal(declarations('.owner-dashboard .dashboard-booking-row-actions button')['min-height'], '44px');
-  assert.equal(declarations('.owner-dashboard .dashboard-mobile-menu')['max-height'], 'calc(100dvh - 240px)');
-  assert.equal(declarations('.owner-dashboard .dashboard-booking-table tbody tr').display, 'grid');
-  assert.equal(declarations('.owner-dashboard .dashboard-booking-table td::before').content, 'attr(data-label)');
+  assert.equal(declarations('.staff-dashboard .dashboard-toolbar button')['min-height'], '44px');
+  assert.equal(declarations('.staff-dashboard .dashboard-booking-row-actions button')['min-height'], '44px');
+  assert.equal(declarations('.staff-dashboard .dashboard-mobile-menu')['max-height'], 'calc(100dvh - 240px)');
+  assert.equal(declarations('.staff-dashboard .dashboard-booking-table tbody tr').display, 'grid');
+  assert.equal(declarations('.staff-dashboard .dashboard-booking-table td::before').content, 'attr(data-label)');
   for (const role of ['branch_manager', 'branch_receptionist']) {
     const html = render('schedule', 'en', { mobileNavOpen: true }, { dashboardUser: { role, branchIds: ['1'] } });
-    assert.doesNotMatch(html, /class="[^"]*\bowner-dashboard\b|Owner dashboard shortcuts|dashboard-mobile-menu/);
-    assert.match(html, /Mobile owner dashboard navigation/);
+    assert.doesNotMatch(html, /class="[^"]*\bowner-dashboard\b/);
+    assert.match(html, /Staff dashboard shortcuts/);
+    assert.match(html, /dashboard-mobile-menu/);
+    assert.match(html, /Mobile staff dashboard navigation/);
   }
 });
 

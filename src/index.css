@@ -2,6 +2,244 @@
 @tailwind components;
 @tailwind utilities;
 
+.mobile-cell-label {
+  display: none;
+}
+
+.mobile-cell-content {
+  display: contents;
+}
+
+.mobile-table-toggle {
+  display: contents;
+}
+
+@media (max-width: 1023px) {
+  .staff-dashboard .dashboard-content {
+    padding: 12px 12px calc(88px + env(safe-area-inset-bottom));
+    overflow-wrap: anywhere;
+  }
+
+  .staff-dashboard .dashboard-content > * + * {
+    margin-top: 12px;
+  }
+
+  .staff-dashboard .dashboard-shortcuts {
+    padding-bottom: calc(8px + env(safe-area-inset-bottom));
+  }
+
+  .staff-dashboard .dashboard-toolbar {
+    padding: 8px 12px;
+  }
+
+  .staff-dashboard .dashboard-content :is(section, form, fieldset, label, .grid > *, .flex > *) {
+    min-width: 0;
+  }
+
+  .staff-dashboard .dashboard-content :is(.p-6, .p-8, .p-5, .sm\:p-6, .sm\:p-8) {
+    padding: 12px;
+  }
+
+  .staff-dashboard .dashboard-content :is(.px-5, .px-6, .px-8, .sm\:px-8) {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .staff-dashboard .dashboard-content :is(h1, h2) {
+    font-size: 18px;
+    line-height: 1.4;
+  }
+
+  .staff-dashboard .dashboard-content :is(p, h1, h2, h3, label, button, a) {
+    overflow-wrap: anywhere;
+  }
+
+  .staff-dashboard .dashboard-content :is(button, summary, input:not([type="checkbox"]):not([type="radio"]), select, textarea) {
+    max-width: 100%;
+  }
+
+  .staff-dashboard .dashboard-content :is(button:not(.absolute), summary, a.inline-flex) {
+    min-height: 44px;
+  }
+
+  .staff-dashboard .dashboard-content button:not(.absolute) {
+    min-width: 44px;
+  }
+
+  .staff-dashboard .dashboard-content :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea) {
+    min-width: 0;
+    min-height: 44px;
+    font-size: 16px;
+  }
+
+  .staff-dashboard .dashboard-content label:has(> input[type="checkbox"]),
+  .staff-dashboard .dashboard-content label:has(> input[type="radio"]) {
+    min-height: 44px;
+    align-content: center;
+  }
+
+  .staff-dashboard .dashboard-content :is(input[type="checkbox"], input[type="radio"]) {
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+  }
+
+  .staff-dashboard .dashboard-content .flex.justify-between {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .staff-dashboard .dashboard-stats {
+    gap: 8px;
+  }
+
+  .staff-dashboard .dashboard-stats > div {
+    padding: 12px;
+  }
+
+  .staff-dashboard .dashboard-stats .text-2xl {
+    margin-top: 8px;
+    font-size: 22px;
+  }
+
+  .staff-dashboard .dashboard-content [role="dialog"] {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .staff-dashboard .dashboard-content [role="dialog"] > section {
+    max-height: calc(100dvh - 32px);
+    overflow-y: auto;
+  }
+
+  .mobile-data-table,
+  .mobile-data-table tbody {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .mobile-data-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .mobile-data-table tbody {
+    display: grid;
+    gap: 12px;
+  }
+
+  .mobile-data-table tbody tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px 12px;
+    min-width: 0;
+    padding: 12px;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+  }
+
+  .mobile-data-table tbody :is(td, th) {
+    position: static;
+    display: block;
+    width: auto;
+    min-width: 0;
+    max-width: 100%;
+    padding: 0;
+    border: 0;
+    text-align: left;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .mobile-data-table tbody :is(td:first-child, th, .mobile-wide-cell) {
+    grid-column: 1 / -1;
+  }
+
+  .mobile-data-table .mobile-cell-label {
+    display: block;
+    margin-bottom: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #64748b;
+  }
+
+  .mobile-data-table .mobile-cell-content {
+    display: block;
+  }
+
+  .mobile-data-table .mobile-table-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .mobile-data-table .mobile-cell-content :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea) {
+    width: 100%;
+  }
+
+  .therapist-workspace .therapist-account-summary {
+    display: none;
+  }
+
+  .therapist-workspace .therapist-navigation {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+  }
+
+  .therapist-workspace .therapist-navigation > button,
+  .therapist-workspace .therapist-navigation > div > button {
+    position: relative;
+    justify-content: center;
+    min-width: 0;
+    min-height: 44px;
+    padding: 8px;
+  }
+
+  .therapist-workspace .therapist-nav-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+
+  .therapist-workspace .therapist-navigation > div > div {
+    right: 0;
+    min-width: 240px;
+    max-width: calc(100vw - 24px);
+  }
+
+  .therapist-workspace .therapist-navigation > button > span:not(.therapist-nav-label) {
+    position: absolute;
+    right: 0;
+    top: -4px;
+  }
+
+  .therapist-workspace :is(button, input:not([type="checkbox"]):not([type="radio"]), select, textarea) {
+    min-height: 44px;
+    max-width: 100%;
+  }
+
+  .therapist-workspace :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea) {
+    min-width: 0;
+    font-size: 16px;
+  }
+
+  .therapist-workspace :is(h1, h2) {
+    font-size: 18px;
+  }
+
+  .therapist-workspace :is(p, label, h1, h2, h3) {
+    overflow-wrap: anywhere;
+  }
+}
+
 @media (max-width: 1023px) {
   .calendar-context-toggle {
     min-height: 44px;
@@ -206,68 +444,68 @@
 }
 
 @media (max-width: 1023px) {
-  .owner-dashboard .dashboard-menu-toggle,
-  .owner-dashboard .dashboard-toolbar button {
+  .staff-dashboard .dashboard-menu-toggle,
+  .staff-dashboard .dashboard-toolbar button {
     min-height: 44px;
     min-width: 44px;
   }
 
-  .owner-dashboard .dashboard-page-title {
+  .staff-dashboard .dashboard-page-title {
     display: block;
     overflow-wrap: anywhere;
   }
 
-  .owner-dashboard .dashboard-workspace-label {
+  .staff-dashboard .dashboard-workspace-label {
     display: none;
   }
 
-  .owner-dashboard .dashboard-mobile-menu {
+  .staff-dashboard .dashboard-mobile-menu {
     max-height: calc(100dvh - 240px);
   }
 
-  .owner-dashboard > div > main {
+  .staff-dashboard > div > main {
     padding: 12px;
   }
 
-  .owner-dashboard .dashboard-banner {
+  .staff-dashboard .dashboard-banner {
     padding: 16px;
   }
 
-  .owner-dashboard .dashboard-banner h1 {
+  .staff-dashboard .dashboard-banner h1 {
     font-size: 20px;
   }
 
-  .owner-dashboard .dashboard-banner .gap-6 {
+  .staff-dashboard .dashboard-banner .gap-6 {
     gap: 12px;
   }
 
-  .owner-dashboard .dashboard-banner button,
-  .owner-dashboard .dashboard-booking-actions button,
-  .owner-dashboard .dashboard-booking-row-actions button {
+  .staff-dashboard .dashboard-banner button,
+  .staff-dashboard .dashboard-booking-actions button,
+  .staff-dashboard .dashboard-booking-row-actions button {
     min-height: 44px;
   }
 
-  .owner-dashboard .dashboard-bookings {
+  .staff-dashboard .dashboard-bookings {
     padding: 12px;
   }
 
-  .owner-dashboard .dashboard-booking-actions {
+  .staff-dashboard .dashboard-booking-actions {
     flex-direction: column;
     align-items: stretch;
     gap: 12px;
   }
 
-  .owner-dashboard .dashboard-booking-actions > div {
+  .staff-dashboard .dashboard-booking-actions > div {
     flex-wrap: wrap;
   }
 
-  .owner-dashboard .dashboard-booking-table,
-  .owner-dashboard .dashboard-booking-table tbody {
+  .staff-dashboard .dashboard-booking-table,
+  .staff-dashboard .dashboard-booking-table tbody {
     display: block;
     width: 100%;
   }
 
-  .owner-dashboard .dashboard-booking-table thead {
+  .staff-dashboard .dashboard-booking-table thead {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -275,12 +513,12 @@
     clip-path: inset(50%);
   }
 
-  .owner-dashboard .dashboard-booking-table tbody {
+  .staff-dashboard .dashboard-booking-table tbody {
     display: grid;
     gap: 12px;
   }
 
-  .owner-dashboard .dashboard-booking-table tbody tr {
+  .staff-dashboard .dashboard-booking-table tbody tr {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     column-gap: 12px;
@@ -290,22 +528,22 @@
     padding: 12px;
   }
 
-  .owner-dashboard .dashboard-booking-table td:nth-child(1),
-  .owner-dashboard .dashboard-booking-table td:nth-child(2),
-  .owner-dashboard .dashboard-booking-table td:nth-child(3),
-  .owner-dashboard .dashboard-booking-table td:nth-child(5),
-  .owner-dashboard .dashboard-booking-row-actions {
+  .staff-dashboard .dashboard-booking-table td:nth-child(1),
+  .staff-dashboard .dashboard-booking-table td:nth-child(2),
+  .staff-dashboard .dashboard-booking-table td:nth-child(3),
+  .staff-dashboard .dashboard-booking-table td:nth-child(5),
+  .staff-dashboard .dashboard-booking-row-actions {
     grid-column: 1 / -1;
   }
 
-  .owner-dashboard .dashboard-booking-table td {
+  .staff-dashboard .dashboard-booking-table td {
     display: block;
     padding: 6px 0;
     font-size: 14px;
     overflow-wrap: anywhere;
   }
 
-  .owner-dashboard .dashboard-booking-table td::before {
+  .staff-dashboard .dashboard-booking-table td::before {
     content: attr(data-label);
     display: block;
     margin-bottom: 4px;
@@ -315,7 +553,7 @@
     color: #64748b;
   }
 
-  .owner-dashboard .dashboard-booking-row-actions button {
+  .staff-dashboard .dashboard-booking-row-actions button {
     margin: 4px 8px 0 0;
     padding: 8px 12px;
     font-size: 12px;

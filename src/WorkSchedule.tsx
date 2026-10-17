@@ -1,3 +1,5 @@
+import MobileHelp from './MobileHelp';
+import ResponsiveTable from './ResponsiveTable';
 import { useEffect, useMemo, useState } from 'react';
 import { CalendarDays, ChevronLeft, ChevronRight, Save } from 'lucide-react';
 import { defaultTherapistShift, defaultTherapistWorkingHours, type TherapistWorkShift } from '../lib/work-schedule.js';
@@ -167,7 +169,7 @@ export default function WorkSchedule({ branches, therapists, initialBranchId = '
   return <section className="space-y-4">
     <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div><h2 className="text-lg font-bold text-slate-900">{tr('Work schedule')}</h2><p className="mt-1 text-sm text-slate-600">{tr('Review and adjust therapist working hours for the month. Weekly defaults come from each therapist’s Staff settings.')}</p></div>
+        <div><h2 className="text-lg font-bold text-slate-900">{tr('Work schedule')}</h2><MobileHelp><p className="mt-1 text-sm text-slate-600">{tr('Review and adjust therapist working hours for the month. Weekly defaults come from each therapist’s Staff settings.')}</p></MobileHelp></div>
         <button type="button" onClick={saveMonth} disabled={saving || loading || !branchId} className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"><Save className="h-4 w-4" />{tr(saving ? 'Saving…' : 'Save month')}</button>
       </div>
       <div className="mt-4 flex flex-wrap items-end gap-3">
@@ -183,7 +185,7 @@ export default function WorkSchedule({ branches, therapists, initialBranchId = '
       {notice && <p role="status" className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">{tr(notice)}</p>}
       {loading ? <p role="status" className="py-8 text-center text-sm text-slate-500">{tr('Loading work schedule…')}</p> : branchTherapists.length === 0 ? <p className="py-8 text-center text-sm text-slate-500">{tr('No active therapists are assigned to this branch.')}</p> : (
         <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200">
-          <table className="min-w-full border-collapse text-left text-xs">
+          <ResponsiveTable className="min-w-full border-collapse text-left text-xs">
             <thead className="bg-slate-50 text-slate-600"><tr>
               <th className="sticky left-0 min-w-44 border-b border-r bg-slate-50 p-3">{tr('Staff member')}</th>
               {visibleDates.map((date) => <th key={date} className="min-w-32 border-b border-r p-3 text-center">{new Date(`${date}T12:00:00Z`).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' })}</th>)}
@@ -203,7 +205,7 @@ export default function WorkSchedule({ branches, therapists, initialBranchId = '
                 })}
               </tr>)}
             </tbody>
-          </table>
+          </ResponsiveTable>
         </div>
       )}
       <p className="mt-3 flex items-center gap-1.5 text-xs text-slate-500"><CalendarDays className="h-3.5 w-3.5" />{tr('Click a day to adjust or remove that therapist’s hours. Changes affect only the selected date.')}</p>

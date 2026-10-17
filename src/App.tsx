@@ -1,6 +1,8 @@
 // The existing single-file app predates the strict TypeScript project setup.
 // Keep its runtime behavior unchanged while the app is incrementally typed.
 // @ts-nocheck
+import MobileHelp from './MobileHelp';
+import ResponsiveTable from './ResponsiveTable';
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { 
@@ -1630,7 +1632,7 @@ function TherapistPortal() {
   }[workspaceView] || 'Dashboard';
 
   return (
-    <div className="min-h-[calc(100vh-7rem)] bg-slate-100">
+    <div className="therapist-workspace min-h-[calc(100vh-7rem)] bg-slate-100">
       <header className="flex min-h-14 items-center justify-between gap-4 bg-black px-4 py-2 text-white shadow-sm sm:px-6">
         <div className="flex items-center gap-3">
           <BusinessPhoto businessName={businessName} photoUrl={photoUrl} className="h-9 w-9 rounded-lg border border-white/40 object-cover text-xs" />
@@ -1648,7 +1650,7 @@ function TherapistPortal() {
       </header>
       <div className="flex min-h-[calc(100vh-10.5rem)] flex-col lg:flex-row">
       <aside className="w-full shrink-0 bg-black px-3 py-3 text-white lg:min-h-[calc(100vh-10.5rem)] lg:w-60 lg:px-3">
-        <div className="mb-4 flex items-center gap-3 rounded-xl bg-slate-900 px-3 py-3">
+        <div className="therapist-account-summary mb-4 flex items-center gap-3 rounded-xl bg-slate-900 px-3 py-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-500/20 text-sm font-black text-emerald-200">
             {(therapist.name || 'T').split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase()}
           </div>
@@ -1657,58 +1659,64 @@ function TherapistPortal() {
             <p className="text-xs text-slate-400">Therapist account</p>
           </div>
         </div>
-        <nav aria-label="Therapist workspace" className="flex gap-1 overflow-x-auto lg:flex-col">
+        <nav aria-label="Therapist workspace" className="therapist-navigation flex gap-1 lg:flex-col">
           <button
             type="button"
+            aria-label="Dashboard" title="Dashboard" aria-current={workspaceView === 'dashboard' ? 'page' : undefined}
             onClick={() => setWorkspaceView('dashboard')}
             className={`flex shrink-0 items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium transition lg:w-full ${workspaceView === 'dashboard' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-300 hover:bg-slate-900 hover:text-white'}`}
           >
             <Home className="h-4 w-4" />
-            <span className="flex-1 whitespace-nowrap">Dashboard</span>
+            <span className="therapist-nav-label flex-1 whitespace-nowrap">Dashboard</span>
           </button>
           <button
             type="button"
+            aria-label="Appointments" title="Appointments" aria-current={workspaceView === 'appointments' ? 'page' : undefined}
             onClick={() => setWorkspaceView('appointments')}
             className={`flex shrink-0 items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium transition lg:w-full ${workspaceView === 'appointments' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-300 hover:bg-slate-900 hover:text-white'}`}
           >
             <CalendarDays className="h-4 w-4" />
-            <span className="flex-1">Appointments</span>
+            <span className="therapist-nav-label flex-1">Appointments</span>
           </button>
           <button
             type="button"
+            aria-label="Patient notes" title="Patient notes" aria-current={workspaceView === 'notes' ? 'page' : undefined}
             onClick={() => setWorkspaceView('notes')}
             className={`flex shrink-0 items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium transition lg:w-full ${workspaceView === 'notes' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-300 hover:bg-slate-900 hover:text-white'}`}
           >
             <Stethoscope className="h-4 w-4" />
-            <span className="flex-1 whitespace-nowrap">Patient notes</span>
+            <span className="therapist-nav-label flex-1 whitespace-nowrap">Patient notes</span>
           </button>
           <button
             type="button"
+            aria-label="Rebooking reminders" title="Rebooking reminders" aria-current={workspaceView === 'reminders' ? 'page' : undefined}
             onClick={() => setWorkspaceView('reminders')}
             className={`flex shrink-0 items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium transition lg:w-full ${workspaceView === 'reminders' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-300 hover:bg-slate-900 hover:text-white'}`}
           >
             <Clock className="h-4 w-4" />
-            <span className="flex-1 whitespace-nowrap">Rebooking reminders</span>
+            <span className="therapist-nav-label flex-1 whitespace-nowrap">Rebooking reminders</span>
             {rebookingReminders.length > 0 && <span className="rounded-full bg-amber-400 px-1.5 py-0.5 text-[10px] font-bold text-slate-950">{rebookingReminders.length}</span>}
           </button>
           <button
             type="button"
+            aria-label="My availability" title="My availability" aria-current={workspaceView === 'availability' ? 'page' : undefined}
             onClick={() => setWorkspaceView('availability')}
             className={`flex shrink-0 items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium transition lg:w-full ${workspaceView === 'availability' ? 'bg-slate-800 text-white shadow-sm' : 'text-slate-300 hover:bg-slate-900 hover:text-white'}`}
           >
             <CalendarX className="h-4 w-4" />
-            <span className="flex-1 whitespace-nowrap">My availability</span>
+            <span className="therapist-nav-label flex-1 whitespace-nowrap">My availability</span>
           </button>
           <div className={`relative rounded-lg ${workspaceView === 'profile' ? 'bg-slate-800' : ''}`}>
             <button
               type="button"
+              aria-label="My profile" title="My profile" aria-current={workspaceView === 'profile' ? 'page' : undefined}
               aria-expanded={profileMenuOpen}
               onClick={() => setProfileMenuOpen((open) => !open)}
               className={`flex shrink-0 items-center gap-3 rounded-lg px-3 py-3 text-left text-sm font-medium transition lg:w-full ${workspaceView === 'profile' ? 'bg-slate-800 text-white' : 'text-slate-300 hover:bg-slate-900 hover:text-white'}`}
             >
               <UserRound className="h-4 w-4" />
-              <span className="flex-1 whitespace-nowrap">My profile</span>
-              <ChevronRight className={`h-4 w-4 transition-transform ${profileMenuOpen ? 'rotate-90' : ''}`} />
+              <span className="therapist-nav-label flex-1 whitespace-nowrap">My profile</span>
+              <ChevronRight className={`hidden h-4 w-4 transition-transform lg:block ${profileMenuOpen ? 'rotate-90' : ''}`} />
             </button>
             {profileMenuOpen && (
               <div className="absolute z-20 mt-1 rounded-xl bg-slate-900 p-2 shadow-lg lg:static lg:mb-2 lg:ml-5 lg:border-l lg:border-slate-700 lg:bg-transparent lg:pl-3 lg:shadow-none">
@@ -1828,13 +1836,13 @@ function TherapistPortal() {
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Clinical workspace</p>
             <h1 className="mt-1 text-2xl font-semibold tracking-tight text-slate-950">Patient notes</h1>
-            <p className="mt-1 text-sm text-slate-600">Create and review private notes linked to an appointment assigned to you.</p>
+            <MobileHelp><p className="mt-1 text-sm text-slate-600">Create and review private notes linked to an appointment assigned to you.</p></MobileHelp>
           </div>
           <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]">
             <form onSubmit={savePatientNote} className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
               <div className="flex items-center gap-3 border-b border-slate-100 pb-4">
                 <span className="grid h-10 w-10 place-items-center rounded-xl bg-slate-100 text-slate-800"><FileText className="h-5 w-5" /></span>
-                <div><h2 className="text-base font-semibold text-slate-900">Add a patient note</h2><p className="text-xs text-slate-500">Saved to your therapist record for this appointment.</p></div>
+                <div><h2 className="text-base font-semibold text-slate-900">Add a patient note</h2><MobileHelp><p className="text-xs text-slate-500">Saved to your therapist record for this appointment.</p></MobileHelp></div>
               </div>
               <label className="block text-sm font-medium text-slate-700">
                 Patient / appointment
@@ -1891,7 +1899,7 @@ function TherapistPortal() {
             </form>
             <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
               <div className="flex items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
-                <div><h2 className="text-base font-semibold text-slate-900">Recent notes</h2><p className="mt-1 text-xs text-slate-500">Notes you have saved for your assigned patients.</p></div>
+                <div><h2 className="text-base font-semibold text-slate-900">Recent notes</h2><MobileHelp><p className="mt-1 text-xs text-slate-500">Notes you have saved for your assigned patients.</p></MobileHelp></div>
                 <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">{patientNotes.length}</span>
               </div>
               {patientNotes.length ? (
@@ -1921,7 +1929,7 @@ function TherapistPortal() {
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Patient retention</p>
             <h1 className="mt-1 text-2xl font-semibold tracking-tight text-slate-950">Rebooking reminders</h1>
-            <p className="mt-1 text-sm text-slate-600">Patients last seen at least 30 days ago who do not have another upcoming appointment.</p>
+            <MobileHelp><p className="mt-1 text-sm text-slate-600">Patients last seen at least 30 days ago who do not have another upcoming appointment.</p></MobileHelp>
           </div>
           <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm leading-5 text-blue-900">
             These are suggested follow-ups based on appointment history. No message is sent automatically.
@@ -1964,7 +1972,7 @@ function TherapistPortal() {
             </div>
           )}
           <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-            <div className="border-b border-slate-100 px-5 py-4"><h2 className="text-base font-semibold text-slate-900">Recent patient history</h2><p className="mt-1 text-xs text-slate-500">Past appointments assigned to you.</p></div>
+            <div className="border-b border-slate-100 px-5 py-4"><h2 className="text-base font-semibold text-slate-900">Recent patient history</h2><MobileHelp><p className="mt-1 text-xs text-slate-500">Past appointments assigned to you.</p></MobileHelp></div>
             {attendedClients.length ? (
               <div className="divide-y divide-slate-100">
                 {attendedClients.slice(0, 8).map((patient) => (
@@ -2185,7 +2193,7 @@ function TherapistPortal() {
       </div>
       <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
-          <div><h2 className="text-base font-semibold text-slate-900">Upcoming appointments</h2><p className="mt-1 text-xs text-slate-500">Select a patient to review their treatment preparation details.</p></div>
+          <div><h2 className="text-base font-semibold text-slate-900">Upcoming appointments</h2><MobileHelp><p className="mt-1 text-xs text-slate-500">Select a patient to review their treatment preparation details.</p></MobileHelp></div>
           <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">{appointments.length} scheduled</span>
         </div>
         {appointments.length ? (
@@ -6673,11 +6681,12 @@ function AdminPortal({
     'wix-bookings': 'Historical Wix bookings',
     packages: 'Package tracking',
     'therapist-approvals': 'Therapist approvals',
+    'dashboard-users': 'Dashboard access',
     'business-profile': 'Business profile',
   }[activeTab] || 'Owner dashboard';
 
   return (
-    <div className={`min-h-[calc(100vh-58px)] bg-[#f1f3f7] lg:flex ${dashboardUser.role === 'owner' ? 'owner-dashboard' : ''}`}>
+    <div data-section={activeTab} className={`staff-dashboard min-h-[calc(100vh-58px)] bg-[#f1f3f7] lg:flex ${dashboardUser.role === 'owner' ? 'owner-dashboard' : ''}`}>
       <BookingNotifications userId={dashboardUser.id || dashboardUser.email} portalTarget={calendarFullscreen ? calendarPanelRef.current : null} />
       <aside className="sticky top-[58px] hidden h-[calc(100vh-58px)] w-64 shrink-0 flex-col bg-[#111722] text-slate-300 lg:flex">
         <div className="flex items-center gap-3 border-b border-white/10 px-5 py-5">
@@ -6729,7 +6738,7 @@ function AdminPortal({
         <div className="dashboard-toolbar sticky top-[58px] z-20 border-b border-slate-200 bg-white/95 px-4 py-3 backdrop-blur sm:px-6 lg:top-[58px]">
           <div className="flex items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-3">
-              <button type="button" aria-label={tr("Toggle dashboard menu")} aria-expanded={mobileNavOpen} aria-controls="mobile-dashboard-menu" onClick={() => setMobileNavOpen((open) => !open)} className="dashboard-menu-toggle rounded-lg border border-slate-200 p-2 text-slate-600 hover:bg-slate-50 lg:hidden">{mobileNavOpen && dashboardUser.role === 'owner' ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}</button>
+              <button type="button" aria-label={tr("Toggle dashboard menu")} aria-expanded={mobileNavOpen} aria-controls="mobile-dashboard-menu" onClick={() => setMobileNavOpen((open) => !open)} className="dashboard-menu-toggle rounded-lg border border-slate-200 p-2 text-slate-600 hover:bg-slate-50 lg:hidden">{mobileNavOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}</button>
               <div className="min-w-0">
                 <p className="truncate text-sm font-bold text-slate-900">{businessProfile.businessName || 'MY THAI THAI'}</p>
                 <p className="dashboard-page-title hidden text-[11px] text-slate-500 sm:block">{tr(pageTitle)} <span className="dashboard-workspace-label px-1 text-slate-300">/</span> <span className="dashboard-workspace-label">{tr("Owner workspace")}</span></p>
@@ -6744,40 +6753,32 @@ function AdminPortal({
               <div className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-100 text-[10px] font-bold text-emerald-950">MT</div>
             </div>
           </div>
-          {dashboardUser.role === 'owner' && (
-            <nav aria-label={tr("Owner dashboard shortcuts")} className="mt-3 grid grid-cols-4 gap-1 lg:hidden">
-              {visibleAdminNavigation.filter((item) => ['schedule', 'calendar', 'reports'].includes(item.id)).map((item) => {
-                const Icon = item.icon;
-                return <button key={item.id} type="button" aria-current={activeTab === item.id ? 'page' : undefined} onClick={() => { setActiveTab(item.id); setMobileNavOpen(false); }} className={`flex min-h-11 flex-col items-center justify-center gap-1 rounded-xl px-1 py-2 text-[11px] font-semibold ${activeTab === item.id ? 'bg-emerald-950 text-white' : 'text-slate-600 hover:bg-slate-100'}`}><Icon className="h-5 w-5 shrink-0" /><span>{tr(item.label)}</span></button>;
-              })}
-              <button type="button" aria-expanded={mobileNavOpen} aria-controls="mobile-dashboard-menu" onClick={() => setMobileNavOpen((open) => !open)} className={`flex min-h-11 flex-col items-center justify-center gap-1 rounded-xl px-1 py-2 text-[11px] font-semibold ${mobileNavOpen ? 'bg-emerald-100 text-emerald-950' : 'text-slate-600 hover:bg-slate-100'}`}><Menu className="h-5 w-5" />{tr("All sections")}</button>
-            </nav>
-          )}
-          {mobileNavOpen && dashboardUser.role === 'owner' ? (
-            <nav id="mobile-dashboard-menu" aria-label={tr("Mobile owner dashboard navigation")} onKeyDown={(event) => { if (event.key === 'Escape') { setMobileNavOpen(false); event.currentTarget.parentElement.querySelector('.dashboard-menu-toggle')?.focus(); } }} className="dashboard-mobile-menu mt-3 space-y-4 overflow-y-auto overscroll-contain border-t border-slate-100 pt-3 lg:hidden">
+          {mobileNavOpen && (
+            <nav id="mobile-dashboard-menu" aria-label={tr(dashboardUser.role === 'owner' ? "Mobile owner dashboard navigation" : "Mobile staff dashboard navigation")} onKeyDown={(event) => { if (event.key === 'Escape') { setMobileNavOpen(false); event.currentTarget.parentElement.querySelector('.dashboard-menu-toggle')?.focus(); } }} className="dashboard-mobile-menu mt-3 space-y-4 overflow-y-auto overscroll-contain border-t border-slate-100 pt-3 lg:hidden">
               {navigationSections.map((section) => (
                 <section key={section} aria-label={tr(section)}>
                   <h2 className="mb-2 px-2 text-xs font-bold uppercase tracking-wider text-slate-500">{tr(section)}</h2>
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                     {visibleAdminNavigation.filter((item) => item.section === section).map((item) => {
                       const Icon = item.icon;
-                      return <button key={item.id} type="button" aria-current={activeTab === item.id ? 'page' : undefined} onClick={() => { setActiveTab(item.id); setMobileNavOpen(false); }} className={`flex min-h-11 items-center gap-2 rounded-xl px-3 py-3 text-left text-sm font-semibold ${activeTab === item.id ? 'bg-emerald-950 text-white' : 'bg-slate-50 text-slate-700 hover:bg-slate-100'}`}><Icon className="h-4 w-4 shrink-0" /><span className="min-w-0 break-words">{tr(item.label)}</span>{item.badge > 0 && <span className="ml-auto rounded-full bg-amber-400 px-1.5 text-[10px] font-bold text-slate-950">{item.badge}</span>}</button>;
+                      return <button key={item.id} type="button" aria-label={tr(item.label)} title={tr(item.label)} aria-current={activeTab === item.id ? 'page' : undefined} onClick={() => { setActiveTab(item.id); setMobileNavOpen(false); }} className={`flex min-h-11 items-center gap-2 rounded-xl px-3 py-3 text-left text-sm font-semibold ${activeTab === item.id ? 'bg-emerald-950 text-white' : 'bg-slate-50 text-slate-700 hover:bg-slate-100'}`}><Icon aria-hidden="true" className="h-4 w-4 shrink-0" /><span className="min-w-0 break-words">{tr(item.label)}</span>{item.badge > 0 && <span className="ml-auto rounded-full bg-amber-400 px-1.5 text-[10px] font-bold text-slate-950">{item.badge}</span>}</button>;
                     })}
                   </div>
                 </section>
               ))}
             </nav>
-          ) : mobileNavOpen && (
-            <nav id="mobile-dashboard-menu" aria-label={tr("Mobile owner dashboard navigation")} className="mt-3 grid grid-cols-2 gap-1 border-t border-slate-100 pt-3 sm:grid-cols-3">
-              {visibleAdminNavigation.map((item, index) => {
-                const Icon = item.icon;
-                return <button key={`${item.label}-${index}`} onClick={() => { setActiveTab(item.id); setMobileNavOpen(false); }} className={`flex items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-semibold ${activeTab === item.id ? 'bg-emerald-950 text-white' : 'text-slate-600 hover:bg-slate-100'}`}><Icon className="h-4 w-4" />{tr(item.label)}{item.badge > 0 && <span className="ml-auto rounded-full bg-amber-400 px-1.5 text-[10px] font-bold text-slate-950">{item.badge}</span>}</button>;
-              })}
-            </nav>
           )}
         </div>
 
-        <main className="mx-auto max-w-[1600px] space-y-6 p-4 sm:p-6 xl:p-8">
+        <nav aria-label={tr(dashboardUser.role === 'owner' ? "Owner dashboard shortcuts" : "Staff dashboard shortcuts")} className="dashboard-shortcuts fixed inset-x-0 bottom-0 z-30 grid auto-cols-fr grid-flow-col gap-1 border-t border-slate-200 bg-white px-3 pt-2 shadow-lg lg:hidden">
+          {visibleAdminNavigation.filter((item) => ['schedule', 'calendar', 'alerts', 'reports'].includes(item.id)).map((item) => {
+            const Icon = item.icon;
+            return <button key={item.id} type="button" aria-label={tr(item.label)} title={tr(item.label)} aria-current={activeTab === item.id ? 'page' : undefined} onClick={() => { setActiveTab(item.id); setMobileNavOpen(false); }} className={`relative flex min-h-11 items-center justify-center rounded-xl p-3 ${activeTab === item.id ? 'bg-emerald-950 text-white' : 'text-slate-600 hover:bg-slate-100'}`}><Icon aria-hidden="true" className="h-5 w-5 shrink-0" /><span className="sr-only">{tr(item.label)}</span>{item.badge > 0 && <span className="absolute right-1 top-0 rounded-full bg-amber-400 px-1 text-[10px] font-bold text-slate-950">{item.badge}</span>}</button>;
+          })}
+          <button type="button" aria-label={tr("All sections")} title={tr("All sections")} aria-expanded={mobileNavOpen} aria-controls="mobile-dashboard-menu" onClick={() => setMobileNavOpen((open) => !open)} className={`flex min-h-11 items-center justify-center rounded-xl p-3 ${mobileNavOpen ? 'bg-emerald-100 text-emerald-950' : 'text-slate-600 hover:bg-slate-100'}`}><Menu aria-hidden="true" className="h-5 w-5" /><span className="sr-only">{tr("All sections")}</span></button>
+        </nav>
+
+        <main className="dashboard-content mx-auto max-w-[1600px] space-y-6 p-4 sm:p-6 xl:p-8">
           <CheckInReminders
             bookings={dashboardBookings.filter((booking) => dashboardUser.role === 'owner' ||
               branches.some((branch) => dashboardUser.branchIds.includes(String(branch.id)) &&
@@ -6791,8 +6792,8 @@ function AdminPortal({
             }}
           />
       {bookingEditNotice && <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">{tr(bookingEditNotice)}</p>}
-      <details open={activeTab !== 'calendar' || !compactCalendar}>
-      <summary className={activeTab === 'calendar' ? 'calendar-context-toggle cursor-pointer rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 lg:hidden' : 'hidden'}><Settings className="mr-2 inline h-4 w-4" />{tr("Owner workspace")}</summary>
+      <details open={!compactCalendar}>
+      <summary className="calendar-context-toggle cursor-pointer rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-600 lg:hidden"><Settings className="mr-2 inline h-4 w-4" />{tr("Owner workspace")}</summary>
       <section className="dashboard-banner relative overflow-hidden rounded-3xl bg-gradient-to-br from-slate-950 via-emerald-950 to-emerald-800 px-5 py-6 text-white shadow-xl shadow-emerald-950/10 sm:px-8 sm:py-8">
         <div aria-hidden="true" className="absolute -right-16 -top-28 h-72 w-72 rounded-full border border-white/10" />
         <div aria-hidden="true" className="absolute -right-2 -top-14 h-48 w-48 rounded-full border border-white/10" />
@@ -6851,7 +6852,7 @@ function AdminPortal({
               : [];
         if (!stats.length) return null;
         return (
-          <div className={`${activeTab === 'calendar' ? 'calendar-stats ' : ''}grid grid-cols-2 gap-4 ${stats.length === 4 ? 'md:grid-cols-4' : 'md:grid-cols-3'}`}>
+          <div className={`${activeTab === 'calendar' ? 'calendar-stats ' : 'dashboard-stats '}grid grid-cols-2 gap-4 ${stats.length === 4 ? 'md:grid-cols-4' : 'md:grid-cols-3'}`}>
             {stats.map(({ label, value, detail, Icon, style, valueStyle = 'text-slate-900' }) => (
               <div key={label} title={`${label}: ${value}`} className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
                 <div className="flex items-center justify-between"><div className="text-xs font-semibold text-slate-500">{label}</div><span className={`rounded-xl p-2 ${style}`}><Icon className="h-4 w-4" /></span></div>
@@ -6871,7 +6872,7 @@ function AdminPortal({
         <section className="space-y-5">
           {dashboardUser.role === 'owner' && <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <h2 className="text-lg font-bold text-slate-950">{tr("Dashboard access")}</h2>
-            <p className="mt-1 text-sm text-slate-600">{tr("Create role-limited accounts. Every account must verify sign-in with a one-time code sent to its email address.")}</p>
+            <MobileHelp><p className="mt-1 text-sm text-slate-600">{tr("Create role-limited accounts. Every account must verify sign-in with a one-time code sent to its email address.")}</p></MobileHelp>
             <form onSubmit={createDashboardUser} className="mt-4 grid gap-3 sm:grid-cols-2">
               <label className="text-xs font-semibold text-slate-600">{tr("Name")}<input required maxLength={120} value={newDashboardUser.name} onChange={(event) => setNewDashboardUser((current) => ({ ...current, name: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm" />
               </label>
@@ -7494,9 +7495,9 @@ function AdminPortal({
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-300">{tr("Workspace")}</p>
                     <h2 className="mt-1 text-xl font-bold">{tr("Alerts")}</h2>
-                    <p className="mt-1 max-w-2xl text-sm text-slate-300">
+                    <MobileHelp><p className="mt-1 max-w-2xl text-sm text-slate-300">
                       {tr("Filter today's upcoming appointments and send timely reminders with attendance confirmation and self-service rescheduling.")}
-                    </p>
+                    </p></MobileHelp>
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -7720,7 +7721,7 @@ function AdminPortal({
           <div className="flex justify-between items-center">
             <div>
               <h2 className="text-lg font-bold text-stone-900">{t.services}</h2>
-              <p className="text-xs text-stone-500">{tr("Add, edit, deactivate, or remove services. Changes appear on the booking portal immediately after saving.")}</p>
+              <MobileHelp><p className="text-xs text-stone-500">{tr("Add, edit, deactivate, or remove services. Changes appear on the booking portal immediately after saving.")}</p></MobileHelp>
             </div>
             <button
               onClick={addServiceRow}
@@ -7741,7 +7742,7 @@ function AdminPortal({
           )}
 
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs sm:text-sm">
+            <ResponsiveTable className="w-full text-left text-xs sm:text-sm">
               <thead className="bg-stone-50 text-stone-600 font-bold border-b">
                 <tr>
                   <th className="p-2">{t.name}</th>
@@ -7851,7 +7852,7 @@ function AdminPortal({
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </ResponsiveTable>
           </div>
 
           <div className="flex justify-end pt-2">
@@ -7872,9 +7873,9 @@ function AdminPortal({
           <div className="flex justify-between items-center">
             <div>
               <h2 className="text-lg font-bold text-stone-900">{tr("Branches")}</h2>
-              <p className="text-xs text-stone-500">{tr(branchConfigSource === 'bigquery'
+              <MobileHelp><p className="text-xs text-stone-500">{tr(branchConfigSource === 'bigquery'
                 ? "BigQuery is the source of truth for branch settings."
-                : "Add, edit, or deactivate locations. Changes appear on the booking portal immediately after saving.")}</p>
+                : "Add, edit, or deactivate locations. Changes appear on the booking portal immediately after saving.")}</p></MobileHelp>
             </div>
             <div className="flex flex-wrap justify-end gap-2">
               {branchConfigSource === 'bigquery' && <span className="self-center rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-800">{tr("BigQuery source of truth")}</span>}
@@ -7904,7 +7905,7 @@ function AdminPortal({
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <h3 className="text-sm font-bold text-stone-900">{tr("Appointment settings storage")}</h3>
-                  <p className="mt-1 text-xs text-stone-600">{tr("This separate one-time import moves the business profile, services, therapists, therapist work schedules, unavailability blocks, and saved therapist identity mappings. Branch settings are managed above.")}</p>
+                  <MobileHelp><p className="mt-1 text-xs text-stone-600">{tr("This separate one-time import moves the business profile, services, therapists, therapist work schedules, unavailability blocks, and saved therapist identity mappings. Branch settings are managed above.")}</p></MobileHelp>
                 </div>
                 {appointmentConfigSource === 'bigquery'
                   ? <span className="rounded-full bg-emerald-100 px-3 py-1.5 text-xs font-semibold text-emerald-800">{tr("BigQuery source of truth")}</span>
@@ -8021,7 +8022,7 @@ function AdminPortal({
           <div className="bg-white rounded-2xl p-6 border border-stone-200 shadow-sm space-y-4">
             <div>
               <h2 className="text-lg font-bold text-stone-900">{tr("Availability")}</h2>
-              <p className="text-xs text-stone-500">{tr("Block off business-wide closures or a single therapist's breaks/time off. Blocks automatically stop new bookings and show up on the Booking Calendar and in the therapist portal.")}</p>
+              <MobileHelp><p className="text-xs text-stone-500">{tr("Block off business-wide closures or a single therapist's breaks/time off. Blocks automatically stop new bookings and show up on the Booking Calendar and in the therapist portal.")}</p></MobileHelp>
             </div>
             <form onSubmit={createUnavailabilityBlock} className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <label className="text-xs font-semibold text-stone-600">{tr("Scope")}<select value={unavailabilityForm.scope} onChange={(e) => setUnavailabilityForm((current) => ({ ...current, scope: e.target.value, therapistName: e.target.value === 'business' ? '' : current.therapistName }))} className="mt-1 w-full rounded-lg border border-stone-300 px-3 py-2 text-sm">
@@ -8087,7 +8088,7 @@ function AdminPortal({
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
             <div>
               <h2 className="text-lg font-bold text-stone-900">{t.staff}</h2>
-              <p className="text-xs text-stone-500">{tr("Manage registered therapists, credentials, and which branch each therapist works at on each day of the week — supports rotation between branches. Changes sync to the booking portal and the therapist portal.")}</p>
+              <MobileHelp><p className="text-xs text-stone-500">{tr("Manage registered therapists, credentials, and which branch each therapist works at on each day of the week — supports rotation between branches. Changes sync to the booking portal and the therapist portal.")}</p></MobileHelp>
             </div>
             <button
               onClick={addTherapistRow}
@@ -8278,7 +8279,7 @@ function AdminPortal({
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-[0.16em] text-indigo-200">{tr("Reward your regulars")}</p>
                     <h2 className="mt-1 text-xl font-bold">{tr("MY THAI THAI Rewards")}</h2>
-                    <p className="mt-1 max-w-2xl text-sm text-indigo-100">{tr("Manage member tiers, award points for completed visits, and record in-clinic reward redemptions.")}</p>
+                    <MobileHelp><p className="mt-1 max-w-2xl text-sm text-indigo-100">{tr("Manage member tiers, award points for completed visits, and record in-clinic reward redemptions.")}</p></MobileHelp>
                   </div>
                 </div>
                 <button type="button" onClick={loadLoyaltyDashboard} disabled={isLoadingLoyalty} className="inline-flex items-center gap-2 rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-xs font-semibold text-white transition hover:bg-white/15 disabled:opacity-50">
@@ -8310,7 +8311,7 @@ function AdminPortal({
                 <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 pb-4">
                   <div>
                     <h3 className="text-base font-semibold text-slate-900">{tr("Program settings")}</h3>
-                    <p className="mt-1 text-xs leading-5 text-slate-500">{tr("Configure Standard, Gold and Platinum benefits. Point awards use service amounts actually paid, and existing ledger entries are unchanged.")}</p>
+                    <MobileHelp><p className="mt-1 text-xs leading-5 text-slate-500">{tr("Configure Standard, Gold and Platinum benefits. Point awards use service amounts actually paid, and existing ledger entries are unchanged.")}</p></MobileHelp>
                   </div>
                   <label className="inline-flex cursor-pointer items-center gap-2 text-xs font-semibold text-slate-700">
                     <input type="checkbox" checked={loyaltySettings.enabled} onChange={(event) => setLoyaltySettings((current) => ({ ...current, enabled: event.target.checked }))} className="h-4 w-4 rounded border-slate-300 text-indigo-700 focus:ring-indigo-600" />{tr("Program accepting members")}</label>
@@ -8378,7 +8379,7 @@ function AdminPortal({
               </form>
 
               <form onSubmit={onboardLoyaltyMember} className="space-y-4 rounded-2xl border border-indigo-200 bg-white p-5 shadow-sm sm:p-6">
-                <div><h3 className="text-base font-semibold text-slate-900">{tr("Onboard a member")}</h3><p className="mt-1 text-xs leading-5 text-slate-500">{tr("Find a recent customer by name, email or phone. For Platinum, use the employee's work email, add the company and ID, then optionally confirm the initial payment and add the configured hours in this same step.")}</p></div>
+                <div><h3 className="text-base font-semibold text-slate-900">{tr("Onboard a member")}</h3><MobileHelp><p className="mt-1 text-xs leading-5 text-slate-500">{tr("Find a recent customer by name, email or phone. For Platinum, use the employee's work email, add the company and ID, then optionally confirm the initial payment and add the configured hours in this same step.")}</p></MobileHelp></div>
                 <div className="relative max-w-xl">
                   <label className="relative block">
                     <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
@@ -8435,11 +8436,11 @@ function AdminPortal({
               <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
                 <div className="border-b border-slate-100 px-5 py-4">
                   <h3 className="text-base font-semibold text-slate-900">{tr("Confirm completed visits")}</h3>
-                  <p className="mt-1 text-xs leading-5 text-slate-500">{tr("Confirm completed, paid member visits, redeem a Gold monthly Hot Stone add-on, or consume Platinum prepaid hours. Each visit can only be recorded once.")}</p>
+                  <MobileHelp><p className="mt-1 text-xs leading-5 text-slate-500">{tr("Confirm completed, paid member visits, redeem a Gold monthly Hot Stone add-on, or consume Platinum prepaid hours. Each visit can only be recorded once.")}</p></MobileHelp>
                 </div>
                 {loyaltyDashboard.eligibleBookings.length ? (
                   <div className="overflow-x-auto">
-                    <table className="w-full min-w-[680px] text-left text-sm">
+                    <ResponsiveTable className="w-full min-w-[680px] text-left text-sm">
                       <thead className="bg-slate-50 text-xs font-semibold text-slate-500"><tr><th className="px-5 py-3">{tr("Member")}</th><th className="px-4 py-3">{tr("Visit")}</th><th className="px-4 py-3 text-right">{tr("Paid")}</th><th className="px-5 py-3 text-right">{tr("Points")}</th><th className="px-5 py-3 text-right">{tr("Action")}</th></tr></thead>
                       <tbody className="divide-y divide-slate-100">
                         {loyaltyDashboard.eligibleBookings.map((booking) => (
@@ -8452,14 +8453,14 @@ function AdminPortal({
                           </tr>
                         ))}
                       </tbody>
-                    </table>
+                    </ResponsiveTable>
                   </div>
                 ) : <p className="p-6 text-center text-sm text-slate-500">{tr("No completed member visits or benefits are waiting to be recorded.")}</p>}
               </section>
 
               <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
-                  <div><h3 className="text-base font-semibold text-slate-900">{tr("Members & balances")}</h3><p className="mt-1 text-xs text-slate-500">{tr("Search by member, email, phone, company or company ID; check eligibility, record top-ups and redeem points.")}</p></div>
+                  <div><h3 className="text-base font-semibold text-slate-900">{tr("Members & balances")}</h3><MobileHelp><p className="mt-1 text-xs text-slate-500">{tr("Search by member, email, phone, company or company ID; check eligibility, record top-ups and redeem points.")}</p></MobileHelp></div>
                   <div className="flex w-full flex-wrap gap-2 sm:w-auto">
                     <label className="sr-only" htmlFor="loyalty-member-type-filter">{tr("Filter members by membership type")}</label>
                     <select id="loyalty-member-type-filter" value={loyaltyMemberTypeFilter} onChange={(event) => setLoyaltyMemberTypeFilter(event.target.value)} className="rounded-lg border border-slate-200 px-3 py-2 text-xs">
@@ -8474,7 +8475,7 @@ function AdminPortal({
                     .filter((member) => [member.name, member.email, member.phone, member.organization, member.companyId, member.companyContactEmail].some((value) => (value || '').toLowerCase().includes(loyaltyMemberSearch.trim().toLowerCase())));
                   return filteredMembers.length ? (
                     <div className="overflow-x-auto">
-                      <table className="w-full min-w-[920px] text-left text-sm">
+                      <ResponsiveTable className="w-full min-w-[920px] text-left text-sm">
                         <thead className="bg-slate-50 text-xs font-semibold text-slate-500"><tr><th className="px-5 py-3">{tr("Member")}</th><th className="px-4 py-3">{tr("Membership")}</th><th className="px-4 py-3">{tr("Eligibility")}</th><th className="px-4 py-3 text-right">{tr("Balance")}</th><th className="px-4 py-3 text-right">{tr("Lifetime earned")}</th><th className="px-5 py-3 text-right">{tr("Actions")}</th></tr></thead>
                         <tbody className="divide-y divide-slate-100">
                           {filteredMembers.map((member) => (
@@ -8497,7 +8498,7 @@ function AdminPortal({
                             </tr>
                           ))}
                         </tbody>
-                      </table>
+                      </ResponsiveTable>
                     </div>
                   ) : <p className="p-8 text-center text-sm text-slate-500">{loyaltyDashboard.members.length ? tr("No members match your search.") : tr("No members yet. Customers can join Rewards during online booking.")}</p>;
                 })()}
@@ -8637,7 +8638,7 @@ function AdminPortal({
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-[0.16em] text-blue-200">{tr("Grow your practice")}</p>
                     <h2 className="mt-1 text-xl font-bold">{tr("Google Ads performance")}</h2>
-                    <p className="mt-1 max-w-2xl text-sm text-slate-300">{tr("Explore campaign results over a date range you choose.")}</p>
+                    <MobileHelp><p className="mt-1 max-w-2xl text-sm text-slate-300">{tr("Explore campaign results over a date range you choose.")}</p></MobileHelp>
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -8695,7 +8696,7 @@ function AdminPortal({
               </div>
               <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
                 <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
-                  <div><h3 className="text-base font-semibold text-slate-900">{tr("Campaigns")}</h3><p className="mt-1 text-xs text-slate-500">{tr("Search, filter and sort results for the selected reporting period.")}</p></div>
+                  <div><h3 className="text-base font-semibold text-slate-900">{tr("Campaigns")}</h3><MobileHelp><p className="mt-1 text-xs text-slate-500">{tr("Search, filter and sort results for the selected reporting period.")}</p></MobileHelp></div>
                   <span className="text-xs text-slate-500">{visibleGoogleAdsCampaigns.length} {tr("of")} {googleAdsReport.campaigns.length} {tr("campaigns")}</span>
                 </div>
                 <div className="flex flex-wrap gap-2 border-b border-slate-100 bg-slate-50/70 px-5 py-3">
@@ -8720,7 +8721,7 @@ function AdminPortal({
                 </div>
                 {visibleGoogleAdsCampaigns.length ? (
                   <div className="overflow-x-auto">
-                    <table className="w-full min-w-[700px] text-left text-sm">
+                    <ResponsiveTable className="w-full min-w-[700px] text-left text-sm">
                       <thead className="bg-slate-50 text-xs font-semibold text-slate-500"><tr><th className="px-5 py-3">{tr("Campaign")}</th><th className="px-4 py-3">{tr("Status")}</th><th className="px-4 py-3 text-right">{tr("Impressions")}</th><th className="px-4 py-3 text-right">{tr("Clicks")}</th><th className="px-4 py-3 text-right">{tr("Spend")}</th><th className="px-5 py-3 text-right">{tr("Conversions")}</th></tr></thead>
                       <tbody className="divide-y divide-slate-100">
                         {visibleGoogleAdsCampaigns.map((campaign) => (
@@ -8734,7 +8735,7 @@ function AdminPortal({
                           </tr>
                         ))}
                       </tbody>
-                    </table>
+                    </ResponsiveTable>
                   </div>
                 ) : <p className="p-8 text-center text-sm text-slate-500">{googleAdsReport.campaigns.length ? tr("No campaigns match the current search and filters.") : tr("No campaigns were returned for the selected dates.")}</p>}
               </section>
@@ -8754,7 +8755,7 @@ function AdminPortal({
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-200">{tr("Grow your practice")}</p>
                     <h2 className="mt-1 text-xl font-bold">{tr("Google Reviews")}</h2>
-                    <p className="mt-1 max-w-2xl text-sm text-slate-300">{tr("See your latest Google Business Profile reviews and rating at a glance.")}</p>
+                    <MobileHelp><p className="mt-1 max-w-2xl text-sm text-slate-300">{tr("See your latest Google Business Profile reviews and rating at a glance.")}</p></MobileHelp>
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -8807,7 +8808,7 @@ function AdminPortal({
               <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
                 <div className="border-b border-slate-100 px-5 py-4">
                   <h3 className="text-base font-semibold text-slate-900">{tr("Most recent reviews")}</h3>
-                  <p className="mt-1 text-xs text-slate-500">{tr("Google surfaces up to 5 recent reviews through the Places API.")}</p>
+                  <MobileHelp><p className="mt-1 text-xs text-slate-500">{tr("Google surfaces up to 5 recent reviews through the Places API.")}</p></MobileHelp>
                 </div>
                 {googleReviews.reviews.length === 0 ? (
                   <p className="p-8 text-center text-sm text-slate-500">{tr("No reviews are available yet.")}</p>
@@ -8847,9 +8848,9 @@ function AdminPortal({
                 <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
                   <div>
                     <h3 className="text-base font-bold text-slate-950">{tr("Ask past customers for a review")}</h3>
-                    <p className="mt-1 text-xs text-slate-500">{tr("Emails a Google review link to customers who have already attended an appointment")}{reviewRequestData?.lookbackDays ? tr(" in the last {value0} days", { value0: reviewRequestData.lookbackDays }) : ''}.
+                    <MobileHelp><p className="mt-1 text-xs text-slate-500">{tr("Emails a Google review link to customers who have already attended an appointment")}{reviewRequestData?.lookbackDays ? tr(" in the last {value0} days", { value0: reviewRequestData.lookbackDays }) : ''}.
                       {reviewRequestData?.senderEmail ? tr(" Sent from {value0}.", { value0: reviewRequestData.senderEmail }) : ''}
-                    </p>
+                    </p></MobileHelp>
                   </div>
                   <button type="button" onClick={() => setReviewRequestOpen(false)} className="rounded-lg p-1.5 text-slate-500 transition hover:bg-slate-100"><X className="h-4 w-4" /></button>
                 </div>
@@ -8933,7 +8934,7 @@ function AdminPortal({
               <div>
                 <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-violet-800">{tr("Grow your practice")}</p>
                 <h2 className="mt-1 text-xl font-bold text-slate-950">{tr("Email marketing")}</h2>
-                <p className="mt-1 max-w-2xl text-sm text-slate-500">{tr("Build an audience with chat, review your message, and send from mythaithaimassage@gmail.com.")}</p>
+                <MobileHelp><p className="mt-1 max-w-2xl text-sm text-slate-500">{tr("Build an audience with chat, review your message, and send from mythaithaimassage@gmail.com.")}</p></MobileHelp>
               </div>
             </div>
             <div className="mt-5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-xs leading-5 text-emerald-950">{tr("Campaigns go only to people who checked the optional marketing consent box when booking and remain subscribed. Each email includes an unsubscribe link. Appointment confirmations and receipts are separate.")}</div>
@@ -8942,7 +8943,7 @@ function AdminPortal({
           {campaignNotice && <div role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">{tr(campaignNotice)}</div>}
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
             <div className="flex flex-wrap items-start justify-between gap-3">
-              <div><h3 className="font-bold text-slate-900">{tr("Audience assistant")}</h3><p className="mt-1 text-xs leading-5 text-slate-500">{tr("Describe a segment in your own words, or switch to manual filters to pick it yourself. The list is rebuilt from the live database every time, so deleted customers are removed automatically. Gemini only ever receives your description and the branch, service, and membership names — never customer or patient data.")}</p></div>
+              <div><h3 className="font-bold text-slate-900">{tr("Audience assistant")}</h3><MobileHelp><p className="mt-1 text-xs leading-5 text-slate-500">{tr("Describe a segment in your own words, or switch to manual filters to pick it yourself. The list is rebuilt from the live database every time, so deleted customers are removed automatically. Gemini only ever receives your description and the branch, service, and membership names — never customer or patient data.")}</p></MobileHelp></div>
               {campaignAudience && <span className="rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-900">{campaignAudience.count} {tr("matched /")} {campaignAudience.subscriberCount} {tr("opted in")}</span>}
             </div>
             <div className="mt-4 inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1">
@@ -9024,7 +9025,7 @@ function AdminPortal({
           </section>
           <div className="grid gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(300px,0.8fr)]">
             <form onSubmit={saveCampaignDraft} className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-              <div><h3 className="font-bold text-slate-900">{tr("Campaign message")}</h3><p className="mt-1 text-xs text-slate-500">{tr("Use the writing assistant to create an editable draft, then review, save, or send it.")}</p></div>
+              <div><h3 className="font-bold text-slate-900">{tr("Campaign message")}</h3><MobileHelp><p className="mt-1 text-xs text-slate-500">{tr("Use the writing assistant to create an editable draft, then review, save, or send it.")}</p></MobileHelp></div>
               <div className="rounded-xl border border-violet-100 bg-violet-50/60 p-4">
                 <label className="block"><span className="mb-1.5 block text-xs font-semibold text-slate-700">{tr("What should this campaign say?")}</span><textarea rows={2} maxLength={500} value={campaignGoal} onChange={(event) => setCampaignGoal(event.target.value)} disabled={isGeneratingCampaignCopy || isSendingCampaign} placeholder={tr("e.g. Write a friendly note inviting this audience to take time for self-care. Do not include an offer.")} className="w-full resize-y rounded-xl border border-slate-200 bg-white px-3.5 py-3 text-sm leading-5 outline-none focus:border-violet-500 focus:ring-4 focus:ring-violet-100 disabled:bg-slate-50" /></label>
                 <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
@@ -9054,18 +9055,18 @@ function AdminPortal({
             </section>
           </div>
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="mb-4 flex items-center justify-between"><div><h3 className="font-bold text-slate-900">{tr("Saved drafts")}</h3><p className="mt-1 text-xs text-slate-500">{tr("Stored only on this device")}</p></div><span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600">{campaignDrafts.length}</span></div>
+            <div className="mb-4 flex items-center justify-between"><div><h3 className="font-bold text-slate-900">{tr("Saved drafts")}</h3><MobileHelp><p className="mt-1 text-xs text-slate-500">{tr("Stored only on this device")}</p></MobileHelp></div><span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-600">{campaignDrafts.length}</span></div>
             {campaignDrafts.length ? <div className="space-y-2">{campaignDrafts.map((draft) => <div key={draft.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-100 p-3"><button type="button" onClick={() => { setCampaignSubject(draft.subject); setCampaignPreview(draft.preview); setCampaignMessage(draft.message); setCampaignNotice('Draft loaded for editing.'); setCampaignError(''); }} className="min-w-0 flex-1 text-left"><span className="block truncate text-sm font-semibold text-slate-800">{draft.subject}</span><span className="text-[10px] text-slate-400">{tr("Updated")} {new Date(draft.updatedAt).toLocaleString(locale)}</span></button><button type="button" onClick={() => removeCampaignDraft(draft.id)} className="rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-500 hover:bg-rose-50 hover:text-rose-700">{tr("Delete")}</button></div>)}</div> : <p className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">{tr("No campaign drafts saved yet.")}</p>}
           </section>
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-4 flex items-center justify-between">
-              <div><h3 className="font-bold text-slate-900">{tr("Campaign history")}</h3><p className="mt-1 text-xs text-slate-500">{tr("Logged to BigQuery with a campaign ID for future reference/audit")}</p></div>
+              <div><h3 className="font-bold text-slate-900">{tr("Campaign history")}</h3><MobileHelp><p className="mt-1 text-xs text-slate-500">{tr("Logged to BigQuery with a campaign ID for future reference/audit")}</p></MobileHelp></div>
               <button type="button" onClick={loadCampaignHistory} disabled={isLoadingCampaignHistory} className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50">{isLoadingCampaignHistory ? tr("Refreshing…") : tr("Refresh")}</button>
             </div>
             {campaignHistoryError && <div role="alert" className="mb-3 rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{tr(campaignHistoryError)}</div>}
             {campaignHistory.length ? (
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[640px] text-left text-xs">
+                <ResponsiveTable className="w-full min-w-[640px] text-left text-xs">
                   <thead><tr className="border-b border-slate-100 text-[10px] uppercase tracking-wider text-slate-400"><th className="py-2 pr-4">{tr("Sent")}</th><th className="py-2 pr-4">{tr("Subject")}</th><th className="py-2 pr-4">{tr("Audience")}</th><th className="py-2 pr-4 text-right">{tr("Sent / Failed")}</th><th className="py-2 pr-4">{tr("Campaign ID")}</th></tr></thead>
                   <tbody>
                     {campaignHistory.map((campaign) => (
@@ -9078,7 +9079,7 @@ function AdminPortal({
                       </tr>
                     ))}
                   </tbody>
-                </table>
+                </ResponsiveTable>
               </div>
             ) : <p className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">{isLoadingCampaignHistory ? tr("Loading campaign history…") : tr("No campaigns sent yet.")}</p>}
           </section>
@@ -9093,7 +9094,7 @@ function AdminPortal({
                 <div className="mb-2 inline-flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.16em] text-emerald-800">
                   <Building className="h-4 w-4" />{tr("Owner settings")}</div>
                 <h2 className="text-xl font-bold tracking-tight text-slate-900">{tr("Business profile")}</h2>
-                <p className="mt-1 text-sm text-slate-500">{tr("Manage the identity and contact details associated with your practice.")}</p>
+                <MobileHelp><p className="mt-1 text-sm text-slate-500">{tr("Manage the identity and contact details associated with your practice.")}</p></MobileHelp>
               </div>
               <span className="inline-flex w-fit items-center gap-2 rounded-full border border-emerald-200 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-800">
                 <CheckCircle2 className="h-4 w-4" />{tr("Synced across owner devices")}</span>
@@ -9182,7 +9183,7 @@ function AdminPortal({
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
               <h2 className="text-lg font-bold text-slate-900">{tr("Therapist account approvals")}</h2>
-              <p className="text-xs text-slate-500 mt-1">{tr("New therapist sign-ups appear here. Approved therapists can sign in to the therapist view.")}</p>
+              <MobileHelp><p className="text-xs text-slate-500 mt-1">{tr("New therapist sign-ups appear here. Approved therapists can sign in to the therapist view.")}</p></MobileHelp>
             </div>
             <button onClick={loadTherapistAccounts} disabled={isLoadingTherapistAccounts} className="px-3 py-2 rounded-xl bg-emerald-800 text-white text-xs font-bold disabled:opacity-50">
               {isLoadingTherapistAccounts ? tr("Loading...") : tr("Refresh")}
@@ -9330,7 +9331,7 @@ function AdminPortal({
             <div>
               <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-emerald-800">{tr("Business intelligence")}</p>
               <h2 className="mt-1 text-xl font-bold text-slate-950">{tr("Sales & reports")}</h2>
-              <p className="mt-1 text-sm text-slate-500">{tr("Track sales, collections, and appointment trends.")}</p>
+              <MobileHelp><p className="mt-1 text-sm text-slate-500">{tr("Track sales, collections, and appointment trends.")}</p></MobileHelp>
             </div>
             <div className="flex flex-wrap items-end gap-3">
               <label className="text-[11px] font-semibold text-slate-500">{tr("From")}<input type="date" value={reportStartDate} max={reportEndDate} onChange={(event) => setReportStartDate(event.target.value)} className="mt-1 block rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-800" /></label>
@@ -9343,7 +9344,7 @@ function AdminPortal({
             <div>
               <p className="text-[11px] font-bold uppercase tracking-[0.16em] text-emerald-800">{tr("Daily reports")}</p>
               <h3 className="mt-1 text-base font-bold text-slate-950">{tr("Therapist hours & branch audit")}</h3>
-              <p className="mt-1 text-xs text-slate-500">{tr("Download a PDF of therapist hours served, or a per-branch audit of therapist working hours, for a single day.")}</p>
+              <MobileHelp><p className="mt-1 text-xs text-slate-500">{tr("Download a PDF of therapist hours served, or a per-branch audit of therapist working hours, for a single day.")}</p></MobileHelp>
             </div>
             <div className="flex flex-wrap items-end gap-3">
               <label className="text-[11px] font-semibold text-slate-500">{tr("Report date")}<input type="date" value={dailyReportDate} onChange={(event) => setDailyReportDate(event.target.value)} className="mt-1 block rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-800" /></label>
@@ -9388,22 +9389,22 @@ function AdminPortal({
                 </div>
                 <div className="grid gap-5 xl:grid-cols-[minmax(0,1.4fr)_minmax(300px,0.8fr)]">
                   <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                    <div className="flex items-start justify-between"><div><h3 className="font-bold text-slate-900">{tr("Payments collected")}</h3><p className="mt-1 text-xs text-slate-500">{tr("Daily totals · last 7 days in this period")}</p></div><span className="text-xs font-bold text-emerald-800">${collected.toFixed(2)}</span></div>
+                    <div className="flex items-start justify-between"><div><h3 className="font-bold text-slate-900">{tr("Payments collected")}</h3><MobileHelp><p className="mt-1 text-xs text-slate-500">{tr("Daily totals · last 7 days in this period")}</p></MobileHelp></div><span className="text-xs font-bold text-emerald-800">${collected.toFixed(2)}</span></div>
                     <div className="mt-7 flex h-48 items-end gap-3 border-b border-slate-100 px-1">
                       {trend.map((item) => <div key={item.key} className="flex h-full flex-1 flex-col items-center justify-end gap-2"><div className="flex w-full flex-1 items-end"><div title={`$${item.value.toFixed(2)}`} className="w-full rounded-t-md bg-gradient-to-t from-emerald-800 to-emerald-500 transition hover:from-emerald-700" style={{ height: `${Math.max(item.value ? 8 : 2, (item.value / maxTrend) * 100)}%` }} /></div><span className="pb-2 text-[10px] text-slate-400">{tr(item.label)}</span></div>)}
                     </div>
                     <p className="mt-4 text-xs text-slate-500">{tr("Estimated HST collected:")} <strong className="text-slate-800">${taxCollected.toFixed(2)}</strong></p>
                   </section>
                   <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                    <h3 className="font-bold text-slate-900">{tr("Top services")}</h3><p className="mt-1 text-xs text-slate-500">{tr("By gross sales in selected period")}</p>
+                    <h3 className="font-bold text-slate-900">{tr("Top services")}</h3><MobileHelp><p className="mt-1 text-xs text-slate-500">{tr("By gross sales in selected period")}</p></MobileHelp>
                     <div className="mt-5 space-y-4">
                       {serviceTotals.length ? serviceTotals.map((service) => <div key={service.name}><div className="mb-1.5 flex justify-between gap-3 text-xs"><span className="truncate font-semibold text-slate-700">{tr(service.name)}</span><span className="shrink-0 font-bold text-slate-900">${service.revenue.toFixed(2)}</span></div><div className="h-1.5 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-emerald-700" style={{ width: `${Math.max(5, (service.revenue / Math.max(1, serviceTotals[0].revenue)) * 100)}%` }} /></div><p className="mt-1 text-[10px] text-slate-400">{service.count} {tr("appointment")}{service.count === 1 ? '' : tr("s")}</p></div>) : <p className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">{tr("No sales recorded for this date range.")}</p>}
                     </div>
                   </section>
                 </div>
                 <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                  <div className="mb-4 flex items-center justify-between"><div><h3 className="font-bold text-slate-900">{tr("Recent sales")}</h3><p className="mt-1 text-xs text-slate-500">{tr("Appointment totals and payments received")}</p></div><span className="rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold text-slate-600">{rows.length} {tr("records")}</span></div>
-                  <div className="overflow-x-auto"><table className="w-full min-w-[700px] text-left text-xs"><thead><tr className="border-b border-slate-100 text-[10px] uppercase tracking-wider text-slate-400"><th className="py-3 pr-4">{tr("Date / receipt")}</th><th className="py-3 pr-4">{tr("Patient")}</th><th className="py-3 pr-4">{tr("Service")}</th><th className="py-3 pr-4">{tr("Location")}</th><th className="py-3 pr-4 text-right">{tr("Paid")}</th><th className="py-3 text-right">{tr("Total")}</th></tr></thead><tbody>{rows.slice().sort((a, b) => `${b.date} ${b.time}`.localeCompare(`${a.date} ${a.time}`)).slice(0, 12).map((booking) => <tr key={booking.id} className="border-b border-slate-50 text-slate-600"><td className="py-3 pr-4"><span className="font-semibold text-slate-800">{booking.date}</span><span className="block font-mono text-[10px] text-slate-400">{booking.id}</span></td><td className="py-3 pr-4">{booking.customerName}</td><td className="py-3 pr-4">{tr(booking.serviceName)}</td><td className="py-3 pr-4">{booking.branchName}</td><td className="py-3 pr-4 text-right font-semibold">${(Number(booking.paidAmount) || 0).toFixed(2)}</td><td className="py-3 text-right font-bold text-slate-900">${(Number(booking.total) || 0).toFixed(2)}</td></tr>)}</tbody></table>{rows.length === 0 && <p className="py-8 text-center text-sm text-slate-500">{tr("No bookings in this reporting period.")}</p>}</div>
+                  <div className="mb-4 flex items-center justify-between"><div><h3 className="font-bold text-slate-900">{tr("Recent sales")}</h3><MobileHelp><p className="mt-1 text-xs text-slate-500">{tr("Appointment totals and payments received")}</p></MobileHelp></div><span className="rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold text-slate-600">{rows.length} {tr("records")}</span></div>
+                  <div className="overflow-x-auto"><ResponsiveTable className="w-full min-w-[700px] text-left text-xs"><thead><tr className="border-b border-slate-100 text-[10px] uppercase tracking-wider text-slate-400"><th className="py-3 pr-4">{tr("Date / receipt")}</th><th className="py-3 pr-4">{tr("Patient")}</th><th className="py-3 pr-4">{tr("Service")}</th><th className="py-3 pr-4">{tr("Location")}</th><th className="py-3 pr-4 text-right">{tr("Paid")}</th><th className="py-3 text-right">{tr("Total")}</th></tr></thead><tbody>{rows.slice().sort((a, b) => `${b.date} ${b.time}`.localeCompare(`${a.date} ${a.time}`)).slice(0, 12).map((booking) => <tr key={booking.id} className="border-b border-slate-50 text-slate-600"><td className="py-3 pr-4"><span className="font-semibold text-slate-800">{booking.date}</span><span className="block font-mono text-[10px] text-slate-400">{booking.id}</span></td><td className="py-3 pr-4">{booking.customerName}</td><td className="py-3 pr-4">{tr(booking.serviceName)}</td><td className="py-3 pr-4">{booking.branchName}</td><td className="py-3 pr-4 text-right font-semibold">${(Number(booking.paidAmount) || 0).toFixed(2)}</td><td className="py-3 text-right font-bold text-slate-900">${(Number(booking.total) || 0).toFixed(2)}</td></tr>)}</tbody></ResponsiveTable>{rows.length === 0 && <p className="py-8 text-center text-sm text-slate-500">{tr("No bookings in this reporting period.")}</p>}</div>
                 </section>
               </>
             );

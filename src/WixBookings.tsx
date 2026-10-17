@@ -1,3 +1,5 @@
+import MobileHelp from './MobileHelp';
+import ResponsiveTable from './ResponsiveTable';
 import { useEffect, useState } from 'react';
 import { Upload } from 'lucide-react';
 import { readWixResponse } from './wixImportApi';
@@ -177,7 +179,7 @@ export default function WixBookings({ onViewBookings }: { onViewBookings: () => 
   return (
     <section className="space-y-5 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
       <h2 className="text-lg font-bold text-slate-900">{tr('Import Wix bookings')}</h2>
-      <p className="text-sm text-slate-600">{tr('Destination: the existing BigQuery bookings table, for')}{' '}<strong>Mississauga Central</strong>{tr('. No tables or schema changes are created. Bookings receive stable Wix-prefixed IDs. Re-imports can fill zero-amount Wix records without receipts; existing recorded payments and receipts are preserved.')}</p>
+      <MobileHelp><p className="text-sm text-slate-600">{tr('Destination: the existing BigQuery bookings table, for')}{' '}<strong>Mississauga Central</strong>{tr('. No tables or schema changes are created. Bookings receive stable Wix-prefixed IDs. Re-imports can fill zero-amount Wix records without receipts; existing recorded payments and receipts are preserved.')}</p></MobileHelp>
       <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
         <p>{tr('The CSV has no payment amounts. Map each Wix service to a current catalogue service, review the tax-inclusive prices, and confirm that these amounts may be used for the paid records and receipts. These are owner-approved current prices, not historical amounts verified by Wix. Original Wix details remain in notes. Each CSV row represents one booking; prices are not multiplied by spots filled. Four-session package visits use one-quarter of the package subtotal; register and link a verified package in Package tracking to deduct sessions.')}</p>
         <p>{tr('Session times are interpreted in the clinic timezone. Past and future session dates are included. Staff names and original Wix fields are preserved; mapped service labels are used for receipts. Imports automatically sync to the primary Google Calendar in batches. Cancelled/no-show bookings are not added. No invitation emails, reminders, receipts, charges, or loyalty points are generated. Keep this page open until syncing finishes; retry/backfill resumes unsynced bookings without duplicates.')}</p>
@@ -198,14 +200,14 @@ export default function WixBookings({ onViewBookings }: { onViewBookings: () => 
         <p className="text-slate-600">{summary.branchName} | {summary.timeZone} | {tr('Through {date}.', { date: summary.throughDate })}{' '}{summary.earliestDate && tr('Import range: {start} to {end}.', { start: summary.earliestDate, end: summary.latestDate })}</p>
         {summary.warnings > 0 && <p className="text-amber-800">{tr('{count} bookings have missing names or invalid contact/registration values; originals retained in notes.', { count: summary.warnings })}</p>}
         {summary.issues.length > 0 && <ul className="list-inside list-disc text-xs text-amber-800">{summary.issues.map((issue, index) => <li key={`${issue.row}-${index}`}>{tr('CSV record {row}: {message}', { row: issue.row, message: tr(issue.message) })}</li>)}</ul>}
-        {preview?.sample && <div className="overflow-x-auto"><table className="w-full text-left text-xs">
+        {preview?.sample && <div className="overflow-x-auto"><ResponsiveTable className="w-full text-left text-xs">
           <caption className="py-2 text-left font-semibold">{tr('First five valid bookings in chronological order')}</caption>
           <thead><tr>{['Booking / client', 'Session', 'Service', 'Staff', 'Duration', 'Status', 'Total / paid'].map((heading) => <th key={heading} className="p-2">{tr(heading)}</th>)}</tr></thead>
           <tbody>{preview.sample.map((booking) => <tr key={booking.booking_id}><td className="p-2">{booking.customer_name || booking.email || booking.phone}<span className="block font-mono text-[10px] text-slate-500">{booking.booking_id}</span></td><td className="p-2">{booking.date} {formatTime(booking.time)}</td><td className="p-2">{tr(booking.service_name)}</td><td className="p-2">{booking.therapist_name}</td><td className="p-2">{tr('{minutes} min', { minutes: booking.duration_minutes })}</td><td className="p-2">{tr(booking.status)}</td><td className="p-2">${booking.total.toFixed(2)} / ${booking.paid_amount.toFixed(2)}</td></tr>)}</tbody>
-        </table></div>}
+        </ResponsiveTable></div>}
         {preview && <div className="space-y-3">
           <h3 className="font-semibold">{tr('Map Wix therapist names')}</h3>
-          <p className="text-xs text-slate-600">{tr('Choose the current therapist for each Wix staff name, or keep the original name for former/unknown staff. Original Wix names and booking IDs are preserved. Mapping applies to newly imported bookings; re-import does not reassign existing bookings.')}</p>
+          <MobileHelp><p className="text-xs text-slate-600">{tr('Choose the current therapist for each Wix staff name, or keep the original name for former/unknown staff. Original Wix names and booking IDs are preserved. Mapping applies to newly imported bookings; re-import does not reassign existing bookings.')}</p></MobileHelp>
           {therapistError && <p role="alert" className="text-xs text-red-700">{tr('{error} Reload to retry; you can still keep the original Wix names.', { error: tr(therapistError) })}</p>}
           {preview.therapistGroups.map((group) => {
             const selected = therapistMappings.find((mapping) => mapping.sourceName === group.sourceName);

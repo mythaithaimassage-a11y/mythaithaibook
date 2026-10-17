@@ -133,13 +133,24 @@ two different therapists available at the same start time. Both guests receive
 the package's duration; pricing comes from the saved couple package, not two
 individual service prices.
 
-On the **owner dashboard only**, screens below 1024px have sticky Home,
-Booking Calendar, and Sales & reports shortcuts. **All sections** opens a
-scrollable menu grouped by Workspace, Manage, and Grow; selecting a section
-closes the menu. Schedule bookings appear as labeled cards with the same
-Edit booking, Appointment details, and Clear actions. Touch controls are larger.
-These navigation and schedule-card changes are owner-only; customer booking
-workflows are unchanged.
+On staff dashboards, screens below 1024px have a fixed, icon-first bottom bar
+for Home, Booking Calendar, Alerts, Sales & reports (when permitted), and
+**All sections**. Every icon has an accessible name and tooltip; the current
+section remains named in the top bar. **All sections** opens a scrollable,
+labeled menu grouped by Workspace, Manage, and Grow. Selecting a section closes
+the menu. Owners, managers, and receptionists retain their existing section
+permissions. Therapist workspace navigation is also icon-first on mobile.
+
+All dashboard sections use compact mobile spacing, touch-sized controls, and
+readable form fields. Introductory explanations are available under **Help**;
+they remain inline on desktop. Confirmation text, patient details, consent,
+warnings, errors, and empty states stay visible. Wide data tables become
+labeled cards on mobile, including service editing, sales, loyalty, ads,
+imports, package tracking, and weekly work schedules. The original controls
+and actions stay attached to the same records. The workspace banner is
+collapsed under **Owner workspace** on all mobile sections. Bottom padding
+accounts for the navigation bar and device safe area. Desktop layouts and
+public booking workflows are unchanged.
 
 On phones and tablets (below 1024px), Booking Calendar automatically opens the compact
 Agenda view. Selecting Daily or Therapist schedule keeps that choice while
