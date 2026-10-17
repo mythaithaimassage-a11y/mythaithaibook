@@ -377,7 +377,7 @@ test('calendar toolbar opens manual booking with search applied to both calendar
     assert.ok(app.includes(label), `Missing calendar control: ${label}`);
   }
   assert.match(app, /const hourEvents = visibleCalendarEvents\.filter/);
-  assert.match(app, /visibleCalendarEvents\.map/);
+  assert.match(app, /<AppointmentList bookings=\{agendaBookings\}/);
   assert.match(app, /closest\('details'\)\.open = false; openQuickBooking\(\)/);
   assert.match(source, /view=manual-booking/);
   assert.match(source, /if \(!response\.ok\) throw new Error/);
@@ -422,13 +422,15 @@ test('schedule new-booking button navigates to the booking calendar and preserve
   const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
   const schedule = app.slice(app.indexOf('{/* TAB CONTENT: SCHEDULE */}'), app.indexOf("{activeTab === 'calendar' &&"));
   assert.match(schedule, /onClick=\{\(\) => \{\s*setCalendarBranch\(effectiveSelectedBranchId\);\s*setActiveTab\('calendar'\);\s*\}\}/);
-  assert.match(schedule, /\{t\.addBooking\}/);
+  assert.match(schedule, /aria-label=\{t\.addBooking\}/);
   assert.doesNotMatch(schedule, /openQuickBooking|onNavigateToBookingPortal/);
 });
 
 test('daily calendar, agenda and appointment details display the shared start-end range', () => {
   const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
-  assert.equal((app.match(/\{formatTime\(event\.timeRange \|\| event\.localTime\)\}/g) || []).length, 2);
+  const list = readFileSync(new URL('../src/AppointmentList.tsx', import.meta.url), 'utf8');
+  assert.match(list, /formatTime\(booking\.timeRange \|\| booking\.time\)/);
+  assert.match(app, /<AppointmentList bookings=\{agendaBookings\}/);
   assert.match(app, /\{formatTime\(selectedCalendarEvent\.timeRange \|\| selectedCalendarEvent\.localTime\)\}/);
   assert.match(app, /\['Appointment time', selectedCalendarEvent\.timeRange \|\| selectedCalendarEvent\.localTime\]/);
   assert.match(app, /const hourEvents = visibleCalendarEvents\.filter\(\(event\) => Number\(event\.localTime/);
@@ -436,9 +438,11 @@ test('daily calendar, agenda and appointment details display the shared start-en
 
 test('owner can delete calendar appointments from hover- and focus-revealed controls', () => {
   const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
-  assert.equal((app.match(/aria-label=\{tr\("Delete appointment \{value0\}"/g) || []).length, 2);
-  assert.equal((app.match(/group-hover:opacity-100 group-focus-within:opacity-100/g) || []).length, 2);
-  assert.equal((app.match(/dashboardUser\.role === 'owner' && event\.booking\?\.id && <button/g) || []).length, 2);
+  assert.equal((app.match(/aria-label=\{tr\("Delete appointment \{value0\}"/g) || []).length, 1);
+  const list = readFileSync(new URL('../src/AppointmentList.tsx', import.meta.url), 'utf8');
+  assert.match(list, /aria-label=\{tr\('Delete appointment \{value0\}'/);
+  assert.equal((app.match(/group-hover:opacity-100 group-focus-within:opacity-100/g) || []).length, 1);
+  assert.equal((app.match(/dashboardUser\.role === 'owner' && event\.booking\?\.id && <button/g) || []).length, 1);
   const deleteBooking = app.slice(app.indexOf('const deleteBooking ='), app.indexOf('const issueReceipt ='));
   assert.match(deleteBooking, /view=delete-booking/);
   assert.match(deleteBooking, /setCalendarEvents\(\(prev\) => prev\.filter\(\(event\) => event\.booking\?\.id !== bookingId\)\)/);
@@ -468,8 +472,9 @@ test('receipts refresh booking records even after email failures without reconci
 test('shared internal booking note is wired to booking creation, staff views and therapist details', () => {
   const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
   const editor = readFileSync(new URL('../src/BookingNote.tsx', import.meta.url), 'utf8');
+  const list = readFileSync(new URL('../src/AppointmentList.tsx', import.meta.url), 'utf8');
   assert.match(source, /date, time: validTime, bookingNote/);
-  assert.match(app, /b\.bookingNote/);
+  assert.match(list, /booking\.bookingNote/);
   assert.match(app, /event\.booking\?\.bookingNote/);
   assert.match(app, /selectedAppointment\.bookingNote/);
   assert.match(app, /<BookingNote key=\{booking\.id\}/);

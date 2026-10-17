@@ -1,0 +1,145 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import test from 'node:test';
+import vm from 'node:vm';
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import ts from 'typescript';
+import { createTsLoader } from './helpers/load-ts-module.js';
+
+const path = new URL('../src/AppointmentList.tsx', import.meta.url).pathname;
+const load = createTsLoader();
+const { default: AppointmentList, matchesAppointment, groupAppointments } = load(path);
+const { LanguageProvider } = load(new URL('../src/localization.tsx', import.meta.url).pathname);
+const booking = {
+  id: 'MTT-REF-1', customerName: 'Alice Smith', date: '2026-12-01', time: '02:00 PM',
+  serviceName: 'Massage', therapistName: 'Tanya', branchName: 'Central', total: 113,
+  phone: '+1 (437) 555-0101', email: 'alice@example.com', bookingNote: 'Requested quiet room',
+  syncedToSheets: true, status: 'Confirmed',
+};
+const props = { bookings: [booking], onOpen() {}, onEdit() {}, onDelete() {}, deletingId: '' };
+const render = (overrides = {}, language = 'en') => renderToStaticMarkup(
+  React.createElement(LanguageProvider, { language }, React.createElement(AppointmentList, { ...props, ...overrides })));
+
+test('search matches booking data and formatted phone numbers without excluding older or future dates', () => {
+  for (const query of [' alice ', 'MTT-REF', 'example.com', '14375550101', '437 555 0101', 'Massage', 'Tanya', 'Central', '2026-12', 'quiet', 'Confirmed', '']) {
+    assert.equal(matchesAppointment(booking, query), true, query);
+  }
+  assert.equal(matchesAppointment(booking, 'other'), false);
+  assert.equal(matchesAppointment(booking, 'wrong123'), false);
+  assert.equal(matchesAppointment({ ...booking, phone: undefined, email: undefined, bookingNote: undefined }, '437555'), false);
+});
+
+test('date grouping sorts dates in either direction and times chronologically without mutating input', () => {
+  const entries = [
+    booking, { ...booking, id: 'early', time: '09:30 AM' }, { ...booking, id: 'evening', time: '18:00' },
+    { ...booking, id: 'range', time: '11:00 AM - 12:00 PM' }, { ...booking, id: 'past', date: '2026-01-01' },
+    { ...booking, id: 'future', date: '2027-01-01' },
+  ];
+  const original = JSON.stringify(entries);
+  const asc = groupAppointments(entries, 'asc');
+  assert.deepEqual(Array.from(asc, (group) => group.date), ['2026-01-01', '2026-12-01', '2027-01-01']);
+  assert.deepEqual(Array.from(asc[1].bookings, (item) => item.id), ['early', 'range', booking.id, 'evening']);
+  assert.deepEqual(Array.from(groupAppointments(entries, 'desc'), (group) => group.date), ['2027-01-01', '2026-12-01', '2026-01-01']);
+  assert.equal(JSON.stringify(entries), original);
+});
+
+test('cards preserve details, accessible status icons, role-restricted actions and localized dates', () => {
+  const html = render();
+  assert.match(html, /dateTime="2026-12-01"/);
+  for (const value of [booking.customerName, booking.phone, booking.bookingNote, booking.serviceName, booking.therapistName, booking.id, '113.00']) assert.ok(html.includes(value));
+  for (const label of ['Edit booking', 'Appointment details', 'Delete appointment MTT-REF-1', 'Synced', 'Not checked in']) assert.ok(html.includes(`aria-label="${label}"`));
+  for (const button of html.matchAll(/<button[^>]*title="[^"]+"[^>]*>/g)) {
+    assert.match(button[0], /\bh-11\b/);
+    assert.match(button[0], /\bw-11\b/);
+  }
+  assert.doesNotMatch(html, />Edit booking<|>Appointment details<|>Delete appointment</);
+  assert.doesNotMatch(render({ onDelete: undefined }), /aria-label="Delete appointment/);
+  assert.match(render({ deletingId: booking.id }), /disabled="" title="Delete appointment/);
+  assert.match(render({}, 'th'), /แก้ไขการจอง/);
+  assert.match(render({}, 'th'), /รายละเอียดนัดหมาย/);
+  assert.match(render({ bookings: [] }), /No appointments found/);
+  assert.match(render({ bookings: [], loading: true }), /Loading\.\.\./);
+  assert.match(render({ bookings: [{ ...booking, date: '' }] }), /Date not set/);
+});
+
+test('card icon actions invoke their original callbacks and date order can be changed', () => {
+  const states = [];
+  let index = 0;
+  const calls = [];
+  const shallowLoad = createTsLoader({
+    react: { ...React, useState(initial) {
+      const i = index++;
+      if (!(i in states)) states[i] = initial;
+      return [states[i], (value) => { states[i] = value; }];
+    } },
+    './localization': { useTranslation: () => ({ translate: (value) => value, locale: 'en-CA', formatTime: (value) => value }) },
+  });
+  const shallow = shallowLoad(path).default;
+  const walk = (node, predicate) => {
+    if (!node || typeof node !== 'object') return undefined;
+    if (Array.isArray(node)) return node.map((child) => walk(child, predicate)).find(Boolean);
+    return predicate(node) ? node : walk(node.props?.children, predicate);
+  };
+  const tree = () => {
+    index = 0;
+    return shallow({ ...props, onEdit: (value) => calls.push(['edit', value]), onOpen: (value) => calls.push(['open', value]), onDelete: (id) => calls.push(['delete', id]) });
+  };
+  for (const label of ['Edit booking', 'Appointment details', 'Delete appointment {value0}']) {
+    walk(tree(), (node) => node.type === 'button' && node.props['aria-label'] === label).props.onClick();
+  }
+  assert.equal(calls[0][0], 'edit');
+  assert.equal(calls[0][1], booking);
+  assert.equal(calls[1][0], 'open');
+  assert.equal(calls[1][1], booking);
+  assert.deepEqual(calls[2], ['delete', booking.id]);
+  walk(tree(), (node) => node.type === 'select').props.onChange({ target: { value: 'asc' } });
+  assert.equal(walk(tree(), (node) => node.type === 'select').props.value, 'asc');
+});
+
+const appSource = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+const ast = ts.createSourceFile('App.tsx', appSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+let loadCalendar;
+function visit(node) {
+  if (ts.isVariableDeclaration(node) && node.name.getText(ast) === 'loadCalendar') loadCalendar = node.initializer.getText(ast);
+  ts.forEachChild(node, visit);
+}
+visit(ast);
+
+test('agenda refresh requests all authorized bookings without a date filter and reports API errors', async () => {
+  for (const ok of [true, false]) {
+    const urls = [], saved = [], errors = [];
+    const context = {
+      calendarRequest: { current: null }, AbortController, resolvedCalendarViewMode: 'agenda',
+      setIsLoadingCalendar() {}, setCalendarLoadError: (value) => errors.push(value),
+      setBookings: (value) => saved.push(value),
+      fetch: async (url) => {
+        urls.push(url);
+        return { ok, json: async () => ok ? { bookings: [booking] } : { message: 'Unable to read bookings.' } };
+      },
+    };
+    const result = await vm.runInNewContext(`(${loadCalendar})()`, context);
+    assert.deepEqual(urls, ['/api/booking']);
+    assert.equal(result, ok);
+    assert.equal(context.calendarRequest.current, null);
+    if (ok) assert.equal(saved[0][0], booking);
+    else assert.equal(errors.at(-1), 'Unable to read bookings.');
+  }
+});
+
+test('Agenda disables mobile date gestures while daily and therapist views retain them', () => {
+  let enabled;
+  function find(node) {
+    if (ts.isCallExpression(node) && node.expression.getText(ast) === 'useCalendarGestures') {
+      enabled = node.arguments[0].properties.find((property) => property.name?.getText(ast) === 'enabled').initializer.getText(ast);
+    }
+    ts.forEachChild(node, find);
+  }
+  find(ast);
+  for (const mode of ['daily', 'therapists', 'agenda']) {
+    assert.equal(vm.runInNewContext(enabled, {
+      compactCalendar: true, activeTab: 'calendar', resolvedCalendarViewMode: mode,
+    }), mode !== 'agenda');
+  }
+  assert.match(appSource, /\[activeTab, calendarDate, calendarBranch, calendarTherapist, calendarAutoRefresh, resolvedCalendarViewMode\]/);
+});

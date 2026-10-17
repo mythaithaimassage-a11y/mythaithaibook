@@ -201,6 +201,33 @@ both open a quick appointment form; Quick Sale does not collect a payment.
 The schedule's **New Walk-in / Phone Booking** button navigates to Booking
 Calendar with the selected branch. Use **Add > Appointment** or the daily
 calendar's **Book** buttons there to open the quick booking form.
+On mobile, open calendar action menus appear above the sticky date and
+previous/next-day controls so their appointment options remain tappable.
+
+Open an appointment's details and select **Cancel appointment** to cancel
+without deleting its booking record. Owners, managers and receptionists can
+cancel; branch staff are restricted to their assigned branches. Confirmation
+is required, and the existing 24-hour refund policy applies. Phone-only
+appointments can also be cancelled by staff. Completed, no-show and
+package-linked visits cannot be cancelled. The booking list and calendar
+refresh after cancellation; calendar cleanup and notification failures are
+shown in the details rather than hiding a successful cancellation.
+
+**Schedule & Bookings** has a search field for customer names, booking
+references, contact details, services, therapists, branches, dates and team notes.
+Appointments are grouped by date beside a compact left-hand date rail, with
+time-ordered cards and a newest/oldest date-order control. Edit, appointment
+details and owner-only delete use labelled, touch-sized icon buttons. Full
+references and notes remain available in appointment details; history-clearing
+tools are collapsed below the list.
+
+**Agenda** shows all saved booking dates, not just the calendar's selected day,
+using the same date-grouped cards in oldest-first order. Branch, therapist,
+couple and search filters still apply. The date picker, previous/next-day
+controls and day-swipe/bottom-scroll navigation are disabled in Agenda.
+Refresh and auto-refresh reload the branch-authorized booking list. Daily and
+therapist-grid views retain their live Google Calendar single-day behavior;
+Google Calendar-only events appear in Agenda once linked to a saved booking.
 
 Staff enter a client name and **either an email address or a phone number**,
 then select a therapist and time. Typing a name, email or phone number in
@@ -393,7 +420,8 @@ refund lookup used during self-service cancellation.
 
 ## Clearing past booking history
 
-In the owner dashboard, open **Schedule & Bookings → Clear past bookings**.
+In the owner dashboard, open **Schedule & Bookings → Booking history tools →
+Clear past bookings**.
 Preview the database counts, then type **CLEAR PAST BOOKINGS** to permanently
 delete appointments whose scheduled end time is at or before the preview cutoff
 in `GOOGLE_CALENDAR_TIME_ZONE` (default `America/Toronto`). This applies across

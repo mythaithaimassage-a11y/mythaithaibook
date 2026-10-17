@@ -22,6 +22,7 @@ import ClearBookingHistory from './ClearBookingHistory';
 import WixCalendarSync from './WixCalendarSync';
 import QuickBooking from './QuickBooking';
 import EditBooking from './EditBooking';
+import AppointmentList, { matchesAppointment } from './AppointmentList';
 import BookingNote from './BookingNote';
 import AppointmentCheckIn, { formatCheckInTime } from './AppointmentCheckIn';
 import CheckInReminders from './CheckInReminders';
@@ -4690,6 +4691,7 @@ function AdminPortal({
   const calendarPanelRef = useRef(null);
   const [calendarNextAvailability, setCalendarNextAvailability] = useState(null);
   const [calendarSearch, setCalendarSearch] = useState('');
+  const [scheduleSearch, setScheduleSearch] = useState('');
   const [calendarCoupleFilter, setCalendarCoupleFilter] = useState('all');
   const [calendarFiltersOpen, setCalendarFiltersOpen] = useState(false);
   const [calendarAutoRefresh, setCalendarAutoRefresh] = useState(true);
@@ -5547,6 +5549,10 @@ function AdminPortal({
     () => bookings.filter((booking) => !selectedBranchName || booking.branchName === selectedBranchName),
     [bookings, selectedBranchName],
   );
+  const scheduleBookings = useMemo(
+    () => dashboardBookings.filter((booking) => matchesAppointment(booking, scheduleSearch)),
+    [dashboardBookings, scheduleSearch],
+  );
   const dashboardTherapists = useMemo(
     () => therapists.filter((therapist) => {
       if (therapist.active === false) return false;
@@ -5624,6 +5630,43 @@ function AdminPortal({
 
   const [deletingBookingId, setDeletingBookingId] = useState('');
   const [deleteBookingError, setDeleteBookingError] = useState('');
+  const [cancellingBookingId, setCancellingBookingId] = useState('');
+  const cancellationInProgress = useRef(false);
+  const cancelCalendarAppointment = async (booking) => {
+    if (cancellationInProgress.current) return;
+    if (!confirm(tr("Cancel appointment {value0}? The booking record will be kept. Payments follow the existing 24-hour cancellation and refund policy.", { value0: booking.id }))) return;
+    cancellationInProgress.current = true;
+    setCancellingBookingId(booking.id);
+    setReceiptError('');
+    setReceiptNotice('');
+    try {
+      const response = await fetch('/api/booking?view=staff-cancel-booking', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ bookingId: booking.id }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Unable to cancel this appointment.');
+      const cancelled = { ...booking, status: 'Cancelled', statusNotes: data.statusNotes };
+      setBookings((current) => current.map((item) => item.id === booking.id ? { ...item, ...cancelled } : item));
+      setSelectedCalendarEvent((current) => current?.booking?.id === booking.id ? { ...current, booking: cancelled } : current);
+      setIssuedReceipt((current) => current?.booking?.id === booking.id ? { ...current, booking: cancelled } : current);
+      setCalendarEvents((current) => current.filter((event) => event.booking?.id !== booking.id));
+      setReceiptNotice(message('Appointment cancelled. {details}', { details: data.statusNotes }));
+      const warnings = [
+        data.calendarError && tr('Calendar cleanup failed: {error}', { error: data.calendarError }),
+        data.emailError && tr('Cancellation email failed: {error}', { error: data.emailError }),
+        data.staffNotificationError && tr('Staff notification failed: {error}', { error: data.staffNotificationError }),
+      ].filter(Boolean);
+      if (warnings.length) setReceiptError(warnings.join(' '));
+      await Promise.all([loadBookingsFromBackend(), loadCalendar()]);
+    } catch (error) {
+      setReceiptError(error.message || 'Unable to cancel this appointment.');
+    } finally {
+      cancellationInProgress.current = false;
+      setCancellingBookingId('');
+    }
+  };
   const openBookingEditor = async (booking) => {
     try {
       const response = await fetch('/api/booking', { cache: 'no-store' });
@@ -6265,6 +6308,14 @@ function AdminPortal({
     setIsLoadingCalendar(true);
     setCalendarLoadError('');
     try {
+      if (resolvedCalendarViewMode === 'agenda') {
+        const response = await fetch('/api/booking', { signal: controller.signal, cache: 'no-store' });
+        const data = await response.json();
+        if (controller.signal.aborted) return;
+        if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+        setBookings(data.bookings || []);
+        return true;
+      }
       const selectedBranch = calendarBranch === 'all' ? undefined : branches.find((item) => String(item.id) === calendarBranch);
       const branch = selectedBranch?.address || '';
       const branchName = selectedBranch?.name || '';
@@ -6294,9 +6345,25 @@ function AdminPortal({
 
   const visibleCalendarEvents = filterCoupleCalendarEvents(calendarEvents, calendarCoupleFilter).filter((event) => {
     const search = calendarSearch.trim().toLowerCase();
-    return !search || [event.summary, event.therapistName, event.location, event.booking?.customerName, event.booking?.email, event.booking?.phone]
+    return !search || (event.booking && matchesAppointment(event.booking, search)) || [event.summary, event.therapistName, event.location]
       .some((value) => String(value || '').toLowerCase().includes(search));
   });
+  const agendaBookings = filterCoupleCalendarEvents(
+    bookings.map((booking) => ({ booking, isCouple: /couple/i.test(booking.serviceName) })),
+    calendarCoupleFilter,
+  ).map((event) => event.booking).filter((booking) =>
+    (!calendarBranchDetails || [calendarBranchDetails.name, calendarBranchDetails.address].includes(booking.branchName)) &&
+    (!calendarTherapistName || getAssignedTherapistNames(booking.therapistName, therapists).includes(calendarTherapistName)) &&
+    matchesAppointment(booking, calendarSearch));
+  const openAppointmentDetails = (booking) => {
+    setIssuedReceipt(null);
+    setReceiptError('');
+    setReceiptNotice('');
+    setSelectedCalendarEvent({
+      id: booking.calendarEventId || booking.id, booking, localTime: booking.time,
+      timeRange: booking.timeRange, start: booking.calendarStart, end: booking.calendarEnd,
+    });
+  };
   const calendarBusinessBranches = branches.filter((branch) => branch.active !== false &&
     (dashboardUser.role === 'owner' || dashboardUser.branchIds.includes(String(branch.id))) &&
     (calendarBranch === 'all' || String(branch.id) === calendarBranch));
@@ -6482,7 +6549,7 @@ function AdminPortal({
       document.removeEventListener('visibilitychange', refresh);
       calendarRequest.current?.abort();
     };
-  }, [activeTab, calendarDate, calendarBranch, calendarTherapist, calendarAutoRefresh]);
+  }, [activeTab, calendarDate, calendarBranch, calendarTherapist, calendarAutoRefresh, resolvedCalendarViewMode]);
 
   const loadUnavailability = async () => {
     setIsLoadingUnavailability(true);
@@ -6752,7 +6819,7 @@ function AdminPortal({
   };
   useCalendarGestures({
     panelRef: calendarPanelRef,
-    enabled: compactCalendar && activeTab === 'calendar',
+    enabled: compactCalendar && activeTab === 'calendar' && resolvedCalendarViewMode !== 'agenda',
     fullscreen: calendarFullscreen,
     blocked: isLoadingCalendar || Boolean(calendarLoadError) || mobileNavOpen
       || Boolean(selectedCalendarEvent || quickBooking || editingBooking),
@@ -6893,7 +6960,7 @@ function AdminPortal({
               { label: t.hstCollected, value: `$${todayHstCollected.toFixed(2)}`, detail: `${branchDetail} ${tr("· Estimated Ontario HST")}`, Icon: DollarSign, style: 'bg-violet-50 text-violet-800' },
             ]
           : activeTab === 'calendar'
-            ? [
+            ? resolvedCalendarViewMode === 'agenda' ? [] : [
                 { label: tr("Appointments on selected date"), value: calendarDateBookings.length, detail: new Date(`${calendarDate}T12:00:00`).toLocaleDateString(locale, { month: 'short', day: 'numeric', year: 'numeric' }), Icon: CalendarIcon, style: 'bg-blue-50 text-blue-800' },
                 { label: tr("Therapists booked"), value: calendarTherapistsBooked, detail: calendarBranchDetails?.name || branchDetail, Icon: Users, style: 'bg-amber-50 text-amber-800' },
                 { label: tr("Unassigned appointments"), value: unassignedCalendarBookings, detail: calendarBranchDetails?.name || branchDetail, Icon: AlertCircle, style: 'bg-violet-50 text-violet-800' },
@@ -7008,29 +7075,38 @@ function AdminPortal({
       {/* TAB CONTENT: SCHEDULE */}
       {activeTab === 'schedule' && (
         <div className="dashboard-bookings bg-white rounded-2xl p-6 border border-stone-200 shadow-sm space-y-4">
-          <div className="dashboard-booking-actions flex justify-between items-center">
+          <div className="dashboard-booking-actions flex flex-wrap justify-between items-center gap-3">
             <h2 className="text-lg font-bold text-stone-900">{t.schedule}</h2>
             <div className="flex items-center gap-2">
               <button
+                type="button"
                 onClick={loadBookingsFromBackend}
                 disabled={isLoadingBookings}
-                className="px-3 py-2 border border-stone-300 text-stone-700 rounded-xl text-xs font-bold hover:bg-stone-50 disabled:opacity-50 inline-flex items-center gap-1.5"
+                title={tr("Refresh from database")}
+                aria-label={tr(isLoadingBookings ? "Loading..." : "Refresh from database")}
+                className="inline-flex h-11 w-11 items-center justify-center rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-50"
               >
-                {isLoadingBookings
-                  ? <><RefreshCw className="w-3.5 h-3.5 animate-spin" /> {tr("Loading...")}</>
-                  : <><Database className="w-3.5 h-3.5" /> {tr("Refresh from database")}</>}
+                <RefreshCw aria-hidden="true" className={`h-4 w-4 ${isLoadingBookings ? 'animate-spin' : ''}`} />
               </button>
               <button
+              type="button"
+              title={t.addBooking}
+              aria-label={t.addBooking}
               onClick={() => {
                 setCalendarBranch(effectiveSelectedBranchId);
                 setActiveTab('calendar');
               }}
-              className="px-4 py-2 bg-emerald-800 text-white rounded-xl text-xs font-bold hover:bg-emerald-900 transition flex items-center"
+              className="inline-flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-800 text-white transition hover:bg-emerald-900"
               >
-                <Plus className="w-4 h-4 mr-1" /> {t.addBooking}
+                <Plus aria-hidden="true" className="h-5 w-5" />
               </button>
             </div>
           </div>
+          <label className="relative block">
+            <span className="sr-only">{tr("Search bookings")}</span>
+            <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-3.5 h-4 w-4 text-slate-400" />
+            <input type="search" value={scheduleSearch} onChange={(event) => setScheduleSearch(event.target.value)} placeholder={tr("Search bookings")} className="h-11 w-full rounded-xl border border-slate-200 bg-slate-50 pl-10 pr-3 text-sm outline-none focus:border-emerald-600 focus:ring-2 focus:ring-emerald-100" />
+          </label>
           {bookingLoadError && (
             <div className="p-3 bg-red-50 border border-red-200 text-red-800 rounded-xl text-xs">
               {tr(bookingLoadError)}
@@ -7041,71 +7117,12 @@ function AdminPortal({
               {tr(deleteBookingError)}
             </div>
           )}
-          {dashboardUser.role === 'owner' && <ClearBookingHistory onCleared={loadBookingsFromBackend} />}
-
-          <div className="overflow-x-auto">
-            <table role="table" aria-label={t.schedule} className="dashboard-booking-table w-full text-left text-xs sm:text-sm">
-              <thead className="bg-stone-50 text-stone-600 font-bold border-b">
-                <tr>
-                  <th className="p-3">{tr("Ref ID")}</th>
-                  <th className="p-3">{tr("Customer")}</th>
-                  <th className="p-3">{tr("Service")}</th>
-                  <th className="p-3">{tr("Therapist")}</th>
-                  <th className="p-3">{tr("Time")}</th>
-                  <th className="p-3"><span className="inline-flex items-center gap-1.5"><Database className="w-3.5 h-3.5" /> {tr("Database")}</span></th>
-                  <th className="p-3">{tr("Check-in")}</th>
-                  <th className="p-3">{tr("Total")}</th>
-                  <th className="p-3">{tr("Actions")}</th>
-                </tr>
-              </thead>
-              <tbody role="rowgroup" className="divide-y divide-stone-100">
-                {bookings.map(b => (
-                  <tr role="row" key={b.id} className="hover:bg-stone-50 transition">
-                    <td role="cell" data-label={tr("Ref ID")} className="p-3 font-mono font-bold text-stone-900">{b.id}</td>
-                    <td role="cell" data-label={tr("Customer")} className="p-3">
-                      <div className="font-bold text-stone-800">{b.customerName}</div>
-                      <div className="text-stone-400 text-[11px]">{b.phone}</div>
-                      {b.bookingNote && <div className="mt-1 whitespace-pre-wrap text-[11px] text-blue-800">{tr("Team note:")} {b.bookingNote}</div>}
-                    </td>
-                    <td role="cell" data-label={tr("Service")} className="p-3 font-medium text-stone-700">{tr(b.serviceName)}</td>
-                    <td role="cell" data-label={tr("Therapist")} className="p-3 text-stone-600">{b.therapistName}</td>
-                    <td role="cell" data-label={tr("Time")} className="p-3 font-semibold text-stone-800">{formatTime(b.time)}</td>
-                    <td role="cell" data-label={tr("Database")} className="p-3">
-                      {b.syncedToSheets ? (
-                        <span className="bg-emerald-100 text-emerald-800 font-bold px-2 py-1 rounded-md text-[10px] inline-flex items-center">
-                          <Check className="w-3 h-3 mr-1" />{tr("Synced")}</span>
-                      ) : (
-                        <span className="bg-stone-100 text-stone-600 font-bold px-2 py-1 rounded-md text-[10px]">{tr("Local Only")}</span>
-                      )}
-                    </td>
-                    <td role="cell" data-label={tr("Check-in")} className="p-3">
-                      {b.checkedInAt ? (
-                        <span title={b.checkedInBy || ''} className="bg-emerald-100 text-emerald-800 font-bold px-2 py-1 rounded-md text-[10px] inline-flex items-center">
-                          <Check className="w-3 h-3 mr-1" />{tr("Checked in")}</span>
-                      ) : (
-                        <span className="bg-amber-50 text-amber-800 font-bold px-2 py-1 rounded-md text-[10px]">{tr("Not checked in")}</span>
-                      )}
-                    </td>
-                    <td role="cell" data-label={tr("Total")} className="p-3 font-bold text-stone-900">${b.total.toFixed(2)}</td>
-                    <td role="cell" data-label={tr("Actions")} className="dashboard-booking-row-actions p-3">
-                      <button type="button" onClick={() => openBookingEditor(b)} className="mr-2 rounded-lg border border-emerald-300 px-2 py-1 text-[11px] font-bold text-emerald-900">{tr("Edit booking")}</button>
-                      <button type="button" onClick={() => {
-                        setIssuedReceipt(null); setReceiptError(''); setReceiptNotice('');
-                        setSelectedCalendarEvent({ id: b.calendarEventId || b.id, booking: b, localTime: b.time, timeRange: b.timeRange });
-                      }} className="mr-2 rounded-lg border px-2 py-1 text-[11px] font-bold">{tr("Appointment details")}</button>
-                      {dashboardUser.role === 'owner' && <button
-                        onClick={() => deleteBooking(b.id)}
-                        disabled={deletingBookingId === b.id}
-                        className="px-2 py-1 border border-red-300 text-red-700 rounded-lg text-[11px] font-bold hover:bg-red-50 disabled:opacity-50"
-                      >
-                        {deletingBookingId === b.id ? tr("Removing...") : tr("Clear")}
-                      </button>}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <AppointmentList bookings={scheduleBookings} onOpen={openAppointmentDetails} onEdit={openBookingEditor}
+            onDelete={dashboardUser.role === 'owner' ? deleteBooking : undefined} deletingId={deletingBookingId} loading={isLoadingBookings} />
+          {dashboardUser.role === 'owner' && <details className="rounded-xl border border-slate-200 text-xs text-slate-500">
+            <summary className="cursor-pointer px-4 py-3 font-semibold">{tr("Booking history tools")}</summary>
+            <div className="px-3 pb-3"><ClearBookingHistory onCleared={loadBookingsFromBackend} /></div>
+          </details>}
         </div>
       )}
 
@@ -7169,11 +7186,12 @@ function AdminPortal({
             </div>
           </div>
           <div className="calendar-filters flex shrink-0 flex-wrap items-end gap-2 border-t-2 border-blue-600 pt-4">
-              <div className="calendar-date-navigation flex items-end gap-1">
+              {resolvedCalendarViewMode !== 'agenda' && <div className="calendar-date-navigation flex items-end gap-1">
                 <button type="button" aria-label={tr("Previous day")} title={tr("Previous day")} onClick={() => moveCalendarDate(-1)} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-blue-200 text-blue-700 hover:bg-blue-50"><ChevronLeft aria-hidden="true" className="h-5 w-5" /></button>
                 <label className="min-w-0 text-xs font-semibold text-stone-600">{tr("Date")}<input type="date" value={calendarDate} onChange={(event) => { if (event.target.value) setCalendarDate(event.target.value); }} className="mt-1 block w-full rounded-lg border border-stone-300 p-2" /></label>
                 <button type="button" aria-label={tr("Next day")} title={tr("Next day")} onClick={() => moveCalendarDate(1)} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-blue-200 text-blue-700 hover:bg-blue-50"><ChevronRight aria-hidden="true" className="h-5 w-5" /></button>
-              </div>
+              </div>}
+              {resolvedCalendarViewMode === 'agenda' && <span className="inline-flex h-11 items-center gap-2 rounded-lg bg-slate-100 px-3 text-xs font-semibold text-slate-600"><CalendarDays aria-hidden="true" className="h-4 w-4" />{tr("All dates")}</span>}
               {calendarFiltersOpen && <label className="text-xs font-semibold text-stone-600">{tr("Branch")}<select value={calendarBranch} onChange={(event) => setCalendarBranch(event.target.value)} className="block mt-1 p-2 rounded-lg border border-stone-300">
                   <option value="all">{tr("All branches")}</option>
                   {dashboardBranches.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
@@ -7193,14 +7211,14 @@ function AdminPortal({
               <button onClick={loadCalendar} disabled={isLoadingCalendar} aria-label={tr(isLoadingCalendar ? "Loading..." : "Refresh")} title={tr("Refresh")} className="calendar-icon-action h-9 px-3 bg-emerald-800 text-white rounded-lg text-xs font-bold disabled:opacity-50">
                 <RefreshCw className={`h-4 w-4 lg:hidden ${isLoadingCalendar ? 'animate-spin' : ''}`} /><span className="hidden lg:inline">{isLoadingCalendar ? tr("Loading...") : tr("Refresh")}</span>
               </button>
-              {!calendarFullscreen && <button type="button" aria-label={tr(showTodayAvailability ? "Hide today's availability" : "Set therapist availability today")} title={tr(showTodayAvailability ? "Hide today's availability" : "Set therapist availability today")} aria-expanded={showTodayAvailability} onClick={() => setShowTodayAvailability((visible) => !visible)} className="calendar-icon-action inline-flex h-9 items-center gap-2 rounded-lg border border-blue-200 bg-white px-3 text-xs font-semibold text-blue-700 hover:bg-blue-50">
+              {!calendarFullscreen && resolvedCalendarViewMode !== 'agenda' && <button type="button" aria-label={tr(showTodayAvailability ? "Hide today's availability" : "Set therapist availability today")} title={tr(showTodayAvailability ? "Hide today's availability" : "Set therapist availability today")} aria-expanded={showTodayAvailability} onClick={() => setShowTodayAvailability((visible) => !visible)} className="calendar-icon-action inline-flex h-9 items-center gap-2 rounded-lg border border-blue-200 bg-white px-3 text-xs font-semibold text-blue-700 hover:bg-blue-50">
                 <CalendarDays className="h-4 w-4" /><span className="hidden lg:inline">{tr(showTodayAvailability ? "Hide today's availability" : "Set therapist availability today")}</span>
               </button>}
               {!calendarFiltersOpen && (calendarBranch !== 'all' || calendarTherapist !== 'all' || calendarCoupleFilter !== 'all') && <button type="button" onClick={() => setCalendarFiltersOpen(true)} className="h-9 rounded-lg border border-blue-200 px-3 text-xs text-blue-700">{tr("Filters:")}{branches.find((item) => String(item.id) === calendarBranch)?.name || tr("All branches")} · {therapists.find((item) => String(item.id) === calendarTherapist)?.name || tr("All therapists")}{calendarCoupleFilter !== 'all' && ` · ${tr(calendarCoupleFilter === 'couple' ? "Couple massage only" : "Couple massage without a partner")}`}
               </button>}
           </div>
           {calendarFullscreenError && <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-2 text-xs text-red-800">{tr(calendarFullscreenError)}</p>}
-          {showTodayAvailability && !calendarFullscreen && <TodayWorkSchedule
+          {showTodayAvailability && !calendarFullscreen && resolvedCalendarViewMode !== 'agenda' && <TodayWorkSchedule
             branches={dashboardBranches.filter((branch) => branch.active !== false)}
             therapists={therapists.filter((therapist) => therapist.active !== false)}
             initialBranchId={calendarBranch}
@@ -7213,7 +7231,7 @@ function AdminPortal({
           {quickBookingNotice && !calendarFullscreen && <p role="status" className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">{tr(quickBookingNotice)}</p>}
           {deleteBookingError && <div role="alert" className="p-3 bg-red-50 border border-red-200 text-red-800 rounded-xl text-xs">{tr(deleteBookingError)}</div>}
           {calendarLoadError && <div className="p-3 bg-red-50 border border-red-200 text-red-800 rounded-xl text-xs">{tr(calendarLoadError)}</div>}
-          {!calendarFullscreen && <details className="calendar-hours text-xs text-stone-600" open={!compactCalendar}>
+          {!calendarFullscreen && resolvedCalendarViewMode !== 'agenda' && <details className="calendar-hours text-xs text-stone-600" open={!compactCalendar}>
             <summary className="cursor-pointer font-semibold lg:hidden">{tr("Business hours")}</summary>
             <div className="flex flex-wrap gap-3">
             {calendarBusinessBranches.map((branch) => {
@@ -7222,11 +7240,11 @@ function AdminPortal({
             })}
             </div>
           </details>}
-          {!calendarFullscreen && calendarWarnings.length > 0 && (
+          {!calendarFullscreen && resolvedCalendarViewMode !== 'agenda' && calendarWarnings.length > 0 && (
             <div className="p-3 bg-amber-50 border border-amber-200 text-amber-900 rounded-xl text-xs">{tr("Calendar access warning:")}{calendarWarnings.join(' · ')}
             </div>
           )}
-          {!calendarFullscreen && calendarUnavailability.length > 0 && (
+          {!calendarFullscreen && resolvedCalendarViewMode !== 'agenda' && calendarUnavailability.length > 0 && (
             <div className="p-3 bg-stone-100 border border-stone-300 text-stone-800 rounded-xl text-xs space-y-1.5">
               <p className="font-bold uppercase tracking-wide text-stone-600">{tr("Blocked / unavailable this day")}</p>
               {calendarUnavailability.map((block) => (
@@ -7238,7 +7256,7 @@ function AdminPortal({
               ))}
             </div>
           )}
-          {!calendarFullscreen && calendarUrl && (
+          {!calendarFullscreen && resolvedCalendarViewMode !== 'agenda' && calendarUrl && (
             <a href={calendarUrl} target="_blank" rel="noreferrer" className="inline-flex text-xs font-semibold text-emerald-800 underline">{tr("Open the primary Google Calendar")}</a>
           )}
           {resolvedCalendarViewMode === 'daily' && <div className={`calendar-schedule flex min-h-0 flex-col overflow-hidden rounded-xl border border-stone-200 bg-white${calendarFullscreen ? ' flex-1' : ''}`}>
@@ -7434,10 +7452,10 @@ function AdminPortal({
               </div>
             </div>
           </div>}
-          {!calendarFullscreen && <p className="calendar-help text-xs text-stone-500">
+          {!calendarFullscreen && resolvedCalendarViewMode !== 'agenda' && <p className="calendar-help text-xs text-stone-500">
             {calendarAutoRefresh ? tr("Updates automatically every 15 seconds while this tab is visible.") : tr("Auto-refresh is paused. Use Refresh to load current appointments.")}{tr("The daily view and appointment list use the same search, date, branch, and therapist filters.")}</p>
           }
-          {!calendarFullscreen && calendarShowLegend && <details className="calendar-legend rounded-xl bg-stone-50 border border-stone-200 px-3 py-2" open={!compactCalendar}>
+          {!calendarFullscreen && resolvedCalendarViewMode !== 'agenda' && calendarShowLegend && <details className="calendar-legend rounded-xl bg-stone-50 border border-stone-200 px-3 py-2" open={!compactCalendar}>
             <summary className="cursor-pointer text-xs font-semibold text-stone-700 lg:hidden">{tr("Therapists:")}</summary>
             <div className="flex flex-wrap gap-3 items-center">
             <span className="text-xs font-bold text-stone-700">{tr("Therapists:")}</span>
@@ -7456,41 +7474,10 @@ function AdminPortal({
             )}
             </div>
           </details>}
-          {resolvedCalendarViewMode === 'agenda' && (visibleCalendarEvents.length === 0 && !isLoadingCalendar ? (
-            <p className="py-8 text-center text-sm text-stone-500">{tr("No appointments match this date, search, branch, therapist and couple massage filters. Adjust your filters or add an appointment.")}</p>
-          ) : (
-            <div className={`calendar-agenda ${calendarFullscreen ? 'min-h-0 flex-1 space-y-3 overflow-y-auto' : 'space-y-3'}`}>
-              {visibleCalendarEvents.map((event) => (
-                <div key={event.id} className={`group relative py-4 pl-4 pr-12 rounded-xl border border-stone-200 ${getTherapistCalendarColor(event.therapistName, therapists).event}`}>
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <button type="button" onClick={() => { setSelectedCalendarEvent(event); setIssuedReceipt(null); setReceiptError(''); setReceiptNotice(''); }} className="min-w-0 text-left">
-                      <span className="calendar-event-title font-bold text-stone-900 inline-flex items-center gap-1.5">
-                        {event.isCouple && <Users className="w-3.5 h-3.5 text-rose-500 shrink-0" aria-label={tr("Couple massage")} />}
-                        {event.summary}
-                        {event.booking?.status === 'Cancelled' && <span className="text-[10px] font-bold uppercase tracking-wide text-red-700 bg-red-100 px-1.5 py-0.5 rounded-full">{tr("Cancelled")}</span>}
-                      </span>
-                      <span className="mt-1 block text-xs text-stone-500">{event.therapistName || event.calendarName} · {event.location}</span>
-                      {event.booking?.bookingNote && <span className="mt-1 block whitespace-pre-wrap text-xs text-blue-800">{tr("Team note:")} {event.booking.bookingNote}</span>}
-                    </button>
-                    <div className="flex shrink-0 flex-col items-end gap-2">
-                      <span className="text-sm font-semibold text-emerald-800">{formatTime(event.timeRange || event.localTime)}</span>
-                      <button type="button" aria-label={tr("Open appointment")} title={tr("Open appointment")} onClick={() => { setSelectedCalendarEvent(event); setIssuedReceipt(null); setReceiptError(''); setReceiptNotice(''); }} className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-white px-2.5 py-1.5 text-[11px] font-bold text-emerald-900 transition hover:bg-emerald-50"><ReceiptText className="h-3.5 w-3.5" /><span className="hidden lg:inline">{tr("Open appointment")}</span></button>
-                    </div>
-                  </div>
-                  {dashboardUser.role === 'owner' && event.booking?.id && <button
-                    type="button"
-                    onClick={() => deleteBooking(event.booking.id)}
-                    disabled={deletingBookingId === event.booking.id}
-                    aria-label={tr("Delete appointment {value0}", { value0: event.booking.id })}
-                    title={tr("Delete appointment {value0}", { value0: event.booking.id })}
-                    className="absolute right-3 top-3 rounded-md p-1.5 text-red-700 opacity-0 transition-opacity hover:bg-white/70 hover:text-red-900 focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100 disabled:cursor-wait disabled:opacity-50"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>}
-                </div>
-              ))}
-            </div>
-          ))}
+          {resolvedCalendarViewMode === 'agenda' && <div className={`calendar-agenda ${calendarFullscreen ? 'min-h-0 flex-1 overflow-y-auto' : ''}`}>
+            <AppointmentList bookings={agendaBookings} defaultOrder="asc" onOpen={openAppointmentDetails} onEdit={openBookingEditor}
+              onDelete={dashboardUser.role === 'owner' ? deleteBooking : undefined} deletingId={deletingBookingId} loading={isLoadingCalendar} />
+          </div>}
         </div>
       )}
       {activeTab === 'calendar' && (
@@ -9505,7 +9492,12 @@ function AdminPortal({
                 const needsDetails = booking?.autoLinked && !booking.receiptNumber && (!booking.email || (!(Number(booking.total) > 0) && !(Number(booking.manualBookingDiscount) > 0)));
                 return booking ? (
                   <>
-                    <button type="button" onClick={() => openBookingEditor(selectedCalendarEvent.booking)} className="rounded-lg border border-emerald-300 px-3 py-2 text-xs font-bold text-emerald-900">{tr("Edit booking")}</button>
+                    <div className="flex flex-wrap gap-2">
+                      <button type="button" disabled={Boolean(cancellingBookingId)} onClick={() => openBookingEditor(booking)} className="rounded-lg border border-emerald-300 px-3 py-2 text-xs font-bold text-emerald-900 disabled:opacity-50">{tr("Edit booking")}</button>
+                      {['owner', 'branch_manager', 'branch_receptionist'].includes(dashboardUser.role) && !['Cancelled', 'Completed', 'No Show'].includes(booking.status) && (
+                        <button type="button" disabled={Boolean(cancellingBookingId)} onClick={() => cancelCalendarAppointment(booking)} className="rounded-lg border border-rose-300 px-3 py-2 text-xs font-bold text-rose-800 hover:bg-rose-50 disabled:opacity-50">{tr(cancellingBookingId === booking.id ? "Cancelling..." : "Cancel appointment")}</button>
+                      )}
+                    </div>
                     {booking.autoLinked && (
                       <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-950">{tr("This appointment was booked directly on the calendar and was automatically linked to a new booking record.")}{needsDetails ? tr("Add the missing details below to enable receipt issuing.") : ''}
                       </div>

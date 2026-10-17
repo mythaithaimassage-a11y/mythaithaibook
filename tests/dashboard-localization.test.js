@@ -293,27 +293,95 @@ test('owners, managers and receptionists can correct completed appointment thera
   }
 });
 
+test('appointment details offer localized cancellation to staff only for active appointments', () => {
+  for (const role of ['owner', 'branch_manager', 'branch_receptionist']) {
+    const selectedCalendarEvent = { id: 'event', booking: { ...booking, email: '', status: 'Confirmed' }, localTime: booking.time };
+    const user = { dashboardUser: { role, branchIds: ['1'] } };
+    assert.match(render('calendar', 'en', { selectedCalendarEvent }, user), />Cancel appointment<\/button>/);
+    assert.match(render('calendar', 'th', { selectedCalendarEvent }, user), />ยกเลิกนัดหมาย<\/button>/);
+    const busy = render('calendar', 'en', { selectedCalendarEvent, cancellingBookingId: booking.id }, user);
+    assert.match(busy, /<button[^>]*disabled=""[^>]*>Cancelling\.\.\.<\/button>/);
+    for (const status of ['Cancelled', 'Completed', 'No Show']) {
+      const event = { ...selectedCalendarEvent, booking: { ...booking, status } };
+      assert.doesNotMatch(render('calendar', 'en', { selectedCalendarEvent: event }, user), />Cancel appointment<\/button>/);
+    }
+  }
+});
+
+test('open mobile calendar menus stack above sticky date controls and appointment cards', () => {
+  const css = postcss.parse(readFileSync(new URL('../src/index.css', import.meta.url), 'utf8'));
+  const rules = {};
+  css.walkRules((rule) => {
+    rules[rule.selector] = Object.fromEntries(rule.nodes.filter((node) => node.type === 'decl').map((node) => [node.prop, node.value]));
+  });
+  const heading = rules['.booking-calendar .calendar-heading:has(.calendar-actions details[open])'];
+  const filters = rules['.booking-calendar.calendar-fullscreen .calendar-filters'];
+  assert.equal(heading.position, 'relative');
+  assert.ok(Number(heading['z-index']) > Number(filters['z-index']));
+  assert.ok(Number(heading['z-index']) > 20, 'Calendar grid sticky headers use z-20');
+});
+
 test('Wix calendar sync appears below the calendar and appointment list', () => {
   const html = render('calendar', 'en', { calendarViewMode: 'agenda' });
-  const calendarContentIndex = html.indexOf('No appointments match this date');
+  const calendarContentIndex = html.indexOf('appointment-list');
   const syncSectionIndex = html.indexOf('Append missing imported Wix bookings');
   assert.notEqual(calendarContentIndex, -1);
   assert.notEqual(syncSectionIndex, -1);
   assert.ok(syncSectionIndex > calendarContentIndex);
 });
 
-test('mobile booking cards retain all nine fields, booking data and existing actions', () => {
+test('schedule shows grouped booking cards with accessible icon actions and searchable references', () => {
   const html = render('schedule', 'en');
-  const table = html.match(/<table role="table"[\s\S]*?<\/table>/)?.[0];
-  assert.ok(table);
-  for (const label of ['Ref ID', 'Customer', 'Service', 'Therapist', 'Time', 'Database', 'Check-in', 'Total', 'Actions']) {
-    assert.ok(table.includes(`role="cell" data-label="${label}"`), label);
-  }
+  const card = html.match(/<article[^>]*class="appointment-card[\s\S]*?<\/article>/)?.[0];
+  assert.ok(card);
   for (const value of [booking.id, booking.customerName, booking.phone, booking.bookingNote, booking.serviceName, booking.therapistName, booking.time, '107.35']) {
-    assert.ok(table.includes(value), value);
+    assert.ok(card.includes(value), value);
   }
-  for (const action of ['Edit booking', 'Appointment details', 'Clear']) assert.ok(table.includes(`>${action}</button>`));
-  assert.match(render('schedule', 'th'), /data-label="ลูกค้า"/);
+  for (const action of ['Edit booking', 'Appointment details', `Delete appointment ${booking.id}`]) assert.ok(card.includes(`aria-label="${action}"`));
+  assert.doesNotMatch(card, />Edit booking<|>Appointment details<|>Clear</);
+  assert.match(html, /type="search"/);
+  assert.match(html, /<time dateTime="2026-10-10"/);
+  assert.match(render('schedule', 'th'), /aria-label="แก้ไขการจอง"/);
+});
+
+test('schedule search covers every date and respects the selected branch', () => {
+  const bookings = [
+    { ...booking, id: 'past', customerName: 'Past Client', date: '2026-01-01' },
+    { ...booking, id: 'future', customerName: 'Future Client', date: '2027-01-01' },
+    { ...booking, id: 'other', customerName: 'Other Branch Client', branchName: 'Other Branch' },
+  ];
+  const search = render('schedule', 'en', { scheduleSearch: 'future' }, { bookings });
+  assert.match(search, /Future Client/);
+  assert.doesNotMatch(search, /Past Client|Other Branch Client/);
+  const branch = render('schedule', 'en', {}, { bookings, selectedBranchId: '1' });
+  assert.match(branch, /Past Client|Future Client/);
+  assert.doesNotMatch(branch, /Other Branch Client/);
+  const empty = render('schedule', 'en', { scheduleSearch: 'no-match' }, { bookings });
+  assert.match(empty, /No appointments found/);
+});
+
+test('agenda includes all saved dates, groups them chronologically and hides single-day navigation', () => {
+  const bookings = [
+    { ...booking, id: 'future', customerName: 'Future Client', date: '2027-02-01' },
+    { ...booking, id: 'past', customerName: 'Past Client', date: '2026-01-01' },
+    { ...booking, id: 'couple', customerName: 'Couple Client', serviceName: 'Couple massage', date: '2026-12-02' },
+    { ...booking, id: 'other', customerName: 'Other Therapist', therapistName: 'Second therapist', date: '2027-03-01' },
+    { ...booking, id: 'branch', customerName: 'Other Branch', branchName: 'Elsewhere', date: '2027-04-01' },
+  ];
+  const fixture = { calendarViewMode: 'agenda', calendarDate: '2026-10-10' };
+  const html = render('calendar', 'en', fixture, { bookings });
+  for (const value of ['Future Client', 'Past Client', 'Couple Client', 'Other Therapist', 'Other Branch']) assert.ok(html.includes(value), value);
+  assert.ok(html.indexOf('dateTime="2026-01-01"') < html.indexOf('dateTime="2027-02-01"'));
+  assert.match(html, /All dates/);
+  assert.doesNotMatch(html, /Appointments on selected date/);
+  assert.doesNotMatch(html, /type="date"|aria-label="Previous day"|aria-label="Next day"/);
+  assert.match(render('calendar', 'en', { ...fixture, calendarSearch: 'future' }, { bookings }), /Future Client/);
+  assert.doesNotMatch(render('calendar', 'en', { ...fixture, calendarSearch: 'future' }, { bookings }), /Past Client|Couple Client/);
+  const filtered = render('calendar', 'en', { ...fixture, calendarBranch: '1', calendarTherapist: '1' }, { bookings });
+  assert.doesNotMatch(filtered, /Other Therapist|Other Branch/);
+  const couples = render('calendar', 'en', { ...fixture, calendarCoupleFilter: 'couple' }, { bookings });
+  assert.match(couples, /Couple Client/);
+  assert.doesNotMatch(couples, /Past Client|Future Client/);
 });
 
 test('responsive staff styles stay below 1024px, with scrollable menus and 44px touch controls', () => {
@@ -375,7 +443,8 @@ test('responsive staff styles stay below 1024px, with scrollable menus and 44px 
     assert.match(fallback, /Tanya appointment/);
     const desktop = render('calendar', 'en', { ...fixture, compactCalendar: false }, { therapists });
     for (const event of events) assert.ok(desktop.includes(event.summary));
-    const agenda = render('calendar', 'en', { ...fixture, calendarViewMode: 'agenda', mobileCalendarColumn: '2' }, { therapists });
+    const agendaBookings = events.map((event) => ({ ...booking, id: event.id, customerName: event.summary, therapistName: event.therapistName }));
+    const agenda = render('calendar', 'en', { ...fixture, calendarViewMode: 'agenda', mobileCalendarColumn: '2' }, { therapists, bookings: agendaBookings });
     for (const event of events) assert.ok(agenda.includes(event.summary), 'Column selection must not filter the agenda');
   });
 
@@ -420,7 +489,6 @@ test('responsive staff styles stay below 1024px, with scrollable menus and 44px 
     assert.equal(declarations('.booking-calendar .calendar-grid > .grid')['grid-template-columns'], '48px minmax(0, 1fr)');
     assert.equal(declarations('.booking-calendar .calendar-scroll').overflow, 'visible');
     assert.equal(declarations('.booking-calendar .calendar-scroll')['max-height'], 'none');
-    assert.equal(declarations('.booking-calendar .calendar-agenda > div > button').opacity, '1');
     assert.equal(declarations('.booking-calendar .calendar-agenda button')['min-height'], '44px');
     assert.deepEqual(declarations('.booking-calendar .calendar-grid button'), {}, 'Duration cards must keep their exact height');
     assert.match(render('calendar', 'en', { compactCalendar: true, calendarWarnings: ['Visible calendar warning'] }), /Visible calendar warning/);
@@ -573,8 +641,8 @@ test('managers and receptionists can edit bookings and issue receipts without ma
   for (const role of ['branch_manager', 'branch_receptionist']) {
     const user = { dashboardUser: { role, branchIds: ['1'] } };
     const schedule = render('schedule', 'en', {}, user);
-    assert.match(schedule, />Edit booking</);
-    assert.match(schedule, />Appointment details</);
+    assert.match(schedule, /aria-label="Edit booking"/);
+    assert.match(schedule, /aria-label="Appointment details"/);
     assert.match(schedule, /\$107\.35/);
     assert.doesNotMatch(schedule, />Clear</);
     const details = render('calendar', 'en', { selectedCalendarEvent: { id: 'event', booking, localTime: booking.time } }, user);
@@ -589,7 +657,7 @@ test('Thai is shared by dashboard navigation, booking list and child workflows w
   assert.match(thai, /ตารางงานและการจอง/);
   assert.match(thai, /ปฏิทินการจอง/);
   assert.match(thai, /นำเข้าการจองจาก Wix/);
-  assert.match(thai, /ฐานข้อมูล/);
+  assert.match(thai, /ค้นหาการจอง/);
   assert.match(thai, /11:00 น\. - 12:00 น\./);
   assert.match(thai, /นวด(?:ไทยแผนโบราณ|แผนไทย) \(60 นาที\)/);
   assert.match(thai, /English Customer/);

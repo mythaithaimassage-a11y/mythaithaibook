@@ -14,7 +14,21 @@
   display: contents;
 }
 
+.appointment-date-rail {
+  position: sticky;
+  top: 132px;
+}
+
+.calendar-agenda .appointment-date-rail {
+  top: 12px;
+}
+
 @media (max-width: 1023px) {
+  .appointment-date-rail,
+  .calendar-agenda .appointment-date-rail {
+    top: 72px;
+  }
+
   .staff-platform-footer {
     padding-bottom: calc(88px + env(safe-area-inset-bottom));
   }
@@ -344,6 +358,11 @@
     max-width: 100%;
   }
 
+  .booking-calendar .calendar-heading:has(.calendar-actions details[open]) {
+    position: relative;
+    z-index: 30;
+  }
+
   .booking-calendar .calendar-actions details > div button,
     .booking-calendar .calendar-actions details > div label {
     min-height: 44px;
@@ -441,38 +460,11 @@
     overflow: visible;
   }
 
-  .booking-calendar .calendar-agenda > div {
-    padding: 12px 52px 12px 12px;
-    overflow-wrap: anywhere;
-  }
-
-  .booking-calendar .calendar-agenda > div > div {
-    gap: 8px;
-  }
-
   .booking-calendar .calendar-agenda button,
     .booking-calendar .calendar-grid button:not(.absolute) {
     min-height: 44px;
   }
 
-  .booking-calendar .calendar-agenda .calendar-event-title {
-    font-size: 14px;
-    overflow-wrap: anywhere;
-  }
-
-  .booking-calendar .calendar-agenda > div > button {
-    opacity: 1;
-    min-width: 44px;
-    right: 4px;
-    top: 4px;
-  }
-
-  .booking-calendar .calendar-agenda > div > div > div {
-    width: 100%;
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-between;
-  }
 }
 
 @media (max-width: 1023px) {

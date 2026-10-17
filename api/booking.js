@@ -5191,7 +5191,7 @@ export default async function handler(req, res) {
         bigquery, bookingsTableRef(), req.query?.since, branches, undefined, bookingActivityTableRef(),
       ));
     }
-    if (['manual-booking', 'edit-booking', 'issue-receipt', 'mark-paid', 'check-in'].includes(view)) {
+    if (['manual-booking', 'edit-booking', 'issue-receipt', 'mark-paid', 'check-in', 'staff-cancel-booking'].includes(view)) {
       res.setHeader('Cache-Control', 'no-store');
       if (!dashboardSession) return res.status(401).json({ message: 'Dashboard sign-in required' });
       if (!isSameOriginRequest(req)) return res.status(403).json({ message: 'Request origin is not allowed' });
@@ -5212,7 +5212,7 @@ export default async function handler(req, res) {
     ) {
       return res.status(dashboardSession ? 403 : 401).json({ message: dashboardSession ? 'Owner or branch manager role required' : 'Dashboard sign-in required' });
     }
-    if (['reassign-therapist', 'couple-pair'].includes(view) &&
+    if (['reassign-therapist', 'couple-pair', 'staff-cancel-booking'].includes(view) &&
         !['owner', 'branch_manager', 'branch_receptionist'].includes(dashboardSession?.role)) {
       return res.status(dashboardSession ? 403 : 401).json({ message: 'A branch manager, receptionist or owner sign-in is required.' });
     }
@@ -9589,11 +9589,12 @@ export default async function handler(req, res) {
       return res.status(200).json({ deleted: true, bookingId, removedContacts });
     }
 
-    if (req.method === 'POST' && req.query?.view === 'cancel-booking') {
+    if (req.method === 'POST' && ['cancel-booking', 'staff-cancel-booking'].includes(view)) {
+      const staffCancellation = view === 'staff-cancel-booking';
       const bookingId = String(req.body?.bookingId || '').trim();
       const email = String(req.body?.email || '').trim().toLowerCase();
-      if (!bookingId || bookingId.length > 100 || !email) {
-        return res.status(400).json({ message: 'A booking reference and the email used at booking are required.' });
+      if (!bookingId || bookingId.length > 100 || (!staffCancellation && !email)) {
+        return res.status(400).json({ message: staffCancellation ? 'A valid booking ID is required' : 'A booking reference and the email used at booking are required.' });
       }
       const bigquery = getBigQueryClient();
       const result = await bqFetchBookingRows(bigquery);
@@ -9603,12 +9604,21 @@ export default async function handler(req, res) {
       const rowIndex = rows.findIndex((row, index) =>
         index >= startIndex &&
         String(row[0] || '') === bookingId &&
-        String(row[3] || '').trim().toLowerCase() === email,
+        (staffCancellation || String(row[3] || '').trim().toLowerCase() === email),
       );
       if (rowIndex < 0) {
-        return res.status(404).json({ message: 'We could not find a booking with that reference and email.' });
+        return res.status(404).json({ message: staffCancellation ? 'Booking was not found.' : 'We could not find a booking with that reference and email.' });
       }
       const row = rows[rowIndex];
+      if (staffCancellation) {
+        const allowedBranches = await getDashboardBranchNames(sheets, dashboardSession);
+        if (allowedBranches && !allowedBranches.has(String(row[4] || '').trim().toLowerCase())) {
+          return res.status(403).json({ message: 'This booking is outside your assigned branch access.' });
+        }
+        if (['Completed', 'No Show'].includes(row[24])) {
+          return res.status(409).json({ message: 'Completed and no-show appointments cannot be cancelled.' });
+        }
+      }
       if (row[24] === 'Cancelled') {
         return res.status(409).json({ message: 'This booking has already been cancelled.' });
       }
@@ -9648,10 +9658,10 @@ export default async function handler(req, res) {
       }
 
       await bqUpdateBookingFields(bigquery, bookingId, { status: 'Cancelled', statusNotes });
-      await logBookingActivity(bigquery, 'cancelled', row, { actor: 'customer' });
-      await notifyStaffOfBookingChange(sheets, bigquery, row, {
+      await logBookingActivity(bigquery, 'cancelled', row, { actor: staffCancellation ? dashboardSession.email : 'customer' });
+      const staffNotification = await notifyStaffOfBookingChange(sheets, bigquery, row, {
         heading: 'Appointment cancelled',
-        intro: `${row[1] || 'A customer'} cancelled an appointment.`,
+        intro: staffCancellation ? `${dashboardSession.name || dashboardSession.email} cancelled an appointment for ${row[1] || 'a customer'}.` : `${row[1] || 'A customer'} cancelled an appointment.`,
         details: [
           { label: 'Booking', value: bookingId }, { label: 'Branch', value: row[4] || '' },
           { label: 'Service', value: row[5] || '' }, { label: 'Therapist', value: row[6] || '' },
@@ -9661,33 +9671,39 @@ export default async function handler(req, res) {
 
       const calendarId = row[15] || PRIMARY_CALENDAR_ID;
       const calendarEventId = row[16] || '';
+      let calendarError = '';
       if (calendarEventId) {
         try {
           await calendarApi.events.delete({ calendarId, eventId: calendarEventId });
         } catch (error) {
+          calendarError = error.message || 'The linked calendar event could not be removed.';
           console.error('Cancel booking calendar cleanup error:', error.message || error);
         }
       }
 
       let emailSent = false;
+      let emailError = '';
       try {
-        const businessProfile = await getBusinessProfile(sheets);
-        await sendFormattedLoyaltyEmail(createGmailApi(), {
-          email: row[3],
-          name: row[1] || '',
-          subject: `Your ${businessProfile.businessName} appointment was cancelled`,
-          businessName: businessProfile.businessName,
-          heading: 'Appointment cancelled',
-          intro: `Your appointment has been cancelled as requested.`,
-          details: [
-            { label: 'Booking reference', value: bookingId },
-            { label: 'Service', value: row[5] || '' },
-            { label: 'Original date & time', value: `${row[7]} at ${row[8]}` },
-          ],
-          note: statusNotes,
-        });
-        emailSent = true;
+        if (row[3]) {
+          const businessProfile = await getBusinessProfile(sheets);
+          await sendFormattedLoyaltyEmail(createGmailApi(), {
+            email: row[3],
+            name: row[1] || '',
+            subject: `Your ${businessProfile.businessName} appointment was cancelled`,
+            businessName: businessProfile.businessName,
+            heading: 'Appointment cancelled',
+            intro: `Your appointment has been cancelled as requested.`,
+            details: [
+              { label: 'Booking reference', value: bookingId },
+              { label: 'Service', value: row[5] || '' },
+              { label: 'Original date & time', value: `${row[7]} at ${row[8]}` },
+            ],
+            note: statusNotes,
+          });
+          emailSent = true;
+        }
       } catch (error) {
+        emailError = error.message || 'Unable to send the cancellation email.';
         console.error('Cancel booking confirmation email error:', error.message || error);
       }
 
@@ -9700,6 +9716,12 @@ export default async function handler(req, res) {
         refundAmount,
         statusNotes,
         emailSent,
+        ...(staffCancellation ? {
+          emailSkipped: !row[3],
+          emailError,
+          calendarError,
+          staffNotificationError: staffNotification.failures.map((failure) => failure.message).join('; '),
+        } : {}),
       });
     }
 
