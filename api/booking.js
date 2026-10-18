@@ -1867,6 +1867,21 @@ function getTherapistFromDescription(description = '') {
   return description.match(/^Therapist:\s*(.+)$/m)?.[1]?.trim() || '';
 }
 
+function calendarBookingReference(event) {
+  return event.extendedProperties?.private?.bookingId ||
+    event.extendedProperties?.private?.wixBookingId ||
+    parseBookingFieldsFromDescription(event.description || '').bookingId;
+}
+
+function isBlockingCalendarEvent(event, bookingRows) {
+  if (event.status === 'cancelled') return false;
+  const bookingId = calendarBookingReference(event);
+  const linked = bookingRows.find((row) => (event.id && row[16] === event.id) ||
+    (bookingId && row[0] === bookingId));
+  if (linked && ['Cancelled', 'No Show'].includes(String(linked[24] || ''))) return false;
+  return !bookingId || Boolean(linked);
+}
+
 function therapistAssignmentNames(value, roster = []) {
   let remaining = String(value || '').trim();
   if (!remaining) return [];
@@ -6369,8 +6384,10 @@ export default async function handler(req, res) {
         const minute = Number(parts.find((part) => part.type === 'minute')?.value);
         return Number.isInteger(hour) && Number.isInteger(minute) ? hour * 60 + minute : null;
       };
-      const calendarBusyWindows = calendarEvents.filter((event) => event.status !== 'cancelled').map((event) => ({
+      const calendarBusyWindows = calendarEvents.filter((event) => isBlockingCalendarEvent(event, rows.slice(startIndex))).map((event) => ({
         eventId: event.id,
+        startLabel: event.start?.dateTime || event.start?.date || '',
+        endLabel: event.end?.dateTime || event.end?.date || '',
         names: therapistAssignmentNames(getTherapistFromDescription(event.description), therapists.map((therapist) => therapist.name)),
         assignment: getTherapistFromDescription(event.description),
         start: localMinutes(event.start?.dateTime),
@@ -6394,6 +6411,7 @@ export default async function handler(req, res) {
         const unavailability = blocks.filter((block) => blockOverlapsWindow(block, date, windowStart, windowEnd) &&
           ((block.scope === 'business' && (!block.branchName || block.branchName === branch.name)) || block.scope === 'therapist'));
         const busyNames = new Set(unavailability.filter((block) => block.scope === 'therapist').map((block) => block.therapistName));
+        const conflicts = [];
         let unassignedBookingCount = 0;
         rows.slice(startIndex).forEach((row) => {
           if (row[0] === excludeBookingId || row[7] !== date || ['Cancelled', 'No Show'].includes(String(row[24] || ''))) return;
@@ -6402,13 +6420,15 @@ export default async function handler(req, res) {
           if (intervalsOverlap(start, end + appointmentGapMinutes, bookingStart, bookingEnd + appointmentGapMinutes)) {
             const assignments = therapistAssignmentNames(row[6], [...therapists.map((therapist) => therapist.name), 'Any Available']);
             assignments.filter((name) => name !== 'Any Available').forEach((name) => busyNames.add(name));
+            conflicts.push({ names: assignments, source: 'booking', reference: String(row[0] || ''), date: row[7], time: row[8], durationMinutes: Number(row[12]) || 60 });
             unassignedBookingCount += assignments.filter((name) => name === 'Any Available').length;
           }
         });
-        calendarBusyWindows.forEach(({ eventId, names, assignment, start: eventStart, end: eventEnd, allDay }) => {
+        calendarBusyWindows.forEach(({ eventId, names, assignment, start: eventStart, end: eventEnd, startLabel, endLabel, allDay }) => {
           if (allDay || eventStart === null || eventEnd === null ||
               intervalsOverlap(start, end + appointmentGapMinutes, eventStart, eventEnd + appointmentGapMinutes)) {
             names.forEach((name) => busyNames.add(name));
+            conflicts.push({ names, source: 'calendar', reference: String(eventId || ''), start: startLabel, end: endLabel });
             const linkedBooking = rows.slice(startIndex).some((row) => row[16] === eventId);
             if (!linkedBooking && assignment) {
               unassignedBookingCount += therapistAssignmentNames(assignment, ['Any Available'])
@@ -6434,7 +6454,11 @@ export default async function handler(req, res) {
                       ? 'Time off overlaps this appointment.'
                       : busyNames.has(therapist.name) ? 'An existing booking or calendar event overlaps this appointment, including the appointment gap.'
                         : '';
-            return reason ? [{ id: therapist.id, name: therapist.name, reason }] : [];
+            return reason ? [{
+              id: therapist.id, name: therapist.name, reason,
+              conflicts: conflicts.filter((conflict) => conflict.names.includes(therapist.name))
+                .map(({ names, ...conflict }) => conflict),
+            }] : [];
           });
         }
         const availableTherapists = businessBlocked ? [] : scheduleEligible
@@ -8592,11 +8616,11 @@ export default async function handler(req, res) {
               const start = event.start?.dateTime || event.start?.date || '';
               const end = event.end?.dateTime || event.end?.date || '';
               const localStart = start ? getLocalDateTime(start) : { date: '', time: '' };
-              const wixBookingId = event.extendedProperties?.private?.wixBookingId;
+              const referencedBookingId = calendarBookingReference(event);
               const bookingRow = bookingByEventId.get(event.id) ||
-                (wixBookingId ? dataRows.find((row) => row[0] === wixBookingId) : undefined);
-              // Do not turn retained Wix events back into bookings after history is cleared.
-              if (wixBookingId && !bookingRow) continue;
+                (referencedBookingId ? dataRows.find((row) => row[0] === referencedBookingId) : undefined);
+              // Retained events must not recreate bookings that were deleted from the dashboard.
+              if (referencedBookingId && !bookingRow) continue;
               const parsedDescription = parseBookingFieldsFromDescription(event.description || '');
               const eventTherapist = bookingRow?.[6] || parsedDescription.therapistName || getTherapistFromDescription(event.description);
               if (
@@ -8606,6 +8630,14 @@ export default async function handler(req, res) {
                   (branch && [location, bookingRow?.[13]].some((address) => String(address || '').toLowerCase().includes(branch)))) &&
                 (!therapist || eventTherapist.toLowerCase() === therapist)
               ) {
+                if (bookingRow && (bookingRow[15] !== calendarId || bookingRow[16] !== event.id)) {
+                  await bqUpdateBookingFields(bigquery, bookingRow[0], {
+                    calendarId, calendarEventId: event.id,
+                  }, null, bookingRow);
+                  bookingRow[15] = calendarId;
+                  bookingRow[16] = event.id;
+                  bookingByEventId.set(event.id, bookingRow);
+                }
                 let booking = bookingRow ? {
                   id: bookingRow[0] || '',
                   customerName: bookingRow[1] || '',
@@ -8629,6 +8661,7 @@ export default async function handler(req, res) {
                   couplePartnerBookingId: bookingRow[31] || '',
                   status: bookingRow[24] || '',
                   statusNotes: bookingRow[25] || '',
+                  rescheduled: staffBooking(bookingRow).rescheduled,
                   calendarStart: start,
                   calendarEnd: end,
                   timeRange: getCalendarTimeRange(start, end),
@@ -8796,6 +8829,7 @@ export default async function handler(req, res) {
           editVersion: bookingEditVersion(row),
           status: row[24] || '',
           statusNotes: row[25] || '',
+          rescheduled: staffBooking(row).rescheduled,
           confirmedOnTime: isConfirmedOnTime(row[25]),
           reminderSent: isReminderSent(row[25]),
           isCouple: /couple/i.test(row[5] || ''),
@@ -8908,7 +8942,7 @@ export default async function handler(req, res) {
             pageToken = page.data.nextPageToken;
           } while (pageToken);
         }
-        const conflict = dayEvents.some((event) => event.status !== 'cancelled' &&
+        const conflict = dayEvents.some((event) => isBlockingCalendarEvent(event, result.data.values || []) &&
           hasTimeOverlapWithTherapistBuffer(startInstant, endInstant,
             event.start?.dateTime || event.start?.date, event.end?.dateTime || event.end?.date, appointmentGapMinutes) &&
           therapistNames.some((name) => {
@@ -8943,9 +8977,11 @@ export default async function handler(req, res) {
         pricedEdited.paidAmount = oldTotal > 0 && oldPaid + 0.005 >= oldTotal
           ? catalogueTotal : Math.min(oldPaid, catalogueTotal);
       }
+      const appointmentDetailsChanged = schedulingChanged || edited.customerName !== row[1] ||
+        edited.email !== row[3] || edited.phone !== row[2];
       const fields = applyBookingDiscount(row, {
         ...pricedEdited, serviceName, therapistName, durationMinutes,
-        statusNotes: `${row[25] || ''}${row[25] ? '\n' : ''}Booking edited by ${dashboardSession.email} at ${new Date().toISOString()}.`,
+        statusNotes: `${row[25] || ''}${row[25] ? '\n' : ''}${appointmentDetailsChanged ? 'Rescheduled' : 'Booking edited'} by ${dashboardSession.email} at ${new Date().toISOString()}.`,
       }, req.body, dashboardSession.email);
       const updatedRow = [...row];
       for (const [prop, value] of Object.entries(fields)) updatedRow[BOOKING_TABLE_FIELDS.findIndex((field) => field.prop === prop)] = value;
@@ -8956,6 +8992,7 @@ export default async function handler(req, res) {
         const description = String(originalEvent.description || '');
         let nextDescription = description;
         for (const [label, value] of Object.entries({
+          Booking: bookingId,
           Customer: edited.customerName, Email: edited.email, Phone: edited.phone,
           Therapist: therapistName, Service: service.name, Payment: edited.paymentOption,
           Paid: fields.paidAmount, Total: fields.total,
@@ -8967,6 +9004,10 @@ export default async function handler(req, res) {
         try {
           patchedEvent = (await calendarApi.events.patch({ calendarId, eventId, requestBody: {
             summary: `${serviceName} - ${edited.customerName}`, description: nextDescription,
+            extendedProperties: {
+              ...originalEvent.extendedProperties,
+              private: { ...originalEvent.extendedProperties?.private, bookingId },
+            },
             ...(schedulingChanged ? { start: { dateTime: startDateTime, timeZone: CALENDAR_TIME_ZONE }, end: { dateTime: endDateTime, timeZone: CALENDAR_TIME_ZONE } } : {}),
           } }, { headers: originalEvent.etag ? { 'If-Match': originalEvent.etag } : {} })).data;
         } catch (error) {
@@ -9001,6 +9042,7 @@ export default async function handler(req, res) {
               await calendarApi.events.patch({ calendarId, eventId, requestBody: {
                 summary: originalEvent.summary || '', description: originalEvent.description || '',
                 start: originalEvent.start, end: originalEvent.end,
+                extendedProperties: originalEvent.extendedProperties || {},
               } }, { headers: patchedEvent?.etag ? { 'If-Match': patchedEvent.etag } : {} });
             } catch (rollbackError) {
               console.error('Booking edit calendar recovery failed:', rollbackError);
@@ -9583,8 +9625,17 @@ export default async function handler(req, res) {
           await calendarApi.events.delete({ calendarId, eventId: calendarEventId });
           calendarDeleted = true;
         } catch (error) {
-          calendarError = error.message || 'The linked calendar event could not be removed.';
-          console.error('Delete booking calendar cleanup error:', calendarError);
+          const code = Number(error.code || error.response?.status);
+          if (code === 404 || code === 410) {
+            calendarDeleted = true;
+          } else {
+            calendarError = error.message || 'The linked calendar event could not be removed.';
+            console.error('Delete booking calendar cleanup error:', calendarError);
+            return res.status(502).json({
+              message: 'The linked calendar event could not be removed. The booking was kept so you can retry deletion.',
+              calendarError,
+            });
+          }
         }
       }
       await bqDeleteBookingRow(bigquery, bookingId);
@@ -9833,7 +9884,7 @@ export default async function handler(req, res) {
           const candidateStartInstant = zonedBookingInstant(newStartDateTime, CALENDAR_TIME_ZONE);
           const candidateEndInstant = zonedBookingInstant(newEndDateTime, CALENDAR_TIME_ZONE);
           const calendarConflict = (dayEvents.data.items || []).some((event) => {
-            if (event.id === calendarEventId || event.status === 'cancelled') return false;
+            if (event.id === calendarEventId || !isBlockingCalendarEvent(event, rows.slice(startIndex))) return false;
             const assignedNames = therapistAssignmentNames(getTherapistFromDescription(event.description), rescheduleTherapistNames);
             const eventStart = event.start?.dateTime || event.start?.date || '';
             const eventEnd = event.end?.dateTime || event.end?.date || '';
@@ -9865,11 +9916,12 @@ export default async function handler(req, res) {
           return res.status(502).json({ message: 'The new time could not be saved to Google Calendar. Please try again or contact the clinic.' });
         }
       }
-      const statusNotes = `Rescheduled ${new Date().toISOString()} from ${originalDate} ${originalTime} to ${newDate} ${newTime} — no refund, per cancellation/reschedule policy.`;
+      const statusNotes = `${row[25] || ''}${row[25] ? '\n' : ''}Rescheduled ${new Date().toISOString()} from ${originalDate} ${originalTime} to ${newDate} ${newTime} — no refund, per cancellation/reschedule policy.`;
       await bqUpdateBookingFields(bigquery, bookingId, { date: newDate, time: newTime, statusNotes });
       const rescheduledRow = [...row];
       rescheduledRow[7] = newDate;
       rescheduledRow[8] = newTime;
+      rescheduledRow[25] = statusNotes;
       await logBookingActivity(bigquery, 'rescheduled', rescheduledRow, { previousDate: originalDate, previousTime: originalTime, actor: 'customer' });
       await notifyStaffOfBookingChange(sheets, bigquery, rescheduledRow, {
         heading: 'Appointment rescheduled',
@@ -10140,6 +10192,7 @@ export default async function handler(req, res) {
             // The booking's own event must be ignored or the therapist would always
             // look busy against the appointment being reassigned.
             const busyNames = new Set((dayEvents.data.items || [])
+              .filter((event) => isBlockingCalendarEvent(event, rows.slice(startIndex)))
               .filter((event) => event.id !== calendarEventId)
               .filter((event) => {
                 const eventStart = event.start?.dateTime || event.start?.date || '';
@@ -10181,7 +10234,7 @@ export default async function handler(req, res) {
         }
       }
 
-      const statusNotes = `Therapist reassigned ${new Date().toISOString()} from ${previousTherapist || 'Unassigned'} to ${therapistName}.`;
+      const statusNotes = `${row[25] || ''}${row[25] ? '\n' : ''}Rescheduled: therapist reassigned ${new Date().toISOString()} from ${previousTherapist || 'Unassigned'} to ${therapistName}.`;
       await bqUpdateBookingFields(bigquery, bookingId, { therapistName, statusNotes });
 
       let emailSent = false;
@@ -10217,6 +10270,8 @@ export default async function handler(req, res) {
         bookingId,
         therapistName,
         previousTherapist,
+        rescheduled: true,
+        statusNotes,
         calendarUpdated,
         emailSent,
         emailError,
@@ -10484,6 +10539,7 @@ export default async function handler(req, res) {
       count + therapistAssignmentNames(row[6] || 'Any Available', [...allCandidateNames, 'Any Available'])
         .filter((name) => name === 'Any Available').length, 0);
     const overlappingEvents = (dayEvents.data.items || []).filter((event) => {
+          if (!isBlockingCalendarEvent(event, bookingRows.slice(bookingStartIndex))) return false;
           const eventStart = event.start?.dateTime || event.start?.date || '';
           const eventEnd = event.end?.dateTime || event.end?.date || '';
           return eventStart && eventEnd &&
@@ -10550,6 +10606,7 @@ export default async function handler(req, res) {
       sendUpdates: 'none',
       requestBody: {
         summary: `${payload.serviceName} - ${payload.customerName}`,
+        extendedProperties: { private: { bookingId: payload.id } },
         location: payload.branchAddress || payload.branchName,
         description: [
           `Booking: ${payload.id}`,

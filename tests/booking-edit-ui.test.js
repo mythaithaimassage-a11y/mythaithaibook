@@ -99,7 +99,7 @@ test('editor offers branch-specific times and preserves existing schedules after
 test('editor submits changes with a version, prevents duplicate saves and reports failed writes', async () => {
   const states = [], refs = [];
   let stateIndex = 0, refIndex = 0, writes = 0, saved = null;
-  let fail = false, expectedDiscount = '0', expectedConfirmation = false;
+  let fail = false, wrongId = false, expectedDiscount = '0', expectedConfirmation = false;
   const jsx = (type, props) => ({ type, props });
   const shallowLoad = createTsLoader({
     react: {
@@ -124,7 +124,8 @@ test('editor submits changes with a version, prevents duplicate saves and report
       assert.equal(body.manualDiscount, expectedDiscount);
       assert.equal(body.confirmReconciliation, expectedConfirmation);
       assert.deepEqual(body.therapistNames, ['Tanya']);
-      return { ok: !fail, json: async () => fail ? { message: 'Booking was not found.' } : { booking: { ...booking, customerName: body.customerName } } };
+      return { ok: !fail, json: async () => fail ? { message: 'Booking was not found.' }
+        : { booking: { ...booking, id: wrongId ? 'unexpected-new-id' : booking.id, customerName: body.customerName } } };
     },
   });
   const Editor = shallowLoad(editorPath, '\nglobalThis.fetch = require("test-fetch");').default;
@@ -151,6 +152,11 @@ test('editor submits changes with a version, prevents duplicate saves and report
   assert.equal(saved, null);
   assert.equal(nodes(shallow()).find((node) => node.props?.role === 'alert').props.children, 'Booking was not found.');
   fail = false;
+  wrongId = true;
+  await nodes(shallow()).find((node) => node.type === 'form').props.onSubmit({ preventDefault() {} });
+  assert.equal(saved, null, 'A different booking ID must not be accepted as a successful edit');
+  assert.match(nodes(shallow()).find((node) => node.props?.role === 'alert').props.children, /reference could not be verified/);
+  wrongId = false;
   nodes(shallow()).find((node) => node.type === 'input' && node.props.max === 100).props.onChange({ target: { value: '10' } });
   let discounted = shallow();
   assert.equal(nodes(discounted).find((node) => node.type === 'button' && node.props.type === 'submit').props.disabled, true);

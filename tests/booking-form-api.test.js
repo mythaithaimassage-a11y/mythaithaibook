@@ -987,6 +987,53 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
     date: editable.date, time: editable.time, serviceId: '1', therapistNames: ['Test Therapist'],
     paymentOption: 'Card', total: '113.00', paidAmount: '113.00',
   });
+  const identityRecord = {
+    ...editable, booking_id: 'preserve-original-booking-id', date: '2099-01-03', time: '11:00 AM',
+    customer_name: 'Original client', email: 'original@example.com', phone: '4375550101',
+    service_name: 'Massage', therapist_name: 'Test Therapist', duration_minutes: 60,
+    calendar_event_id: 'preserve-original-calendar-event', receipt_number: '', membership_type: '',
+    status: 'Confirmed', status_notes: 'Original audit note', total: 113, paid_amount: 0,
+  };
+  records.push(identityRecord);
+  const originalRecordCount = records.length;
+  const originalEventCount = events.length;
+  const noteOnlyEdit = await request('edit-booking', {
+    ...editBody(), bookingId: identityRecord.booking_id,
+    expectedVersion: bookingEditVersion(BOOKING_TABLE_FIELDS.map((field) => identityRecord[field.name])),
+    customerName: identityRecord.customer_name, email: identityRecord.email, phone: identityRecord.phone,
+    date: identityRecord.date, time: identityRecord.time, therapistNames: [identityRecord.therapist_name],
+    total: '113', paidAmount: '0', bookingNote: 'Changed note only',
+  });
+  assert.equal(noteOnlyEdit.code, 200, JSON.stringify(noteOnlyEdit.data));
+  assert.equal(noteOnlyEdit.data.booking.rescheduled, false);
+  assert.equal(noteOnlyEdit.data.booking.id, identityRecord.booking_id);
+  for (const change of [
+    { customerName: 'Corrected client name' },
+    { email: 'corrected@example.com' },
+    { phone: '4375550123' },
+    { therapistNames: ['Second Therapist'] },
+    { time: '02:00 PM' },
+  ]) {
+    const result = await request('edit-booking', {
+      ...editBody(), bookingId: identityRecord.booking_id,
+      expectedVersion: bookingEditVersion(BOOKING_TABLE_FIELDS.map((field) => identityRecord[field.name])),
+      customerName: identityRecord.customer_name, email: identityRecord.email, phone: identityRecord.phone,
+      date: identityRecord.date, time: identityRecord.time, therapistNames: [identityRecord.therapist_name],
+      total: '113', paidAmount: '0', ...change,
+    });
+    assert.equal(result.code, 200, JSON.stringify(result.data));
+    assert.equal(result.data.booking.id, 'preserve-original-booking-id');
+    assert.equal(result.data.booking.calendarEventId, 'preserve-original-calendar-event');
+    assert.equal(result.data.booking.rescheduled, true);
+    assert.equal(result.data.booking.status, 'Confirmed', 'The tag must not replace lifecycle status');
+    assert.match(result.data.booking.statusNotes, /^Original audit note\nBooking edited.*\nRescheduled/);
+    assert.equal(records.length, originalRecordCount, 'Edits update the existing row, not insert a second booking');
+    assert.equal(events.length, originalEventCount, 'Edits patch the original event, not create a new one');
+    assert.equal(patches.at(-1).eventId, 'preserve-original-calendar-event');
+    assert.match(patches.at(-1).requestBody.description, /Booking: preserve-original-booking-id/);
+    assert.equal(patches.at(-1).requestBody.extendedProperties.private.bookingId, 'preserve-original-booking-id');
+  }
+  records.splice(records.indexOf(identityRecord), 1);
   const legacyTimeBooking = { ...editable, booking_id: 'MTT-legacy-24-hour-time', time: '16:30', calendar_event_id: '' };
   records.push(legacyTimeBooking);
   const listedBookings = await request('', null, { method: 'GET' });
@@ -1267,6 +1314,22 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
     },
   });
   assert.match(busyShiftDiagnostics.data.unavailableTherapists.find((item) => item.id === 3).reason, /existing booking or calendar event/);
+  assert.equal(busyShiftDiagnostics.data.unavailableTherapists.find((item) => item.id === 3).conflicts[0].reference, extraShiftRecord.booking_id);
+  extraShiftRecord.status = 'Cancelled';
+  busyEvents = [{
+    id: extraShiftRecord.calendar_event_id, description: 'Therapist: Off Duty',
+    start: { dateTime: `${extraShiftDate}T13:00:00-05:00` },
+    end: { dateTime: `${extraShiftDate}T15:00:00-05:00` },
+  }];
+  assert.ok((await extraShiftAvailability()).data.therapistIds.includes(3),
+    'A leftover event from a cancelled booking must not block the therapist');
+  const afterCancellationBooking = await request('manual-booking', {
+    ...manual, date: extraShiftDate, time: '01:00 PM', serviceId: '6', therapistId: '3',
+  });
+  assert.equal(afterCancellationBooking.code, 200, JSON.stringify(afterCancellationBooking.data));
+  records.splice(records.findIndex((record) => record.booking_id === afterCancellationBooking.data.bookingId), 1);
+  busyEvents = [];
+  extraShiftRecord.status = 'Confirmed';
   const extraShiftEdit = () => ({
     ...editBody(), bookingId: extraShiftRecord.booking_id,
     expectedVersion: bookingEditVersion(BOOKING_TABLE_FIELDS.map((field) => extraShiftRecord[field.name])),
@@ -1375,9 +1438,17 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
     assert.equal((await request('edit-booking', { ...editBody(), time })).code, 400);
     assert.equal((await request('reschedule-booking', { bookingId: editable.booking_id, email: editable.email, date: base.date, time })).code, 400);
   }
-  assert.equal((await request('reschedule-booking', {
+  const beforeRescheduleCount = records.length;
+  const beforeRescheduleEventCount = events.length;
+  const customerReschedule = await request('reschedule-booking', {
     bookingId: editable.booking_id, email: editable.email, date: base.date, time: '07:30 PM',
-  })).code, 200);
+  });
+  assert.equal(customerReschedule.code, 200, JSON.stringify(customerReschedule.data));
+  assert.equal(customerReschedule.data.bookingId, editable.booking_id);
+  assert.equal(records.length, beforeRescheduleCount);
+  assert.equal(events.length, beforeRescheduleEventCount);
+  assert.equal(editable.time, '07:30 PM');
+  assert.match(editable.status_notes, /Rescheduled/);
   hours.sun.closed = true;
   branchRows[0][11] = JSON.stringify(hours);
   branchConfigRows[0].business_hours = JSON.stringify(hours);

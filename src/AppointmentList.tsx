@@ -17,6 +17,7 @@ export type ListAppointment = {
   phone?: string;
   bookingNote?: string;
   status?: string;
+  rescheduled?: boolean;
   total: number;
   syncedToSheets?: boolean;
   checkedInAt?: string;
@@ -106,6 +107,7 @@ export default function AppointmentList({ bookings, onOpen, onEdit, onDelete, de
                 <div className="flex min-w-0 flex-wrap items-center gap-2">
                   <span title={booking.id} className="max-w-28 truncate font-mono text-[10px] text-slate-400">#{booking.id}</span>
                   {booking.status && <span className={`rounded-full px-2 py-1 text-[10px] font-semibold ${['Cancelled', 'No Show'].includes(booking.status) ? 'bg-rose-50 text-rose-700' : 'bg-slate-100 text-slate-600'}`}>{tr(booking.status)}</span>}
+                  {booking.rescheduled && booking.status !== 'Rescheduled' && <span className="rounded-full bg-blue-50 px-2 py-1 text-[10px] font-semibold text-blue-700">{tr('Rescheduled')}</span>}
                   <span role="img" aria-label={tr(booking.syncedToSheets ? 'Synced' : 'Local Only')} title={tr(booking.syncedToSheets ? 'Synced' : 'Local Only')} className={booking.syncedToSheets ? 'text-emerald-600' : 'text-amber-600'}>
                     {booking.syncedToSheets ? <Database aria-hidden="true" className="h-3.5 w-3.5" /> : <CloudOff aria-hidden="true" className="h-3.5 w-3.5" />}
                   </span>

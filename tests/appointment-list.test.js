@@ -63,6 +63,14 @@ test('cards preserve details, accessible status icons, role-restricted actions a
   assert.match(render({ bookings: [{ ...booking, date: '' }] }), /Date not set/);
 });
 
+test('appointment cards show the Rescheduled tag alongside the original status and ID', () => {
+  const html = render({ bookings: [{ ...booking, status: 'Completed', rescheduled: true }] });
+  assert.match(html, />Rescheduled</);
+  assert.match(html, />Completed</);
+  assert.match(html, /#MTT-REF-1/);
+  assert.doesNotMatch(render(), />Rescheduled</);
+});
+
 test('card icon actions invoke their original callbacks and date order can be changed', () => {
   const states = [];
   let index = 0;

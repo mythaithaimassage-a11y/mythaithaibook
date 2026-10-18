@@ -45,12 +45,19 @@ const props = {
 const render = (overrides = {}) => renderToStaticMarkup(React.createElement(QuickBooking, { ...props, ...overrides }));
 
 test('quick appointment explains excluded therapists without hiding their names behind a generic warning', () => {
-  availabilityIssues = [{ id: 5, name: 'TANYA', reason: 'Time off overlaps this appointment.' }];
+  availabilityIssues = [{ id: 5, name: 'TANYA', reason: 'Time off overlaps this appointment.', conflicts: [
+    { source: 'booking', reference: 'MTT-stale', date: '2026-10-18', time: '03:00 PM', durationMinutes: 120 },
+    { source: 'calendar', reference: 'calendar-stale', start: '2026-10-18T15:00:00-04:00', end: '2026-10-18T17:00:00-04:00' },
+  ] }];
   try {
     const html = render();
     assert.match(html, /Why is a therapist unavailable/);
     assert.match(html, /TANYA:/);
     assert.match(html, /Time off overlaps this appointment/);
+    assert.match(html, /Saved booking #MTT-stale/);
+    assert.match(html, /03:00 PM/);
+    assert.match(html, /120 minutes/);
+    assert.match(html, /Calendar event #calendar-stale/);
   } finally {
     availabilityIssues = [];
   }

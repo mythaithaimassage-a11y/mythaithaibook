@@ -6009,10 +6009,13 @@ function AdminPortal({
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+      const updatedAssignment = { therapistName: data.therapistName, rescheduled: data.rescheduled, statusNotes: data.statusNotes };
       setSelectedCalendarEvent((current) => current
-        ? { ...current, therapistName: data.therapistName, booking: { ...current.booking, therapistName: data.therapistName } }
+        ? { ...current, therapistName: data.therapistName, booking: { ...current.booking, ...updatedAssignment } }
         : current);
-      setBookings((current) => current.map((item) => item.id === booking.id ? { ...item, therapistName: data.therapistName } : item));
+      setBookings((current) => current.map((item) => item.id === booking.id ? { ...item, ...updatedAssignment } : item));
+      setCalendarEvents((current) => current.map((event) => event.booking?.id === booking.id
+        ? { ...event, therapistName: data.therapistName, booking: { ...event.booking, ...updatedAssignment } } : event));
       setTherapistReassignTo('');
       setTherapistReassignTo2('');
       setReceiptNotice(data.emailError
@@ -7321,6 +7324,7 @@ function AdminPortal({
                               {event.isCouple && <Users className="w-3 h-3 shrink-0" aria-label={tr("Couple massage")} />}
                               <span className="truncate">{event.summary}</span>
                               {event.booking?.status === 'Cancelled' && <span className="shrink-0 text-[9px] font-bold uppercase tracking-wide text-red-700 bg-red-100 px-1.5 py-0.5 rounded-full">{tr("Cancelled")}</span>}
+                              {event.booking?.rescheduled && <span className="shrink-0 rounded-full bg-blue-100 px-1.5 py-0.5 text-[9px] font-bold text-blue-700">{tr("Rescheduled")}</span>}
                             </div>
                             <div className={getTherapistCalendarColor(event.therapistName, therapists).text}>{formatTime(event.timeRange || event.localTime)} · {event.therapistName || event.calendarName.replace(' - MY THAI THAI', '')}</div>
                             {event.booking?.bookingNote && <div className="mt-1 whitespace-pre-wrap text-[11px]">{tr("Team note:")} {event.booking.bookingNote}</div>}
@@ -7457,6 +7461,7 @@ function AdminPortal({
                               <span className="absolute inset-x-2 top-1.5">
                               <span className={`block truncate font-bold ${getTherapistCalendarColor(therapist.name, therapists).text}`}>{event.summary}</span>
                               <span className={getTherapistCalendarColor(therapist.name, therapists).text}>{formatTime(event.timeRange || event.localTime)}</span>
+                              {event.booking?.rescheduled && <span className="ml-1 rounded bg-blue-100 px-1 text-[9px] text-blue-700">{tr("Rescheduled")}</span>}
                               </span>
                             </button>
                           ))}
@@ -7472,7 +7477,7 @@ function AdminPortal({
                           calendarEventRange(event).start >= minutes && calendarEventRange(event).start < minutes + 15 &&
                           (!event.therapistName || event.therapistName === 'Any Available')).map((event) => (
                           <button key={event.id} type="button" style={calendarEventStyle(event, visibleCalendarEvents.filter((item) => !item.therapistName || item.therapistName === 'Any Available'))} onClick={() => { setSelectedCalendarEvent(event); setIssuedReceipt(null); setReceiptError(''); setReceiptNotice(''); }} className="absolute inset-x-1 z-10 overflow-hidden rounded-lg border-l-4 border-stone-400 bg-stone-100 px-2.5 py-2 text-left text-[11px] text-stone-700">
-                            <span className="absolute inset-x-2 top-1.5"><span className="block truncate font-bold">{event.summary}</span><span>{formatTime(event.timeRange || event.localTime)}</span></span>
+                            <span className="absolute inset-x-2 top-1.5"><span className="block truncate font-bold">{event.summary}</span><span>{formatTime(event.timeRange || event.localTime)}</span>{event.booking?.rescheduled && <span className="ml-1 rounded bg-blue-100 px-1 text-[9px] text-blue-700">{tr("Rescheduled")}</span>}</span>
                           </button>
                         ))}
                       </div>
@@ -9509,6 +9514,7 @@ function AdminPortal({
                 <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-200">{tr("Appointment details")}</p>
                 <h2 id="appointment-receipt-title" className="mt-1 text-lg font-bold">{issuedReceipt?.booking?.customerName || selectedCalendarEvent.booking?.customerName || selectedCalendarEvent.summary}</h2>
                 <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                  {selectedCalendarEvent.booking?.rescheduled && <span className="rounded-full bg-blue-500/20 px-2.5 py-1 text-[10px] font-bold text-blue-100">{tr("Rescheduled")}</span>}
                   {selectedCalendarEvent.booking?.customerType && (
                     <span className={`inline-flex rounded-full px-2.5 py-1 text-[10px] font-bold ${selectedCalendarEvent.booking.customerType === 'returning' ? 'bg-sky-100 text-sky-900' : 'bg-emerald-100 text-emerald-900'}`}>
                       {tr(selectedCalendarEvent.booking.customerType === 'returning' ? "Returning customer" : "New customer")}

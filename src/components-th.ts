@@ -1,4 +1,8 @@
 export const componentThai: Record<string, string> = {
+  'Saved booking': 'การจองที่บันทึกไว้',
+  'The saved booking reference could not be verified. Refresh before making further changes.': 'ไม่สามารถยืนยันหมายเลขอ้างอิงการจองที่บันทึกได้ กรุณารีเฟรชก่อนแก้ไขเพิ่มเติม',
+  'Calendar event': 'กิจกรรมในปฏิทิน',
+  'The linked calendar event could not be removed. The booking was kept so you can retry deletion.': 'ไม่สามารถลบกิจกรรมในปฏิทินที่เชื่อมโยงได้ ระบบเก็บการจองไว้เพื่อให้ลองลบอีกครั้ง',
   'Your dashboard session has expired. Sign in again to check staff appointment availability.': 'เซสชันแดชบอร์ดหมดอายุ กรุณาเข้าสู่ระบบอีกครั้งเพื่อตรวจสอบเวลาว่างสำหรับการจองของเจ้าหน้าที่',
   'Why is a therapist unavailable?': 'เหตุใดผู้ให้บริการจึงไม่ว่าง?',
   'This service requires RMT certification.': 'บริการนี้ต้องใช้ผู้ให้บริการที่มีใบรับรอง RMT',

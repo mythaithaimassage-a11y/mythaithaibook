@@ -138,6 +138,19 @@ explanations for shift coverage, qualifications, closures, time off and booking
 conflicts. An expired dashboard session explicitly requests sign-in instead of
 silently applying customer rules that hide past appointment times. Staff can
 enter historical appointments; there is no four-therapist booking limit.
+Conflict explanations include the saved booking or calendar event reference
+and appointment time. Removing an event directly in Google Calendar does not
+delete its saved booking; cancel or delete the booking in the dashboard too.
+Cancelled/no-show bookings and their leftover calendar events do not block new
+appointments. App deletion retains the booking if calendar removal fails so
+staff can retry; an already-missing calendar event does not prevent deletion.
+Editing a client's name, email, phone or therapist, or rescheduling the appointment,
+updates the existing booking and calendar event with the same booking reference.
+These changes retain a **Rescheduled** tag in appointment lists and details without
+replacing lifecycle statuses such as Completed or Cancelled. Note-only and payment-only
+edits do not add the tag. Calendar loading recovers missing event links using the
+original booking reference instead of creating a new booking ID; retained events
+whose referenced booking was deleted do not recreate that booking.
 
 In **Business profile**, **Minimum booking notice (minutes)** controls how far
 ahead customers must book (default: 15 minutes; whole minutes from 0 to 1440).

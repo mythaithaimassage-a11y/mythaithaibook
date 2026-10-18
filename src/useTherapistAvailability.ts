@@ -11,6 +11,35 @@ type AvailabilityRequest = {
   excludeBookingId?: string;
 };
 
+type AvailabilityConflict = {
+  source: 'booking';
+  reference: string;
+  date: string;
+  time: string;
+  durationMinutes: number;
+} | {
+  source: 'calendar';
+  reference: string;
+  start: string;
+  end: string;
+};
+type UnavailableTherapist = {
+  id: string | number;
+  name: string;
+  reason: string;
+  conflicts?: AvailabilityConflict[];
+};
+
+function isAvailabilityConflict(value: unknown): value is AvailabilityConflict {
+  if (!value || typeof value !== 'object') return false;
+  const conflict = value as Record<string, unknown>;
+  return typeof conflict.reference === 'string' &&
+    (conflict.source === 'booking'
+      ? typeof conflict.date === 'string' && typeof conflict.time === 'string' &&
+        typeof conflict.durationMinutes === 'number' && Number.isFinite(conflict.durationMinutes)
+      : conflict.source === 'calendar' && typeof conflict.start === 'string' && typeof conflict.end === 'string');
+}
+
 type BookingSlotAvailabilityRequest = Omit<AvailabilityRequest, 'time' | 'excludeBookingId'> & {
   times: string[];
 };
@@ -231,7 +260,7 @@ export function useBookingSlotAvailability({ branchId, date, times, durationMinu
 
 export default function useTherapistAvailability({ branchId, date, time, durationMinutes, isRmt, excludeBookingId }: AvailabilityRequest) {
   const [therapistIds, setTherapistIds] = useState<Set<string>>(() => new Set());
-  const [unavailableTherapists, setUnavailableTherapists] = useState<Array<{ id: string | number; name: string; reason: string }>>([]);
+  const [unavailableTherapists, setUnavailableTherapists] = useState<UnavailableTherapist[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -264,9 +293,10 @@ export default function useTherapistAvailability({ branchId, date, time, duratio
           throw new Error('Therapist availability could not be verified. Refresh and try again.');
         }
         if (data.unavailableTherapists !== undefined && (!Array.isArray(data.unavailableTherapists) ||
-            !data.unavailableTherapists.every((item: { id?: unknown; name?: unknown; reason?: unknown } | null) =>
+            !data.unavailableTherapists.every((item: { id?: unknown; name?: unknown; reason?: unknown; conflicts?: unknown } | null) =>
               item && (typeof item.id === 'string' || typeof item.id === 'number') &&
-              typeof item.name === 'string' && typeof item.reason === 'string'))) {
+              typeof item.name === 'string' && typeof item.reason === 'string' &&
+              (item.conflicts === undefined || Array.isArray(item.conflicts) && item.conflicts.every(isAvailabilityConflict))))) {
           throw new Error('Therapist availability could not be verified. Refresh and try again.');
         }
         if (!controller.signal.aborted) {

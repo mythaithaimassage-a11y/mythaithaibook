@@ -38,6 +38,19 @@ test('edit versions protect every field and staff responses exclude medical and 
   row[18] = 'Issued'; assert.equal(staffBooking(row).paymentLocked, true);
   row[18] = ''; row[21] = 'silver'; assert.equal(staffBooking(row).paymentLocked, true);
 });
+
+test('Rescheduled is a separate persistent tag that preserves the booking ID and terminal status', () => {
+  for (const status of ['Confirmed', 'Completed', 'Cancelled', 'No Show']) {
+    const row = BOOKING_TABLE_FIELDS.map((field) => field.type === 'STRING' ? '' : 0);
+    Object.assign(row, { 0: 'original-id', 24: status, 25: 'Existing audit notes\nRescheduled by staff@example.com.' });
+    const booking = staffBooking(row);
+    assert.equal(booking.id, 'original-id');
+    assert.equal(booking.status, status);
+    assert.equal(booking.rescheduled, true);
+    row[25] = 'Booking edited by staff@example.com.';
+    assert.equal(staffBooking(row).rescheduled, false, 'Note/payment-only edits do not add the tag');
+  }
+});
 test('staff edits use Toronto winter and summer offsets and reject nonexistent DST times', () => {
   assert.equal(zonedBookingInstant('2026-12-01T10:00:00', 'America/Toronto'), '2026-12-01T15:00:00.000Z');
   assert.equal(zonedBookingInstant('2026-07-01T10:00:00', 'America/Toronto'), '2026-07-01T14:00:00.000Z');

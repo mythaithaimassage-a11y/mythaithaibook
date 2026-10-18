@@ -190,6 +190,9 @@ export default function EditBooking({ booking, services, therapists, times, bran
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || 'Unable to save this booking.');
+      if (!data.booking || data.booking.id !== booking.id) {
+        throw new Error('The saved booking reference could not be verified. Refresh before making further changes.');
+      }
       await onSaved(data.booking, { emailSent: data.emailSent === true, emailError: data.emailError || '' });
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'Unable to save this booking.');

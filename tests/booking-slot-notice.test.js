@@ -58,7 +58,10 @@ function availabilityHarness(data, staff = false, ok = true) {
 }
 
 test('staff availability explicitly identifies staff requests and preserves exclusion reasons', async () => {
-  const unavailableTherapists = [{ id: 5, name: 'TANYA', reason: 'Time off overlaps this appointment.' }];
+  const unavailableTherapists = [{
+    id: 5, name: 'TANYA', reason: 'An existing booking or calendar event overlaps this appointment, including the appointment gap.',
+    conflicts: [{ source: 'booking', reference: 'stale-booking', date: '2026-10-18', time: '03:00 PM', durationMinutes: 120 }],
+  }];
   const ui = availabilityHarness({ therapistIds: [1, 2, 3, 4, 6], unavailableTherapists }, true);
   ui.render();
   await new Promise((resolve) => setImmediate(resolve));
@@ -67,6 +70,7 @@ test('staff availability explicitly identifies staff requests and preserves excl
   assert.equal(ui.render().therapistIds.size, 5, 'There is no four-therapist cap');
   assert.equal(ui.render().unavailableTherapists[0].name, 'TANYA');
   assert.equal(ui.render().unavailableTherapists[0].reason, unavailableTherapists[0].reason);
+  assert.equal(ui.render().unavailableTherapists[0].conflicts[0].reference, 'stale-booking');
 });
 
 test('expired staff sessions report an explicit error instead of an empty successful roster', async () => {
@@ -81,6 +85,18 @@ test('expired staff sessions report an explicit error instead of an empty succes
 
 test('invalid staff exclusion details are reported rather than rendered as verified reasons', async () => {
   const ui = availabilityHarness({ therapistIds: [1], unavailableTherapists: [{ id: 2, reason: 'missing name' }] }, true);
+  ui.render();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(ui.render().error, /could not be verified/);
+  assert.equal(ui.render().therapistIds.size, 0);
+});
+
+test('invalid conflict references are rejected rather than displayed as verified booking details', async () => {
+  const ui = availabilityHarness({
+    therapistIds: [1], unavailableTherapists: [{
+      id: 5, name: 'TANYA', reason: 'Conflict', conflicts: [{ source: 'booking', reference: 'missing-time' }],
+    }],
+  }, true);
   ui.render();
   await new Promise((resolve) => setImmediate(resolve));
   assert.match(ui.render().error, /could not be verified/);

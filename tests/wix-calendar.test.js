@@ -462,11 +462,26 @@ test('Calendar backfill endpoint enforces owner authentication, method, origin a
   t.mock.method(BigQuery.prototype, 'query', async (args) => {
     const dashboardAuthResult = handleDashboardChallengeQuery(args.query, args.params, dashboardChallenges);
     if (dashboardAuthResult) return dashboardAuthResult;
+    if (args.query.startsWith('SELECT config_type, payload FROM')) return [[]];
     if (args.query.includes('ORDER BY created_at ASC')) return [f.rows];
+    if (args.params?.where_booking_id) {
+      assert.match(args.query, /UPDATE/);
+      assert.match(args.query, /Booking changed during editing/);
+      const row = f.rows.find((item) => item.booking_id === args.params.where_booking_id);
+      assert.ok(row);
+      assert.equal(args.params.set_calendar_id, options.calendarId);
+      assert.ok(args.params.set_calendar_event_id);
+      row.calendar_id = args.params.set_calendar_id;
+      row.calendar_event_id = args.params.set_calendar_event_id;
+      return [[]];
+    }
     return f.bigquery.query(args);
   });
   t.mock.method(BigQuery.prototype, 'dataset', () => ({
-    exists: async () => [true], table: () => ({ exists: async () => [true], getMetadata: async () => [{ schema: { fields: BOOKING_TABLE_FIELDS } }] }),
+    exists: async () => [true], table: () => ({
+      exists: async () => [true],
+      getMetadata: async () => [{ schema: { fields: [...BOOKING_TABLE_FIELDS, { name: 'receives_alerts', type: 'BOOLEAN' }] } }],
+    }),
   }));
   const blocks = [
     ['central-block', 'business', 'Mississauga Central', '', booking.date, '09:00', '10:00', 'Closed'],
@@ -546,6 +561,7 @@ test('Calendar backfill endpoint enforces owner authentication, method, origin a
   assert.equal(displayed.data.events[0].timeRange, '11:30 PM - 1:00 AM');
   assert.equal(displayed.data.events[0].localTime, '23:30', 'Hour grouping retains its 24-hour start time');
   assert.deepEqual(pages, [undefined, 'next-page']);
+  assert.equal(f.rows[0].calendar_event_id, [...f.events.keys()][0], 'A recovered event link is saved to the original booking');
   const branchFiltered = await request('calendar', {
     method: 'GET', query: { branch: '123 Synthetic Street', branchName: 'Mississauga Central' },
   });
@@ -580,6 +596,17 @@ test('Calendar backfill endpoint enforces owner authentication, method, origin a
     event.end.dateTime = `${booking.date}T${end}`;
     const range = await request('calendar', { method: 'GET' });
     assert.equal(range.data.events[0].timeRange, expected);
+  }
+  event.extendedProperties = { private: { bookingId: booking.booking_id } };
+  for (const metadata of [event.extendedProperties, {}]) {
+    event.extendedProperties = metadata;
+    f.rows[0].calendar_event_id = '';
+    const recovered = await request('calendar', { method: 'GET' });
+    assert.deepEqual(recovered.data.errors, []);
+    assert.equal(recovered.data.events[0].booking.id, booking.booking_id,
+      'Metadata or the Booking description must recover the original ID instead of auto-creating a new one');
+    assert.equal(f.rows.length, 1);
+    assert.equal(f.rows[0].calendar_event_id, event.id || [...f.events.keys()][0]);
   }
   // Clearing database history must not re-create a booking from its retained Wix event.
   f.rows.length = 0;
