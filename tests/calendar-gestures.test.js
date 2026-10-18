@@ -95,32 +95,29 @@ test('mobile horizontal swipes navigate once, reset scroll after the date change
   assert.equal(h.listeners.size, 0);
 });
 
-test('bottom scrolling advances once per gesture and never on initial layout, resets, upward scrolling, or short days', () => {
-  const h = harness();
-  h.panel.scrollTop = 600;
-  h.listeners.get('scroll')();
-  assert.deepEqual(h.navigations, []);
-  h.panel.scrollTop = 400;
-  h.listeners.get('scroll')();
-  h.touch('start', 100, 400);
-  h.touch('move', 100, 200);
-  h.panel.scrollTop = 600;
-  h.listeners.get('scroll')();
-  h.listeners.get('scroll')();
-  assert.deepEqual(h.navigations, [1]);
-  h.options.date = '2026-10-18';
-  h.render();
-  h.panel.scrollTop = 600;
-  h.listeners.get('scroll')();
-  assert.deepEqual(h.navigations, [1], 'Inertial scrolling after navigation must not skip dates');
-  h.touch('start', 100, 200);
-  h.panel.scrollTop = 400;
-  h.listeners.get('scroll')();
-  assert.deepEqual(h.navigations, [1]);
-  h.panel.scrollHeight = 400;
-  h.panel.scrollTop = 0;
-  h.listeners.get('scroll')();
-  assert.deepEqual(h.navigations, [1], 'An empty day must not auto-advance');
+test('vertical touch scrolling to the bottom and momentum never change the date in either mobile layout', () => {
+  for (const fullscreen of [true, false]) {
+    const h = harness({ fullscreen });
+    const scrollListeners = fullscreen ? h.listeners : h.windowListeners;
+    const scroll = (top) => {
+      if (fullscreen) h.panel.scrollTop = top;
+      else h.window.scrollY = top;
+      scrollListeners.get('scroll')?.();
+    };
+    h.touch('start', 100, 400);
+    assert.equal(h.touch('move', 105, 200), false);
+    scroll(600);
+    assert.deepEqual(h.navigations, [], 'Reaching the bottom must keep the current date');
+    h.touch('end', 105, 200);
+    scroll(620);
+    scroll(600);
+    assert.deepEqual(h.navigations, [], 'Momentum and upward scrolling must keep the current date');
+    assert.equal(fullscreen ? h.panel.scrollTop : h.window.scrollY, 600, 'Scrolling must not reset to the top');
+    h.panel.scrollHeight = 400;
+    scroll(0);
+    assert.deepEqual(h.navigations, [], 'Short and empty days must keep the current date');
+    h.cleanup();
+  }
 });
 
 test('controls, loading, menus, errors and dialogs do not trigger gestures; multi-touch and cancelled gestures are ignored', () => {
@@ -146,11 +143,12 @@ test('controls, loading, menus, errors and dialogs do not trigger gestures; mult
   assert.deepEqual(h.navigations, []);
 });
 
-test('non-fullscreen mobile scrolling uses the page and returns to the calendar top; desktop installs no gestures', () => {
+test('non-fullscreen mobile swipes return to the calendar top; desktop installs no gestures', () => {
   const h = harness({ fullscreen: false });
-  h.touch('start', 100, 400);
   h.window.scrollY = 400;
-  h.windowListeners.get('scroll')();
+  h.touch('start', 200, 100);
+  h.touch('move', 100, 105);
+  h.touch('end', 100, 105);
   assert.deepEqual(h.navigations, [1]);
   h.options.date = '2026-10-18';
   h.render();
@@ -160,17 +158,17 @@ test('non-fullscreen mobile scrolling uses the page and returns to the calendar 
   assert.equal(harness({ enabled: false }).listeners.size, 0);
 });
 
-test('mobile wheel scrolling can advance a date without allowing momentum to skip another', () => {
-  const h = harness();
-  const wheel = () => h.listeners.get('wheel')({ target: h.target, deltaY: 30, deltaX: 0, ctrlKey: false });
-  wheel();
-  h.panel.scrollTop = 600;
-  h.listeners.get('scroll')();
-  assert.deepEqual(h.navigations, [1]);
-  h.options.date = '2026-10-18';
-  h.render();
-  wheel();
-  h.panel.scrollTop = 600;
-  h.listeners.get('scroll')();
-  assert.deepEqual(h.navigations, [1]);
+test('mobile wheel scrolling to the bottom never changes the date in either layout', () => {
+  for (const fullscreen of [true, false]) {
+    const h = harness({ fullscreen });
+    const scrollListeners = fullscreen ? h.listeners : h.windowListeners;
+    for (const top of [400, 600, 620]) {
+      h.listeners.get('wheel')?.({ target: h.target, deltaY: 30, deltaX: 0, ctrlKey: false });
+      if (fullscreen) h.panel.scrollTop = top;
+      else h.window.scrollY = top;
+      scrollListeners.get('scroll')?.();
+      assert.deepEqual(h.navigations, []);
+    }
+    h.cleanup();
+  }
 });

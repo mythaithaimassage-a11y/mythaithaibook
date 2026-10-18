@@ -203,9 +203,9 @@ calendar. Selecting Calendar again reopens the expanded view after visiting
 another section. Device safe areas are respected.
 
 On mobile, swipe left/right on calendar content for the next/previous day.
-Scrolling down to the bottom advances to the next day and returns the calendar
-to the top. This requires a user scroll, so short or empty days do not repeatedly
-advance on their own. Gestures pause during loading, errors, open navigation,
+Vertical scrolling, including reaching the bottom, keeps the selected date
+unchanged. Horizontal swipes return the calendar to the top after changing days.
+Gestures pause during loading, errors, open navigation,
 and booking dialogs; controls retain their normal touch behavior. Date arrows
 and the picker remain available, and filters stay selected. Desktop scrolling
 is unchanged.
@@ -244,7 +244,7 @@ tools are collapsed below the list.
 **Agenda** shows all saved booking dates, not just the calendar's selected day,
 using the same date-grouped cards in oldest-first order. Branch, therapist,
 couple and search filters still apply. The date picker, previous/next-day
-controls and day-swipe/bottom-scroll navigation are disabled in Agenda.
+controls and day-swipe navigation are disabled in Agenda.
 Refresh and auto-refresh reload the branch-authorized booking list. Daily and
 therapist-grid views retain their live Google Calendar single-day behavior;
 Google Calendar-only events appear in Agenda once linked to a saved booking.
