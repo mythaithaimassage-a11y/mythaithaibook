@@ -16,11 +16,12 @@ const compiled = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
 }).outputText;
 const module = { exports: {} };
+let availabilityIssues = [];
 const loadTs = createTsLoader();
 const requireWithLocalization = (specifier) => {
   if (specifier === './localization') return loadTs(new URL('../src/localization.tsx', import.meta.url).pathname);
   if (specifier === './useTherapistAvailability') return { __esModule: true, default: () => ({
-    therapistIds: new Set(['1', '3', '4']), loading: false, error: '',
+    therapistIds: new Set(['1', '3', '4']), unavailableTherapists: availabilityIssues, loading: false, error: '',
   }) };
   return createRequire(import.meta.url)(specifier);
 };
@@ -42,6 +43,18 @@ const props = {
   onSaved: async () => {},
 };
 const render = (overrides = {}) => renderToStaticMarkup(React.createElement(QuickBooking, { ...props, ...overrides }));
+
+test('quick appointment explains excluded therapists without hiding their names behind a generic warning', () => {
+  availabilityIssues = [{ id: 5, name: 'TANYA', reason: 'Time off overlaps this appointment.' }];
+  try {
+    const html = render();
+    assert.match(html, /Why is a therapist unavailable/);
+    assert.match(html, /TANYA:/);
+    assert.match(html, /Time off overlaps this appointment/);
+  } finally {
+    availabilityIssues = [];
+  }
+});
 
 function customerHarness(fetch, overrides = {}) {
   let stateIndex = 0, effectIndex = 0, refIndex = 0;

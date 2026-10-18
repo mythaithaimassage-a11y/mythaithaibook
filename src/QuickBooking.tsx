@@ -233,6 +233,10 @@ export default function QuickBooking(props: Props) {
         {availability.loading && <p role="status" className="text-xs text-stone-600">{tr('Checking therapist availability…')}</p>}
         {availability.error && <p role="alert" className="text-xs text-red-800">{tr(availability.error)}</p>}
         {!availability.loading && !availability.error && validTime && therapists.length === 0 && <p role="alert" className="text-xs text-amber-800">{tr('No eligible therapists are available for this branch, date, time, and service. Choose different appointment details.')}</p>}
+        {!availability.loading && !availability.error && validTime && availability.unavailableTherapists?.length > 0 && <details className="text-xs text-stone-700">
+          <summary className="cursor-pointer font-semibold">{tr('Why is a therapist unavailable?')}</summary>
+          <ul className="mt-2 space-y-2">{availability.unavailableTherapists.map((item) => <li key={item.id}><strong>{item.name}:</strong> {tr(item.reason)}</li>)}</ul>
+        </details>}
         {error && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-800">{tr(error)}</p>}
         <div className="flex justify-end gap-2"><button type="button" disabled={saving} onClick={props.onClose} className="rounded-lg border border-stone-300 px-4 py-2 text-sm">{tr('Cancel')}</button><button type="submit" disabled={saving || availability.loading || Boolean(availability.error) || !therapists.length || !validTime || !service || (couple && !validTherapistId2)} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700 disabled:opacity-50">{tr(saving ? 'Saving...' : 'Save appointment')}</button></div>
       </form>

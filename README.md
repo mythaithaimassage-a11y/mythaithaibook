@@ -133,6 +133,11 @@ navigating to Work schedule; closing availability keeps the calendar expanded.
 Quick appointment and booking-edit therapist choices use the saved date-specific
 shifts, even when they differ from the regular weekly branch schedule. Therapists
 must be available for the full service duration, including conflict and break checks.
+Quick appointment includes **Why is a therapist unavailable?** with staff-only
+explanations for shift coverage, qualifications, closures, time off and booking
+conflicts. An expired dashboard session explicitly requests sign-in instead of
+silently applying customer rules that hide past appointment times. Staff can
+enter historical appointments; there is no four-therapist booking limit.
 
 In **Business profile**, **Minimum booking notice (minutes)** controls how far
 ahead customers must book (default: 15 minutes; whole minutes from 0 to 1440).

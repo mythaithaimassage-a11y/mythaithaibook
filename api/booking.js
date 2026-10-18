@@ -6264,6 +6264,10 @@ export default async function handler(req, res) {
 
     if (req.method === 'GET' && view === 'available-therapists') {
       res.setHeader('Cache-Control', 'no-store');
+      const staffBooking = req.query?.staffBooking === 'true';
+      if (staffBooking && !dashboardSession) {
+        return res.status(401).json({ message: 'Your dashboard session has expired. Sign in again to check staff appointment availability.' });
+      }
       const publicBooking = !dashboardSession || req.query?.publicBooking === 'true';
       const date = String(req.query?.date || '');
       const branchId = Number(req.query?.branchId);
@@ -6306,6 +6310,10 @@ export default async function handler(req, res) {
       const bookingCutoffsByTime = {};
       const branch = branches.find((item) => Number(item.id) === branchId && item.active !== false);
       if (!branch) return res.status(404).json({ message: 'Branch was not found or is inactive.' });
+      if (staffBooking && dashboardSession.role !== 'owner' && !dashboardSession.branchIds.includes(String(branchId))) {
+        return res.status(403).json({ message: 'This branch is outside your assigned access.' });
+      }
+      const unavailableTherapistsByTime = {};
       const rows = result.data.values || [];
       const startIndex = rows[0]?.[0] === 'Booking ID' ? 1 : 0;
       const excludeBookingId = String(req.query?.excludeBookingId || '').trim();
@@ -6414,6 +6422,21 @@ export default async function handler(req, res) {
           return shiftCoversAppointment(shift, date, `${String(Math.floor(start / 60)).padStart(2, '0')}:${String(start % 60).padStart(2, '0')}`, durationMinutes);
         });
         const businessBlocked = unavailability.some((block) => block.scope === 'business');
+        if (staffBooking && !publicBooking) {
+          unavailableTherapistsByTime[time] = therapists.filter((therapist) => therapist.active !== false).flatMap((therapist) => {
+            const shift = therapistShiftForDate(therapist, branchId, date, overrides);
+            const reason = isRmt && !therapist.rmtCertified
+              ? 'This service requires RMT certification.'
+              : !shift.isWorking ? 'Not working at this branch on this date.'
+                : !scheduleEligible.includes(therapist) ? 'The full appointment does not fit within the saved shift.'
+                  : businessBlocked ? 'The branch has a closure during this appointment.'
+                    : unavailability.some((block) => block.scope === 'therapist' && block.therapistName === therapist.name)
+                      ? 'Time off overlaps this appointment.'
+                      : busyNames.has(therapist.name) ? 'An existing booking or calendar event overlaps this appointment, including the appointment gap.'
+                        : '';
+            return reason ? [{ id: therapist.id, name: therapist.name, reason }] : [];
+          });
+        }
         const availableTherapists = businessBlocked ? [] : scheduleEligible
           .filter((therapist) => !busyNames.has(therapist.name));
         let remainingUnassignedBookings = unassignedBookingCount;
@@ -6441,6 +6464,7 @@ export default async function handler(req, res) {
         : res.status(200).json({
           therapistIds: publicAvailability[timeWindows[0].time],
           unassignedTherapistCount: unassignedTherapistCountByTime[timeWindows[0].time],
+          ...(staffBooking && !publicBooking ? { unavailableTherapists: unavailableTherapistsByTime[timeWindows[0].time] } : {}),
         });
     }
 

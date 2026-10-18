@@ -684,6 +684,11 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   };
   cookie = '';
   assert.equal((await request('manual-booking', manual)).code, 401);
+  const expiredStaffAvailability = await request('available-therapists', null, {
+    method: 'GET', query: { branchId: '1', date: manual.date, time: manual.time, durationMinutes: '120', staffBooking: 'true' },
+  });
+  assert.equal(expiredStaffAvailability.code, 401);
+  assert.match(expiredStaffAvailability.data.message, /session has expired/);
   assert.equal((await request('customer-search', null, { method: 'GET', query: { search: 'Client' } })).code, 401);
   cookie = receptionistCookie;
   assert.equal((await request('customer-search', null, { method: 'GET', origin: 'https://untrusted.example', query: { search: 'Client' } })).code, 403);
@@ -1242,6 +1247,13 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   serviceRows.push([6, 'Thai Traditional Massage (2 hr)', 'Thai', 120, 100, 10, 'FALSE', 0.13, '', 'TRUE']);
   assert.ok((await extraShiftAvailability()).data.therapistIds.includes(3),
     'A date-specific shift makes the therapist available at the selected branch');
+  const staffShiftDiagnostics = await request('available-therapists', null, {
+    method: 'GET', query: {
+      date: extraShiftDate, branchId: '1', time: '04:00 PM', durationMinutes: '120', staffBooking: 'true',
+    },
+  });
+  assert.equal(staffShiftDiagnostics.data.unavailableTherapists.find((item) => item.id === 3).reason,
+    'The full appointment does not fit within the saved shift.');
   assert.ok(!(await extraShiftAvailability('04:00 PM')).data.therapistIds.includes(3),
     'The full two-hour service must fit inside the date-specific shift');
   const extraShiftBooking = await request('manual-booking', {
@@ -1249,6 +1261,12 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   });
   assert.equal(extraShiftBooking.code, 200, JSON.stringify(extraShiftBooking.data));
   const extraShiftRecord = records.find((record) => record.booking_id === extraShiftBooking.data.bookingId);
+  const busyShiftDiagnostics = await request('available-therapists', null, {
+    method: 'GET', query: {
+      date: extraShiftDate, branchId: '1', time: '01:45 PM', durationMinutes: '120', staffBooking: 'true',
+    },
+  });
+  assert.match(busyShiftDiagnostics.data.unavailableTherapists.find((item) => item.id === 3).reason, /existing booking or calendar event/);
   const extraShiftEdit = () => ({
     ...editBody(), bookingId: extraShiftRecord.booking_id,
     expectedVersion: bookingEditVersion(BOOKING_TABLE_FIELDS.map((field) => extraShiftRecord[field.name])),
@@ -1603,6 +1621,21 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
       method: 'GET', query: { date: noticeDate, branchId: '1', time: '10:00 AM', durationMinutes: '60', isRmt: 'false' },
     });
     assert.ok(staffAvailability.data.therapistIds.includes(1), 'Staff availability retains historical correction support');
+    now = Date.parse(`${noticeDate}T23:00:00Z`); // 6 PM in Toronto.
+    const historicalStaffAvailability = await request('available-therapists', null, {
+      method: 'GET', query: {
+        date: noticeDate, branchId: '1', time: '01:00 PM', durationMinutes: '120', isRmt: 'false', staffBooking: 'true',
+      },
+    });
+    assert.ok(historicalStaffAvailability.data.therapistIds.includes(2), JSON.stringify(historicalStaffAvailability.data));
+    assert.match(historicalStaffAvailability.data.unavailableTherapists.find((item) => item.id === 1).reason, /existing booking/);
+    assert.ok(historicalStaffAvailability.data.unavailableTherapists.some((item) => item.id === 3));
+    cookie = '';
+    const publicDiagnostics = await request('available-therapists', null, {
+      method: 'GET', query: { date: noticeDate, branchId: '1', time: '01:00 PM', durationMinutes: '120' },
+    });
+    assert.equal(publicDiagnostics.data.unavailableTherapists, undefined, 'Public requests must not expose staff diagnostic details');
+    assert.deepEqual(publicDiagnostics.data.therapistIds, [], 'Customer rules still hide 1 PM at 6 PM');
     now = Date.parse('2026-10-13T15:13:00Z');
     cookie = '';
     const summerAvailability = await request('available-therapists', null, {

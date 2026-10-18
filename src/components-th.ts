@@ -1,4 +1,12 @@
 export const componentThai: Record<string, string> = {
+  'Your dashboard session has expired. Sign in again to check staff appointment availability.': 'เซสชันแดชบอร์ดหมดอายุ กรุณาเข้าสู่ระบบอีกครั้งเพื่อตรวจสอบเวลาว่างสำหรับการจองของเจ้าหน้าที่',
+  'Why is a therapist unavailable?': 'เหตุใดผู้ให้บริการจึงไม่ว่าง?',
+  'This service requires RMT certification.': 'บริการนี้ต้องใช้ผู้ให้บริการที่มีใบรับรอง RMT',
+  'Not working at this branch on this date.': 'ไม่ได้ทำงานที่สาขานี้ในวันที่เลือก',
+  'The full appointment does not fit within the saved shift.': 'ระยะเวลานัดหมายทั้งหมดอยู่นอกช่วงเวลาทำงานที่บันทึกไว้',
+  'The branch has a closure during this appointment.': 'สาขาปิดในช่วงเวลานัดหมายนี้',
+  'Time off overlaps this appointment.': 'เวลาลาหรือพักทับซ้อนกับนัดหมายนี้',
+  'An existing booking or calendar event overlaps this appointment, including the appointment gap.': 'การจองหรือกิจกรรมในปฏิทินที่มีอยู่ทับซ้อนกับนัดหมายนี้ รวมช่วงพักระหว่างนัดหมาย',
   'Therapist availability': 'เวลาว่างของผู้ให้บริการ',
   'Therapist availability was saved for this date.': 'บันทึกเวลาว่างของผู้ให้บริการสำหรับวันที่นี้แล้ว',
   'Changes affect the selected date only and are saved to Work schedule.': 'การเปลี่ยนแปลงมีผลเฉพาะวันที่เลือกและบันทึกลงในตารางงาน',

@@ -231,10 +231,12 @@ export function useBookingSlotAvailability({ branchId, date, times, durationMinu
 
 export default function useTherapistAvailability({ branchId, date, time, durationMinutes, isRmt, excludeBookingId }: AvailabilityRequest) {
   const [therapistIds, setTherapistIds] = useState<Set<string>>(() => new Set());
+  const [unavailableTherapists, setUnavailableTherapists] = useState<Array<{ id: string | number; name: string; reason: string }>>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
+    setUnavailableTherapists([]);
     if (!branchId || !date || !time || !Number.isInteger(durationMinutes) || durationMinutes <= 0) {
       setTherapistIds(new Set());
       setLoading(false);
@@ -248,6 +250,7 @@ export default function useTherapistAvailability({ branchId, date, time, duratio
       time,
       durationMinutes: String(durationMinutes),
       isRmt: String(isRmt),
+      staffBooking: 'true',
     });
     if (excludeBookingId) query.set('excludeBookingId', excludeBookingId);
     setTherapistIds(new Set());
@@ -260,7 +263,16 @@ export default function useTherapistAvailability({ branchId, date, time, duratio
         if (!Array.isArray(data.therapistIds) || !data.therapistIds.every((id: unknown) => typeof id === 'string' || typeof id === 'number')) {
           throw new Error('Therapist availability could not be verified. Refresh and try again.');
         }
-        if (!controller.signal.aborted) setTherapistIds(new Set(data.therapistIds.map(String)));
+        if (data.unavailableTherapists !== undefined && (!Array.isArray(data.unavailableTherapists) ||
+            !data.unavailableTherapists.every((item: { id?: unknown; name?: unknown; reason?: unknown } | null) =>
+              item && (typeof item.id === 'string' || typeof item.id === 'number') &&
+              typeof item.name === 'string' && typeof item.reason === 'string'))) {
+          throw new Error('Therapist availability could not be verified. Refresh and try again.');
+        }
+        if (!controller.signal.aborted) {
+          setTherapistIds(new Set(data.therapistIds.map(String)));
+          setUnavailableTherapists(data.unavailableTherapists ?? []);
+        }
       })
       .catch((requestError: unknown) => {
         if (!controller.signal.aborted) {
@@ -273,5 +285,5 @@ export default function useTherapistAvailability({ branchId, date, time, duratio
     return () => controller.abort();
   }, [branchId, date, time, durationMinutes, isRmt, excludeBookingId]);
 
-  return { therapistIds, loading, error };
+  return { therapistIds, unavailableTherapists, loading, error };
 }
