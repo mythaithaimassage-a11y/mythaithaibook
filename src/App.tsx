@@ -5552,9 +5552,13 @@ function AdminPortal({
     () => bookings.filter((booking) => !selectedBranchName || booking.branchName === selectedBranchName),
     [bookings, selectedBranchName],
   );
+  const bookingListDateParts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Toronto', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(new Date()).map(({ type, value }) => [type, value]));
+  const bookingListToday = `${bookingListDateParts.year}-${bookingListDateParts.month}-${bookingListDateParts.day}`;
   const scheduleBookings = useMemo(
-    () => dashboardBookings.filter((booking) => matchesAppointment(booking, scheduleSearch)),
-    [dashboardBookings, scheduleSearch],
+    () => dashboardBookings.filter((booking) => booking.date >= bookingListToday && matchesAppointment(booking, scheduleSearch)),
+    [dashboardBookings, bookingListToday, scheduleSearch],
   );
   const dashboardTherapists = useMemo(
     () => therapists.filter((therapist) => {
@@ -6354,15 +6358,11 @@ function AdminPortal({
     return !search || (event.booking && matchesAppointment(event.booking, search)) || [event.summary, event.therapistName, event.location]
       .some((value) => String(value || '').toLowerCase().includes(search));
   });
-  const agendaDateParts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'America/Toronto', year: 'numeric', month: '2-digit', day: '2-digit',
-  }).formatToParts(new Date()).map(({ type, value }) => [type, value]));
-  const agendaToday = `${agendaDateParts.year}-${agendaDateParts.month}-${agendaDateParts.day}`;
   const agendaBookings = filterCoupleCalendarEvents(
     bookings.map((booking) => ({ booking, isCouple: /couple/i.test(booking.serviceName) })),
     calendarCoupleFilter,
   ).map((event) => event.booking).filter((booking) =>
-    booking.date >= agendaToday &&
+    booking.date >= bookingListToday &&
     (!calendarBranchDetails || [calendarBranchDetails.name, calendarBranchDetails.address].includes(booking.branchName)) &&
     (!calendarTherapistName || getAssignedTherapistNames(booking.therapistName, therapists).includes(calendarTherapistName)) &&
     matchesAppointment(booking, calendarSearch));
@@ -7141,7 +7141,7 @@ function AdminPortal({
               {tr(deleteBookingError)}
             </div>
           )}
-          <AppointmentList bookings={scheduleBookings} onOpen={openAppointmentDetails} onEdit={openBookingEditor}
+          <AppointmentList bookings={scheduleBookings} defaultOrder="asc" onOpen={openAppointmentDetails} onEdit={openBookingEditor}
             onDelete={dashboardUser.role === 'owner' ? deleteBooking : undefined} deletingId={deletingBookingId} loading={isLoadingBookings} />
           {dashboardUser.role === 'owner' && <details className="rounded-xl border border-slate-200 text-xs text-slate-500">
             <summary className="cursor-pointer px-4 py-3 font-semibold">{tr("Booking history tools")}</summary>

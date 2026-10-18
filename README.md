@@ -257,7 +257,10 @@ shown in the details rather than hiding a successful cancellation.
 **Schedule & Bookings** has a search field for customer names, booking
 references, contact details, services, therapists, branches, dates and team notes.
 Appointments are grouped by date beside a compact left-hand date rail, with
-time-ordered cards and a newest/oldest date-order control. Edit, appointment
+time-ordered cards and a newest/oldest date-order control. The Home list defaults
+to oldest first and only shows today and future dates in Toronto time, including
+earlier appointments today. Historical dates stay hidden when searching or
+changing sort order; branch filtering still applies. Edit, appointment
 details and owner-only delete use labelled, touch-sized icon buttons. Full
 references and notes remain available in appointment details; history-clearing
 tools are collapsed below the list.

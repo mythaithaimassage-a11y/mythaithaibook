@@ -111,7 +111,7 @@ let loadCalendar;
 const agendaExpressions = {};
 function visit(node) {
   if (ts.isVariableDeclaration(node) && node.name.getText(ast) === 'loadCalendar') loadCalendar = node.initializer.getText(ast);
-  if (ts.isVariableDeclaration(node) && ['agendaDateParts', 'agendaToday', 'agendaBookings'].includes(node.name.getText(ast))) {
+  if (ts.isVariableDeclaration(node) && ['bookingListDateParts', 'bookingListToday', 'agendaBookings', 'dashboardBookings', 'scheduleBookings'].includes(node.name.getText(ast))) {
     agendaExpressions[node.name.getText(ast)] = node.initializer.getText(ast);
   }
   ts.forEachChild(node, visit);
@@ -139,8 +139,8 @@ test('Agenda includes all of today and future dates in Toronto, excludes history
       ...changes,
     };
     return vm.runInNewContext(
-      `const agendaDateParts = ${agendaExpressions.agendaDateParts};
-       const agendaToday = ${agendaExpressions.agendaToday};
+      `const bookingListDateParts = ${agendaExpressions.bookingListDateParts};
+       const bookingListToday = ${agendaExpressions.bookingListToday};
        ${agendaExpressions.agendaBookings}`, context,
     );
   };
@@ -157,6 +157,44 @@ test('Agenda includes all of today and future dates in Toronto, excludes history
   assert.deepEqual(Array.from(evaluate('2026-10-19T02:00:00Z', { calendarSearch: '2026-10-17' })), [],
     'Searching must not bring historical bookings back into Agenda');
   assert.match(appSource, /<AppointmentList bookings=\{agendaBookings\} defaultOrder="asc"/);
+  assert.match(render({ bookings: visible, defaultOrder: 'asc' }), /value="asc" selected="">Oldest first/);
+});
+
+test('Home defaults to oldest first, includes today onward in Toronto, and preserves branch and search filters', () => {
+  const entries = [
+    { ...booking, id: 'past', date: '2026-10-17' },
+    { ...booking, id: 'early', date: '2026-10-18', time: '09:00 AM' },
+    { ...booking, id: 'late', date: '2026-10-18', time: '07:00 PM' },
+    { ...booking, id: 'tomorrow', date: '2026-10-19' },
+    { ...booking, id: 'future', date: '2028-01-01' },
+    { ...booking, id: 'other', date: '2026-10-19', branchName: 'Other' },
+    { ...booking, id: 'undated', date: '' },
+  ];
+  const evaluate = (instant, changes = {}) => vm.runInNewContext(
+    `const bookingListDateParts = ${agendaExpressions.bookingListDateParts};
+     const bookingListToday = ${agendaExpressions.bookingListToday};
+     const dashboardBookings = ${agendaExpressions.dashboardBookings};
+     ${agendaExpressions.scheduleBookings}`,
+    {
+      Date: class extends Date { constructor() { super(instant); } },
+      useMemo: (fn) => fn(), bookings: entries, selectedBranchName: 'Central',
+      scheduleSearch: '', matchesAppointment, ...changes,
+    },
+  );
+  const visible = evaluate('2026-10-19T02:00:00Z');
+  assert.deepEqual(Array.from(visible, ({ id }) => id), ['early', 'late', 'tomorrow', 'future']);
+  for (const order of ['asc', 'desc']) {
+    const dates = Array.from(groupAppointments(visible, order), ({ date }) => date);
+    assert.deepEqual(dates, order === 'asc'
+      ? ['2026-10-18', '2026-10-19', '2028-01-01']
+      : ['2028-01-01', '2026-10-19', '2026-10-18']);
+  }
+  assert.deepEqual(Array.from(evaluate('2026-10-19T04:00:00Z'), ({ id }) => id), ['tomorrow', 'future']);
+  assert.deepEqual(Array.from(evaluate('2026-10-19T02:00:00Z', { scheduleSearch: '2028' }), ({ id }) => id), ['future']);
+  assert.equal(evaluate('2026-10-19T02:00:00Z', { scheduleSearch: '2026-10-17' }).length, 0);
+  assert.deepEqual(Array.from(evaluate('2026-10-19T02:00:00Z', { selectedBranchName: 'Other' }), ({ id }) => id), ['other']);
+  assert.equal(evaluate('2026-10-19T02:00:00Z', { selectedBranchName: '' }).length, 5);
+  assert.match(appSource, /<AppointmentList bookings=\{scheduleBookings\} defaultOrder="asc"/);
   assert.match(render({ bookings: visible, defaultOrder: 'asc' }), /value="asc" selected="">Oldest first/);
 });
 
