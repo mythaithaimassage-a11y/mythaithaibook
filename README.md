@@ -244,8 +244,10 @@ details and owner-only delete use labelled, touch-sized icon buttons. Full
 references and notes remain available in appointment details; history-clearing
 tools are collapsed below the list.
 
-**Agenda** shows all saved booking dates, not just the calendar's selected day,
-using the same date-grouped cards in oldest-first order. Branch, therapist,
+**Agenda** shows saved bookings from today onward in the clinic's Toronto time
+zone, not just the calendar's selected day. Historical dates are excluded in
+both sort directions, with oldest-first as the default. All appointments today
+remain visible, including earlier times. Branch, therapist,
 couple and search filters still apply. The date picker, previous/next-day
 controls and day-swipe navigation are disabled in Agenda.
 Refresh and auto-refresh reload the branch-authorized booking list. Daily and

@@ -6351,10 +6351,15 @@ function AdminPortal({
     return !search || (event.booking && matchesAppointment(event.booking, search)) || [event.summary, event.therapistName, event.location]
       .some((value) => String(value || '').toLowerCase().includes(search));
   });
+  const agendaDateParts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Toronto', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(new Date()).map(({ type, value }) => [type, value]));
+  const agendaToday = `${agendaDateParts.year}-${agendaDateParts.month}-${agendaDateParts.day}`;
   const agendaBookings = filterCoupleCalendarEvents(
     bookings.map((booking) => ({ booking, isCouple: /couple/i.test(booking.serviceName) })),
     calendarCoupleFilter,
   ).map((event) => event.booking).filter((booking) =>
+    booking.date >= agendaToday &&
     (!calendarBranchDetails || [calendarBranchDetails.name, calendarBranchDetails.address].includes(booking.branchName)) &&
     (!calendarTherapistName || getAssignedTherapistNames(booking.therapistName, therapists).includes(calendarTherapistName)) &&
     matchesAppointment(booking, calendarSearch));

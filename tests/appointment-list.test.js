@@ -100,11 +100,57 @@ test('card icon actions invoke their original callbacks and date order can be ch
 const appSource = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
 const ast = ts.createSourceFile('App.tsx', appSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 let loadCalendar;
+const agendaExpressions = {};
 function visit(node) {
   if (ts.isVariableDeclaration(node) && node.name.getText(ast) === 'loadCalendar') loadCalendar = node.initializer.getText(ast);
+  if (ts.isVariableDeclaration(node) && ['agendaDateParts', 'agendaToday', 'agendaBookings'].includes(node.name.getText(ast))) {
+    agendaExpressions[node.name.getText(ast)] = node.initializer.getText(ast);
+  }
   ts.forEachChild(node, visit);
 }
 visit(ast);
+
+test('Agenda includes all of today and future dates in Toronto, excludes history in either sort, and preserves filters', () => {
+  const entries = [
+    { ...booking, id: 'past', date: '2026-10-17' },
+    { ...booking, id: 'today-early', date: '2026-10-18', time: '10:00 AM' },
+    { ...booking, id: 'today-late', date: '2026-10-18', time: '07:00 PM' },
+    { ...booking, id: 'tomorrow', date: '2026-10-19' },
+    { ...booking, id: 'far-future', date: '2028-01-01' },
+    { ...booking, id: 'other-branch', date: '2026-10-19', branchName: 'Other' },
+    { ...booking, id: 'other-therapist', date: '2026-10-19', therapistName: 'Other' },
+    { ...booking, id: 'no-date', date: '' },
+  ];
+  const evaluate = (instant, changes = {}) => {
+    const context = {
+      Date: class extends Date { constructor() { super(instant); } },
+      bookings: entries, calendarCoupleFilter: 'all', calendarBranchDetails: { name: 'Central', address: 'Central address' },
+      calendarTherapistName: 'Tanya', therapists: [], calendarSearch: '',
+      filterCoupleCalendarEvents: (events) => events,
+      getAssignedTherapistNames: (name) => [name], matchesAppointment,
+      ...changes,
+    };
+    return vm.runInNewContext(
+      `const agendaDateParts = ${agendaExpressions.agendaDateParts};
+       const agendaToday = ${agendaExpressions.agendaToday};
+       ${agendaExpressions.agendaBookings}`, context,
+    );
+  };
+  const visible = evaluate('2026-10-19T02:00:00Z');
+  assert.deepEqual(Array.from(visible, (item) => item.id), ['today-early', 'today-late', 'tomorrow', 'far-future'],
+    'UTC is already tomorrow, but Toronto is still today; keep earlier appointments today');
+  for (const order of ['asc', 'desc']) {
+    assert.deepEqual(Array.from(groupAppointments(visible, order), (group) => group.date),
+      order === 'asc' ? ['2026-10-18', '2026-10-19', '2028-01-01'] : ['2028-01-01', '2026-10-19', '2026-10-18']);
+  }
+  assert.deepEqual(Array.from(evaluate('2026-10-19T04:00:00Z'), (item) => item.id), ['tomorrow', 'far-future'],
+    'The cutoff advances at Toronto midnight');
+  assert.deepEqual(Array.from(evaluate('2026-10-19T02:00:00Z', { calendarSearch: '2028' }), (item) => item.id), ['far-future']);
+  assert.deepEqual(Array.from(evaluate('2026-10-19T02:00:00Z', { calendarSearch: '2026-10-17' })), [],
+    'Searching must not bring historical bookings back into Agenda');
+  assert.match(appSource, /<AppointmentList bookings=\{agendaBookings\} defaultOrder="asc"/);
+  assert.match(render({ bookings: visible, defaultOrder: 'asc' }), /value="asc" selected="">Oldest first/);
+});
 
 test('agenda refresh requests all authorized bookings without a date filter and reports API errors', async () => {
   for (const ok of [true, false]) {
