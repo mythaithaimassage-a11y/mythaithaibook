@@ -1231,6 +1231,43 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   assert.equal(listing.data.bookings.find((record) => record.id === editable.booking_id).total, 113);
   assert.equal(listing.data.bookings.find((record) => record.id === editable.booking_id).intakeNotes, undefined);
 
+  const extraShiftDate = '2099-01-02';
+  const extraShiftAvailability = (time = '01:00 PM') => request('available-therapists', null, {
+    method: 'GET',
+    query: { date: extraShiftDate, branchId: '1', time, durationMinutes: '120', isRmt: 'false' },
+  });
+  assert.ok(!(await extraShiftAvailability()).data.therapistIds.includes(3),
+    'A therapist outside the weekly branch schedule needs a date-specific shift');
+  scheduleRows.push([3, extraShiftDate, 1, 'TRUE', '13:00', '17:00', 'owner@example.com', 'test']);
+  serviceRows.push([6, 'Thai Traditional Massage (2 hr)', 'Thai', 120, 100, 10, 'FALSE', 0.13, '', 'TRUE']);
+  assert.ok((await extraShiftAvailability()).data.therapistIds.includes(3),
+    'A date-specific shift makes the therapist available at the selected branch');
+  assert.ok(!(await extraShiftAvailability('04:00 PM')).data.therapistIds.includes(3),
+    'The full two-hour service must fit inside the date-specific shift');
+  const extraShiftBooking = await request('manual-booking', {
+    ...manual, date: extraShiftDate, time: '01:00 PM', serviceId: '6', therapistId: '3',
+  });
+  assert.equal(extraShiftBooking.code, 200, JSON.stringify(extraShiftBooking.data));
+  const extraShiftRecord = records.find((record) => record.booking_id === extraShiftBooking.data.bookingId);
+  const extraShiftEdit = () => ({
+    ...editBody(), bookingId: extraShiftRecord.booking_id,
+    expectedVersion: bookingEditVersion(BOOKING_TABLE_FIELDS.map((field) => extraShiftRecord[field.name])),
+    date: extraShiftDate, time: '03:00 PM', serviceId: '6', therapistNames: ['Off Duty'],
+  });
+  const editedExtraShift = await request('edit-booking', extraShiftEdit());
+  assert.equal(editedExtraShift.code, 200, JSON.stringify(editedExtraShift.data));
+  for (const therapistName of ['Test Therapist', 'Off Duty']) {
+    const reassignment = await request('reassign-therapist', {
+      bookingId: extraShiftRecord.booking_id, therapistName,
+    });
+    assert.equal(reassignment.code, 200, JSON.stringify(reassignment.data));
+  }
+  scheduleRows.pop();
+  assert.equal((await request('edit-booking', { ...extraShiftEdit(), time: '01:00 PM' })).code, 400,
+    'Removing the extra shift restores the regular weekly schedule restrictions');
+  serviceRows.pop();
+  records.splice(records.indexOf(extraShiftRecord), 1);
+
   cookie = ownerCookie;
   const hours = defaultBusinessHours();
   hours.sun = { open: '08:00', close: '22:00', closed: false };

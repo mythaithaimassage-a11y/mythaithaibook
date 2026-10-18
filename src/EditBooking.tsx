@@ -17,7 +17,7 @@ type Service = { id: number; name: string; price: number; duration: number; taxR
 type Therapist = { id: number; name: string; active?: boolean; rmtCertified?: boolean };
 type Props = {
   booking: EditableBooking; services: Service[]; therapists: Therapist[];
-  times: string[]; isScheduled: (therapist: Therapist, date: string) => boolean;
+  times: string[];
   branchId?: number | string;
   branch?: { businessHours?: WeeklyBusinessHours };
   onClose: () => void; onSaved: (booking: EditableBooking, notification?: { emailSent: boolean; emailError?: string }) => Promise<void>;
@@ -50,7 +50,7 @@ export function parseCoupleCustomerNames(combinedName: string): { person1: strin
   return { person1: text, person2: '' };
 }
 
-export default function EditBooking({ booking, services, therapists, times, branch, branchId, isScheduled, onClose, onSaved }: Props) {
+export default function EditBooking({ booking, services, therapists, times, branch, branchId, onClose, onSaved }: Props) {
   const { translate: tr, formatTime } = useTranslation();
   const hotStoneAddOnService = services.find((item) => /hot stone add-?on/i.test(item.name)) || null;
   const bookedBaseService = services.find((item) => {
@@ -112,7 +112,7 @@ export default function EditBooking({ booking, services, therapists, times, bran
     .filter(Boolean);
   const schedulingChanged = form.date !== booking.date || form.time !== booking.time || serviceName !== booking.serviceName ||
     selectedTherapistNames.join(', ') !== currentAssignedTherapistNames.join(', ');
-  const eligible = therapists.filter((item) => item.active !== false && isScheduled(item, form.date) &&
+  const eligible = therapists.filter((item) => item.active !== false &&
     (!service?.isRmt || item.rmtCertified) && availability.therapistIds.has(String(item.id)));
   const choices = therapists.filter((item) => eligible.includes(item) || (assigned.includes(item) && !schedulingChanged));
   const discountChanged = !locked && (Number(form.manualDiscount) !== (booking.manualBookingDiscount || 0) ||

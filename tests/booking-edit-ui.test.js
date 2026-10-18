@@ -14,7 +14,7 @@ const booking = { id: 'MTT-EDIT', customerName: 'Customer name', email: 'client@
   paymentOption: 'Card', total: 113, paidAmount: 0, bookingNote: 'Internal reference', editVersion: 'version-1' };
 const props = { booking, services: [{ id: 1, name: 'Massage', duration: 60, price: 100, taxRate: .13 }],
   therapists: [{ id: 1, name: 'Tanya', active: true }], times: ['10:00 AM', '11:00 AM'],
-  isScheduled: () => true, onClose() {}, async onSaved() {} };
+  onClose() {}, async onSaved() {} };
 const render = (language, changes = {}) => renderToStaticMarkup(React.createElement(LanguageProvider, { language },
   React.createElement(EditBooking, { ...props, ...changes })));
 test('editor translates its fields while preserving contacts, notes and canonical time values', () => {
@@ -200,7 +200,6 @@ test('editor supports couple massage with Person 1, Guest 2, and dual therapist 
       { id: 3, name: 'SARAH', active: true },
     ],
     times: ['10:00 AM', '11:00 AM'],
-    isScheduled: () => true,
     onClose() {},
     async onSaved() {},
   };
@@ -233,4 +232,23 @@ test('editor supports couple massage with Person 1, Guest 2, and dual therapist 
   const parsed4 = parseCoupleCustomerNames('Single Person');
   assert.equal(parsed4.person1, 'Single Person');
   assert.equal(parsed4.person2, '');
+});
+
+test('editor offers date-specific available therapists regardless of their regular weekly branch', () => {
+  const loadAvailableEditor = createTsLoader({
+    './useTherapistAvailability': { __esModule: true, default: () => ({
+      therapistIds: new Set(['2']), loading: false, error: '',
+    }) },
+  });
+  const AvailableEditor = loadAvailableEditor(editorPath).default;
+  const html = renderToStaticMarkup(React.createElement(AvailableEditor, {
+    ...props, branchId: 2,
+    therapists: [
+      ...props.therapists,
+      { id: 2, name: 'Extra shift therapist', active: true, branches: [1], schedule: { tue: 1 } },
+      { id: 3, name: 'Unavailable therapist', active: true, branches: [2] },
+    ],
+  }));
+  assert.match(html, /value="Extra shift therapist">Extra shift therapist/);
+  assert.doesNotMatch(html, /Unavailable therapist/);
 });

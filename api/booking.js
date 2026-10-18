@@ -8854,7 +8854,7 @@ export default async function handler(req, res) {
         const startTime = time24FromMinutes(appointmentTimeMinutes(normalizeBookingTime(edited.time)));
         if (therapistNames.some((name) => {
           const therapist = therapists.find((item) => item.name === name && item.active !== false &&
-            isTherapistScheduledAtBranch(item, branch.id, edited.date) && (!service.isRmt || item.rmtCertified));
+            (!service.isRmt || item.rmtCertified));
           return !therapist || !shiftCoversAppointment(
             therapistShiftForDate(therapist, branch.id, edited.date, overrides), edited.date, startTime, durationMinutes,
           );
@@ -10071,7 +10071,8 @@ export default async function handler(req, res) {
         const startTime = time24FromMinutes(appointmentTimeMinutes(normalizeBookingTime(time)));
         if (!service || realNames.some((name) => {
           const therapist = therapists.find((item) => item.name === name && item.active !== false &&
-            isTherapistScheduledAtBranch(item, branch.id, date) && (!service.isRmt || item.rmtCertified));
+            (!service.isRmt || item.rmtCertified) &&
+            (!isCompletedAppointment || isTherapistScheduledAtBranch(item, branch.id, date)));
           return !therapist || (!isCompletedAppointment && !shiftCoversAppointment(
             therapistShiftForDate(therapist, branch.id, date, overrides), date, startTime, durationMinutes,
           ));

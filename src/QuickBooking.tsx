@@ -18,7 +18,6 @@ type Props = {
   branchId: string;
   therapistId: string;
   time?: string;
-  isScheduled: (therapist: Therapist, branchId: string, date: string) => boolean;
   onClose: () => void;
   onSaved: (appointment: { date: string; branchId: string; therapistId: string; notice: string | TranslationMessage }) => Promise<void>;
 };
@@ -60,7 +59,7 @@ export default function QuickBooking(props: Props) {
     branchId, date, time: validTime, durationMinutes: service?.duration ?? 60, isRmt: Boolean(service?.isRmt),
   });
   const therapists = props.therapists.filter((item) => item.active !== false
-    && props.isScheduled(item, branchId, date) && (!service?.isRmt || item.rmtCertified)
+    && (!service?.isRmt || item.rmtCertified)
     && availability.therapistIds.has(String(item.id)));
   const validTherapistId = therapists.some((item) => String(item.id) === therapistId) ? therapistId : '';
   const validTherapistId2 = therapists.some((item) => String(item.id) === therapistId2 && String(item.id) !== validTherapistId) ? therapistId2 : '';

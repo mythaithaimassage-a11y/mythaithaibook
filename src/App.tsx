@@ -7533,7 +7533,6 @@ function AdminPortal({
         times={AVAILABLE_TIMES}
         branch={branches.find((branch) => branch.name === editingBooking.branchName || branch.address === editingBooking.branchName)}
         branchId={branches.find((branch) => branch.name === editingBooking.branchName || branch.address === editingBooking.branchName)?.id}
-        isScheduled={(therapist, date) => isTherapistScheduledAtBranch(therapist, branches.find((branch) => branch.name === editingBooking.branchName || branch.address === editingBooking.branchName)?.id, date)}
         onClose={() => setEditingBooking(null)}
         onSaved={async (booking, notification) => {
           setBookings((current) => current.map((item) => item.id === booking.id ? { ...item, ...booking } : item));
@@ -7555,7 +7554,6 @@ function AdminPortal({
         services={services}
         therapists={therapists}
         times={AVAILABLE_TIMES}
-        isScheduled={isTherapistScheduledAtBranch}
         onClose={() => setQuickBooking(null)}
         onSaved={async ({ date, branchId, therapistId, notice }) => {
           setQuickBooking(null);

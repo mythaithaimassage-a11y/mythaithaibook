@@ -130,6 +130,9 @@ schedule shortcut opens the selected branch and month; opening it from the
 availability modal preserves that modal's chosen date/branch. Branch staff
 retain their assigned-branch restrictions. Native fullscreen exits before
 navigating to Work schedule; closing availability keeps the calendar expanded.
+Quick appointment and booking-edit therapist choices use the saved date-specific
+shifts, even when they differ from the regular weekly branch schedule. Therapists
+must be available for the full service duration, including conflict and break checks.
 
 In **Business profile**, **Minimum booking notice (minutes)** controls how far
 ahead customers must book (default: 15 minutes; whole minutes from 0 to 1440).

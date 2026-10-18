@@ -20,7 +20,7 @@ const loadTs = createTsLoader();
 const requireWithLocalization = (specifier) => {
   if (specifier === './localization') return loadTs(new URL('../src/localization.tsx', import.meta.url).pathname);
   if (specifier === './useTherapistAvailability') return { __esModule: true, default: () => ({
-    therapistIds: new Set(['1', '2', '3', '4']), loading: false, error: '',
+    therapistIds: new Set(['1', '3', '4']), loading: false, error: '',
   }) };
   return createRequire(import.meta.url)(specifier);
 };
@@ -38,7 +38,6 @@ const props = {
   ],
   times: AVAILABLE_TIMES,
   date: '2026-11-01', branchId: '2', therapistId: '1', time: '02:15 PM',
-  isScheduled: (therapist, branchId, date) => therapist.id !== 2 && branchId === '2' && date === '2026-11-01',
   onClose: () => {},
   onSaved: async () => {},
 };
@@ -78,7 +77,7 @@ function customerHarness(fetch, overrides = {}) {
         message: (key, values) => ({ key, values }),
       };
       if (specifier === './useTherapistAvailability') return { __esModule: true, default: () => ({
-        therapistIds: new Set(['1', '2', '3', '4']), loading: false, error: '',
+        therapistIds: new Set(['1', '3', '4']), loading: false, error: '',
       }) };
       return createRequire(import.meta.url)(specifier);
     },
@@ -226,6 +225,30 @@ test('quick booking renders separate email and phone fields, therapist and time 
   for (const time of AVAILABLE_TIMES) assert.ok(html.includes(time), `Missing time ${time}`);
 });
 
+test('date-specific availability allows a therapist outside her regular weekly branch schedule', async () => {
+  const requests = [];
+  const ui = customerHarness(async (url, options) => {
+    requests.push({ url, options });
+    return { ok: true, json: async () => ({ bookingId: 'override-booking', emailSkipped: true }) };
+  }, {
+    date: '2026-10-18', branchId: '2', time: '01:00 PM',
+    services: [{ id: 1, name: 'Thai Traditional Massage (2 hr)', duration: 120 }],
+    therapists: [{ id: 1, name: 'Extra shift therapist', branches: [1], schedule: { sun: 1 } }],
+  });
+  const html = renderToStaticMarkup(ui.render());
+  assert.match(html, /value="1" selected="">Extra shift therapist/);
+  assert.doesNotMatch(html, /No eligible therapists/);
+  ui.input().props.onChange({ target: { value: 'Test Client' } });
+  ui.find((node) => node.props.type === 'tel').props.onChange({ target: { value: '437-898-7424' } });
+  assert.equal(ui.find((node) => node.type === 'button' && node.props.type === 'submit').props.disabled, false);
+  await ui.find((node) => node.type === 'form').props.onSubmit({ preventDefault() {} });
+  const payload = JSON.parse(requests.at(-1).options.body);
+  assert.equal(payload.therapistId, '1');
+  assert.equal(payload.branchId, '2');
+  assert.equal(payload.date, '2026-10-18');
+  assert.equal(payload.time, '01:00 PM');
+});
+
 test('either contact field satisfies the requirement; both are accepted and validated when present', async () => {
   for (const [email, phone] of [
     ['', ''], ['client@example.com', ''], ['', '437-898-7424'],
@@ -345,8 +368,8 @@ test('couple booking reports missing packages and insufficient simultaneous ther
   assert.match(insufficientStaff, /<button type="submit" disabled=""/);
 });
 
-test('an empty scheduled roster displays an explicit error and disables booking', () => {
-  const html = render({ isScheduled: () => false });
+test('a roster with no available therapists displays an explicit error and disables booking', () => {
+  const html = render({ therapists: [props.therapists[1]] });
   assert.match(html, /role="alert"[^>]*>No eligible therapists/);
   assert.match(html, /<button type="submit" disabled=""/);
 });
