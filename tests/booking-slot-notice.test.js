@@ -59,7 +59,7 @@ function availabilityHarness(data, staff = false, ok = true) {
 
 test('staff availability explicitly identifies staff requests and preserves exclusion reasons', async () => {
   const unavailableTherapists = [{
-    id: 5, name: 'TANYA', reason: 'An existing booking or calendar event overlaps this appointment, including the appointment gap.',
+    id: 5, name: 'TANYA', reason: 'An existing booking or calendar event overlaps this appointment.',
     conflicts: [{ source: 'booking', reference: 'stale-booking', date: '2026-10-18', time: '03:00 PM', durationMinutes: 120 }],
   }];
   const ui = availabilityHarness({ therapistIds: [1, 2, 3, 4, 6], unavailableTherapists }, true);

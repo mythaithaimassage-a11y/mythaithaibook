@@ -6512,7 +6512,7 @@ export default async function handler(req, res) {
         bqFetchBookingRows(getBigQueryClient()),
         getBusinessProfile(sheets),
       ]);
-      const appointmentGapMinutes = therapistBufferMinutes(profile);
+      const appointmentGapMinutes = staffBooking && !publicBooking ? 0 : therapistBufferMinutes(profile);
       const noticeMinutes = minimumBookingNoticeMinutes(profile);
       const availabilityNow = Date.now();
       const bookingCutoffsByTime = {};
@@ -6646,7 +6646,7 @@ export default async function handler(req, res) {
                   : businessBlocked ? 'The branch has a closure during this appointment.'
                     : unavailability.some((block) => block.scope === 'therapist' && block.therapistName === therapist.name)
                       ? 'Time off overlaps this appointment.'
-                      : busyNames.has(therapist.name) ? 'An existing booking or calendar event overlaps this appointment, including the appointment gap.'
+                      : busyNames.has(therapist.name) ? 'An existing booking or calendar event overlaps this appointment.'
                         : '';
             return reason ? [{
               id: therapist.id, name: therapist.name, reason,
@@ -9130,7 +9130,6 @@ export default async function handler(req, res) {
               (block.scope === 'therapist' && therapistNames.includes(block.therapistName)));
         });
         if (blocked) return res.status(409).json({ message: 'This time is unavailable. Choose another date, time or therapist.' });
-        const appointmentGapMinutes = therapistBufferMinutes(await getBusinessProfile(sheets));
         const dayEvents = [];
         for (const checkedCalendarId of new Set([calendarId, PRIMARY_CALENDAR_ID, ...(result.data.values || []).map((candidate) => candidate[15]).filter(Boolean)])) {
           let pageToken;
@@ -9144,8 +9143,8 @@ export default async function handler(req, res) {
           } while (pageToken);
         }
         const conflict = dayEvents.some((event) => isBlockingCalendarEvent(event, result.data.values || []) &&
-          hasTimeOverlapWithTherapistBuffer(startInstant, endInstant,
-            event.start?.dateTime || event.start?.date, event.end?.dateTime || event.end?.date, appointmentGapMinutes) &&
+          hasTimeOverlap(startInstant, endInstant,
+            event.start?.dateTime || event.start?.date, event.end?.dateTime || event.end?.date) &&
           therapistNames.some((name) => {
             const assigned = getTherapistFromDescription(event.description);
             return therapistAssignmentNames(assigned, therapists.map((therapist) => therapist.name)).includes(name);
@@ -9153,10 +9152,9 @@ export default async function handler(req, res) {
         const databaseConflict = (result.data.values || []).some((candidate) => candidate[0] !== bookingId && candidate[7] === edited.date &&
           !['Cancelled', 'No Show'].includes(candidate[24]) && therapistNames.some((name) =>
             therapistAssignmentNames(candidate[6], therapists.map((therapist) => therapist.name)).includes(name)) &&
-          hasTimeOverlapWithTherapistBuffer(startInstant, endInstant,
+          hasTimeOverlap(startInstant, endInstant,
             zonedBookingInstant(parseBookingDateTime(candidate[7], candidate[8]), CALENDAR_TIME_ZONE),
-            zonedBookingInstant(addMinutes(parseBookingDateTime(candidate[7], candidate[8]), Number(candidate[12]) || 60), CALENDAR_TIME_ZONE),
-            appointmentGapMinutes));
+            zonedBookingInstant(addMinutes(parseBookingDateTime(candidate[7], candidate[8]), Number(candidate[12]) || 60), CALENDAR_TIME_ZONE)));
         if (conflict) return res.status(409).json({ message: 'The selected therapist already has a Calendar appointment at or near this time.' });
         if (databaseConflict) return res.status(409).json({ message: 'The selected therapist already has a booking at or near this time.' });
       }
@@ -10321,7 +10319,6 @@ export default async function handler(req, res) {
       const endDateTime = addMinutes(startDateTime, durationMinutes);
       const startInstant = zonedBookingInstant(startDateTime, CALENDAR_TIME_ZONE);
       const endInstant = zonedBookingInstant(endDateTime, CALENDAR_TIME_ZONE);
-      const appointmentGapMinutes = therapistBufferMinutes(await getBusinessProfile(sheets));
       const isCompletedAppointment = row[24] === 'Completed' ||
         isAppointmentCompleteByTime(date, time, durationMinutes);
       // "Any Available" is a placeholder rather than a real person, so it is never
@@ -10361,12 +10358,11 @@ export default async function handler(req, res) {
             const candidateNames = therapistAssignmentNames(candidate[6], therapists.map((therapist) => therapist.name));
             if (!realNames.some((name) => candidateNames.includes(name))) return false;
             const candidateStart = parseBookingDateTime(candidate[7], candidate[8]);
-            return hasTimeOverlapWithTherapistBuffer(
+            return hasTimeOverlap(
               startInstant,
               endInstant,
               zonedBookingInstant(candidateStart, CALENDAR_TIME_ZONE),
               zonedBookingInstant(addMinutes(candidateStart, Number(candidate[12]) || 60), CALENDAR_TIME_ZONE),
-              appointmentGapMinutes,
             );
           });
           if (databaseConflict) {
@@ -10397,7 +10393,7 @@ export default async function handler(req, res) {
                 const eventStart = event.start?.dateTime || event.start?.date || '';
                 const eventEnd = event.end?.dateTime || event.end?.date || '';
                 return eventStart && eventEnd &&
-                  hasTimeOverlapWithTherapistBuffer(startInstant, endInstant, eventStart, eventEnd, appointmentGapMinutes);
+                  hasTimeOverlap(startInstant, endInstant, eventStart, eventEnd);
               })
               .flatMap((event) => therapistAssignmentNames(
                 getTherapistFromDescription(event.description), therapists.map((therapist) => therapist.name),
@@ -10695,7 +10691,7 @@ export default async function handler(req, res) {
     const endDateTime = addMinutes(startDateTime, durationMinutes);
     const startInstant = zonedBookingInstant(startDateTime, CALENDAR_TIME_ZONE);
     const endInstant = zonedBookingInstant(endDateTime, CALENDAR_TIME_ZONE);
-    const appointmentGapMinutes = therapistBufferMinutes(bookingProfile);
+    const appointmentGapMinutes = view === 'manual-booking' ? 0 : therapistBufferMinutes(bookingProfile);
 
     const unavailabilityBlocks = await getUnavailabilityBlocks(sheets);
     const overlappingBlocks = unavailabilityBlocks.filter((block) => blockOverlapsWindow(block, payload.date, startInstant, endInstant));

@@ -78,7 +78,10 @@ the primary calendar with `GOOGLE_PRIMARY_CALENDAR_ID`.
 
 Therapist schedule cards cover the entire start-to-end interval (including
 appointments that start between quarter-hour rows). The configured therapist
-buffer remains separate from the appointment itself.
+buffer applies only to public bookings and customer rescheduling. Owners,
+branch managers and receptionists can create, edit and reassign dashboard
+appointments back-to-back without a buffer. Actual appointment overlaps and
+explicit time-off/closure blocks remain prohibited.
 
 Quick appointments have separate **Email** and **Phone** fields. At least one
 is required; both may be provided, and each populated field must be valid.
@@ -178,7 +181,8 @@ marked as working at the branch that day can be booked or assigned by owners,
 managers and receptionists at any quarter-hour, outside their published shift or
 branch hours, including weekdays closed to public bookings. Visits must finish
 within the selected day. Off-days, qualifications, branch access, appointment
-conflicts, buffers and explicit time-off/closure blocks remain enforced.
+conflicts and explicit time-off/closure blocks remain enforced. The configured
+public-booking buffer does not restrict dashboard scheduling or next-slot searches.
 Public visibility does not hide working staff from dashboard assignment choices.
 Quick appointment includes **Why is a therapist unavailable?** with staff-only
 explanations for off-days, qualifications, closures, time off and booking
@@ -248,7 +252,7 @@ therapist legend can be expanded, and the calendar uses one vertical page
 scroll instead of a nested scrolling grid. The large workspace banner is
 collapsed under **Owner workspace**, and calendar totals use compact icon
 counters. Booking actions, appointment
-details, durations, overlaps, buffers, and desktop behavior remain unchanged.
+details, durations, overlaps, and desktop behavior remain unchanged.
 
 **Fit to screen** uses browser fullscreen when supported. On mobile browsers
 without that API (including iPhone browsers), it expands the calendar within

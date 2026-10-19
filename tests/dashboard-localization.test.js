@@ -211,7 +211,7 @@ test('business profile configures appointment gaps and the calendar offers thera
   assert.match(source, /calendarNextAvailability\?\.therapistId === 'any'/);
   assert.match(source, /therapistNames\.join\(', '\)/);
   assert.match(source, /No availability in the next 14 days/);
-  assert.match(source, /Buffer · \{value0\} min/);
+  assert.match(source, /Time reserved between public bookings only/);
 });
 
 test('dashboard calendar uses the working-day roster and full-day times for every booking role', () => {
@@ -236,6 +236,21 @@ test('dashboard calendar uses the working-day roster and full-day times for ever
     assert.match(daily, /aria-label="Add appointment at 09:00 PM"/);
     assert.match(daily, /aria-label="Add appointment at 11:00 PM"/);
   }
+});
+
+test('dashboard calendar does not reserve the public booking buffer for staff', () => {
+  const date = '2026-10-19';
+  const event = {
+    id: 'buffer-boundary', therapistName: 'Tanya', localTime: '10:00',
+    start: `${date}T10:00:00-04:00`, end: `${date}T11:00:00-04:00`, summary: 'Existing appointment',
+  };
+  const english = render('calendar', 'en', {
+    calendarDate: date, calendarViewMode: 'therapists', calendarEvents: [event],
+    businessProfile: { therapistBufferMinutes: '30' },
+  });
+  assert.match(english, /Public booking gaps do not restrict dashboard appointments/);
+  assert.doesNotMatch(english, /Buffer · 30 min|reserved automatically/);
+  assert.doesNotMatch(source, /const bufferEvent|const calendarGapMinutes/);
 });
 
 test('dashboard KPIs are scoped to sales, bookings and calendar context', () => {

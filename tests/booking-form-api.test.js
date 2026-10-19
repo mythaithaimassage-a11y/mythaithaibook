@@ -1412,6 +1412,83 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   serviceRows.pop();
   records.splice(records.indexOf(extraShiftRecord), 1);
 
+  await t.test('dashboard roles bypass public gaps but never overlap bookings or calendar events', async () => {
+    const date = '2099-01-05';
+    const previousCookie = cookie;
+    const previousBusyEvents = busyEvents;
+    cookie = ownerCookie;
+    const profile = await request('business-profile', null, { method: 'GET' });
+    assert.equal(Number(profile.data.profile.therapistBufferMinutes), 15);
+    for (const source of ['booking', 'calendar']) {
+      const anchor = { ...editable, booking_id: `buffer-anchor-${source}`, date, time: '10:00 AM',
+        therapist_name: 'Test Therapist', service_name: 'Massage', duration_minutes: 60,
+        status: 'Confirmed', calendar_event_id: '' };
+      if (source === 'booking') records.push(anchor);
+      busyEvents = source === 'calendar' ? [{
+        id: 'buffer-calendar-anchor', description: 'Therapist: Test Therapist',
+        start: { dateTime: `${date}T10:00:00-05:00` }, end: { dateTime: `${date}T11:00:00-05:00` },
+      }] : [];
+      for (const staffCookie of [ownerCookie, managerCookie, receptionistCookie]) {
+        cookie = staffCookie;
+        const availability = async (publicBooking) => request('available-therapists', null, {
+          method: 'GET', query: {
+            date, branchId: '1', durationMinutes: '60', staffBooking: 'true',
+            publicBooking: String(publicBooking),
+            times: JSON.stringify(['09:00 AM', '09:15 AM', '10:45 AM', '11:00 AM', '11:15 AM']),
+          },
+        });
+        const staffSlots = await availability(false);
+        assert.equal(staffSlots.code, 200, JSON.stringify(staffSlots.data));
+        for (const time of ['09:00 AM', '11:00 AM']) {
+          assert.ok(staffSlots.data.therapistIdsByTime[time].includes(1),
+            `${source}: staff can book immediately before or after an existing appointment`);
+        }
+        for (const time of ['09:15 AM', '10:45 AM']) {
+          assert.ok(!staffSlots.data.therapistIdsByTime[time].includes(1),
+            `${source}: actual overlaps remain unavailable to staff`);
+        }
+        const publicSlots = await availability(true);
+        assert.equal(publicSlots.code, 200, JSON.stringify(publicSlots.data));
+        assert.ok(!publicSlots.data.therapistIdsByTime['11:00 AM'].includes(1),
+          'A signed-in staff user cannot bypass public gaps in the customer portal');
+        assert.ok(publicSlots.data.therapistIdsByTime['11:15 AM'].includes(1));
+        const publicBooking = await request('', {
+          ...base, id: `public-buffer-${source}`, date, time: '11:00 AM', therapistName: 'Test Therapist',
+        });
+        assert.equal(publicBooking.code, 409, JSON.stringify(publicBooking.data));
+        const manualDetails = { ...manual, date, time: '11:00 AM', email: 'client@example.com', phone: manual.contact };
+        const created = await request('manual-booking', manualDetails);
+        assert.equal(created.code, 200, JSON.stringify(created.data));
+        const saved = records.find((record) => record.booking_id === created.data.bookingId);
+        assert.equal(saved.time, '11:00 AM');
+        const publicReschedule = await request('reschedule-booking', {
+          bookingId: saved.booking_id, email: saved.email, date, time: '11:00 AM',
+        });
+        assert.equal(publicReschedule.code, 409, JSON.stringify(publicReschedule.data));
+        const overlapping = await request('manual-booking', { ...manualDetails, time: '10:45 AM' });
+        assert.equal(overlapping.code, 409, JSON.stringify(overlapping.data));
+        const update = (time, therapistNames = ['Test Therapist']) => request('edit-booking', {
+          ...editBody(), bookingId: saved.booking_id,
+          expectedVersion: bookingEditVersion(BOOKING_TABLE_FIELDS.map((field) => saved[field.name])),
+          date, time, serviceId: '1', therapistNames, paidAmount: '0',
+        });
+        const edited = await update('09:00 AM');
+        assert.equal(edited.code, 200, JSON.stringify(edited.data));
+        assert.equal((await update('09:15 AM')).code, 409, 'Scheduling edits cannot overlap');
+        const reassign = (therapistName) => request('reassign-therapist', { bookingId: saved.booking_id, therapistName });
+        assert.equal((await reassign('Second Therapist')).code, 200);
+        const immediateAssignment = await reassign('Test Therapist');
+        assert.equal(immediateAssignment.code, 200, JSON.stringify(immediateAssignment.data));
+        assert.equal((await update('10:45 AM', ['Second Therapist'])).code, 200);
+        assert.equal((await reassign('Test Therapist')).code, 409, 'Reassignment cannot create an actual overlap');
+        records.splice(records.indexOf(saved), 1);
+      }
+      if (source === 'booking') records.splice(records.indexOf(anchor), 1);
+    }
+    busyEvents = previousBusyEvents;
+    cookie = previousCookie;
+  });
+
   cookie = ownerCookie;
   const hours = defaultBusinessHours();
   hours.sun = { open: '08:00', close: '22:00', closed: false };
@@ -1765,11 +1842,18 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
     now = Date.parse(`${noticeDate}T23:00:00Z`); // 6 PM in Toronto.
     const historicalStaffAvailability = await request('available-therapists', null, {
       method: 'GET', query: {
-        date: noticeDate, branchId: '1', time: '01:00 PM', durationMinutes: '120', isRmt: 'false', staffBooking: 'true',
+        date: noticeDate, branchId: '1', time: '12:30 PM', durationMinutes: '120', isRmt: 'false', staffBooking: 'true',
       },
     });
     assert.ok(historicalStaffAvailability.data.therapistIds.includes(2), JSON.stringify(historicalStaffAvailability.data));
-    assert.match(historicalStaffAvailability.data.unavailableTherapists.find((item) => item.id === 1).reason, /existing booking/);
+    assert.ok(historicalStaffAvailability.data.therapistIds.includes(1),
+      'Staff can book immediately after the preceding appointment, including historical corrections');
+    const overlappingStaffAvailability = await request('available-therapists', null, {
+      method: 'GET', query: {
+        date: noticeDate, branchId: '1', time: '12:15 PM', durationMinutes: '120', isRmt: 'false', staffBooking: 'true',
+      },
+    });
+    assert.match(overlappingStaffAvailability.data.unavailableTherapists.find((item) => item.id === 1).reason, /existing booking/);
     assert.ok(historicalStaffAvailability.data.unavailableTherapists.some((item) => item.id === 3));
     cookie = '';
     const publicDiagnostics = await request('available-therapists', null, {

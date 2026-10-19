@@ -6429,7 +6429,6 @@ function AdminPortal({
     : calendarAvailableTherapists;
   const calendarHasUnassignedColumn = calendarIncludesUnassigned &&
     (!compactCalendar || activeMobileCalendarColumn === 'unassigned');
-  const calendarGapMinutes = Math.max(0, Number(businessProfile.therapistBufferMinutes) || 0);
   const calendarFirstMinute = 0;
   const calendarLastMinute = 24 * 60;
   const calendarDisplaySlots = Array.from(
@@ -7358,7 +7357,7 @@ function AdminPortal({
           {resolvedCalendarViewMode === 'therapists' && <div className={`calendar-schedule flex min-h-0 flex-col overflow-hidden rounded-xl border border-stone-200 bg-white${calendarFullscreen ? ' flex-1' : ''}`}>
             <div className="border-b border-stone-200 bg-stone-50 px-3 py-2">
               <p className="text-sm font-bold text-stone-900">{new Date(`${calendarDate}T12:00:00`).toLocaleDateString(locale, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</p>
-              {!calendarFullscreen && <p className="calendar-help text-xs text-stone-500">{tr("Appointments grouped by therapist. The gap after each appointment is reserved automatically.")}</p>}
+              {!calendarFullscreen && <p className="calendar-help text-xs text-stone-500">{tr("Appointments grouped by therapist. Public booking gaps do not restrict dashboard appointments.")}</p>}
               {compactCalendar && calendarMobileColumns.length > 0 && <label className="mt-2 block">
                 <span className="sr-only">{tr("Therapist")}</span>
                 <select aria-label={tr("Therapist")} value={activeMobileCalendarColumn} onChange={(event) => setMobileCalendarColumn(event.target.value)} className="min-h-11 w-full min-w-0 rounded-lg border border-stone-300 bg-white px-2 text-sm">
@@ -7458,10 +7457,6 @@ function AdminPortal({
                           : block.therapistName === therapist.name) &&
                         Number(block.startTime?.split(':')[0]) * 60 + Number(block.startTime?.split(':')[1]) <= minutes &&
                         Number(block.endTime?.split(':')[0]) * 60 + Number(block.endTime?.split(':')[1]) > minutes);
-                      const bufferEvent = calendarGapMinutes > 0 && visibleCalendarEvents.find((event) =>
-                        getAssignedTherapistNames(event.therapistName, therapists).includes(therapist.name) &&
-                        calendarEventRange(event).end < minutes + 15 &&
-                        calendarEventRange(event).end + calendarGapMinutes > minutes);
                       return (
                         <div key={therapist.id} className="relative min-w-0 border-r border-stone-100">
                           {therapistEvents.filter((event) => calendarEventRange(event).start >= minutes).map((event) => (
@@ -7474,8 +7469,7 @@ function AdminPortal({
                             </button>
                           ))}
                           {!therapistEvents.length && therapistBlock && <span className="block rounded-md bg-stone-100 px-1.5 py-0.5 text-[9px] text-stone-600">{tr("Unavailable")}</span>}
-                          {!therapistEvents.length && !therapistBlock && bufferEvent && <span className="block rounded-md border border-dashed border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[9px] text-amber-800">{tr("Buffer · {value0} min", { value0: calendarGapMinutes })}</span>}
-                          {!therapistEvents.length && !therapistBlock && !bufferEvent && <span aria-hidden="true" className="block min-h-5" />}
+                          {!therapistEvents.length && !therapistBlock && <span aria-hidden="true" className="block min-h-5" />}
                         </div>
                       );
                     })}
@@ -9234,7 +9228,7 @@ function AdminPortal({
                         className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100"
                       />
                       {field.key === 'photoUrl' && <span className="mt-1.5 block text-xs leading-5 text-slate-500">{tr("Paste a publicly accessible image URL. Leave blank to use the business initials.")}</span>}
-                      {field.key === 'therapistBufferMinutes' && <span className="mt-1.5 block text-xs leading-5 text-slate-500">{tr("Time reserved after each therapist appointment before the next booking. Use 0 for no gap; changes apply immediately.")}</span>}
+                      {field.key === 'therapistBufferMinutes' && <span className="mt-1.5 block text-xs leading-5 text-slate-500">{tr("Time reserved between public bookings only. Dashboard staff can book back-to-back without this gap. Use 0 for no gap; changes apply immediately.")}</span>}
                       {field.key === 'minimumBookingNoticeMinutes' && <span className="mt-1.5 block text-xs leading-5 text-slate-500">{tr("Customers can only book slots this many minutes from now. Default: 15 minutes. Use 0 to allow immediate bookings; past slots are never available.")}</span>}
                     </label>
                   ))}
