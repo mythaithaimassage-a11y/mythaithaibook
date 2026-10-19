@@ -362,8 +362,12 @@ at 7:00 PM, the last 90-minute booking at 6:30 PM, and the last 120-minute
 booking at 6:00 PM. Customer booking and customer rescheduling use these
 branch/date hours, enforced server-side, even when the customer portal is opened
 by a signed-in dashboard user. Dashboard quick appointments and scheduling edits
-instead offer full-day times for staff working that day; the daily and therapist
-calendars display the full day. Hours changes do not move existing bookings or reject
+instead offer full-day times for staff working that day. The daily and therapist
+calendars display only the selected date's business hours (earliest opening to
+latest closing when viewing multiple branches), or **Closed** when none are open.
+Appointments crossing opening/closing are clipped to the visible grid; bookings
+entirely outside business hours remain accessible in Agenda and the appointment list.
+Hours changes do not move existing bookings or reject
 historical/future Wix imports; staff schedules and availability blocks still apply.
 
 These appointments save to BigQuery and Google Calendar as **unpaid / pay at

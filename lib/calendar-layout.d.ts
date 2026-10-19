@@ -7,4 +7,4 @@ type CalendarEvent = {
 };
 export const CALENDAR_SLOT_HEIGHT: number;
 export function calendarEventRange(event: CalendarEvent): { start: number; end: number };
-export function calendarEventStyle(event: CalendarEvent, columnEvents?: CalendarEvent[]): { top: number; height: number; left: string; width: string; right: string };
+export function calendarEventStyle(event: CalendarEvent, columnEvents?: CalendarEvent[], visibleRange?: { start: number; end: number }): { top: number; height: number; left: string; width: string; right: string };

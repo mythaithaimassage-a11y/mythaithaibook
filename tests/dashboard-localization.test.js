@@ -259,7 +259,7 @@ test('business profile configures appointment gaps and the calendar offers thera
   assert.match(source, /Time reserved between public bookings only/);
 });
 
-test('dashboard calendar uses the working-day roster and full-day times for every booking role', () => {
+test('dashboard calendar uses the working-day roster and displays only business hours for every booking role', () => {
   const date = '2026-10-19';
   const therapists = [
     { id: 1, name: 'Extra shift therapist', active: true, branches: [2], schedule: {} },
@@ -274,13 +274,48 @@ test('dashboard calendar uses the working-day roster and full-day times for ever
     const columns = render('calendar', 'en', { ...overrides, calendarViewMode: 'therapists' }, userProps);
     assert.match(columns, /aria-controls="therapist-next-availability-1"/);
     assert.doesNotMatch(columns, /aria-controls="therapist-next-availability-2"/);
-    assert.match(columns, />12:00 AM<\/div>/);
-    assert.match(columns, />11:45 PM<\/div>/);
+    assert.match(columns, />10:00 AM<\/div>/);
+    assert.match(columns, />7:45 PM<\/div>/);
+    assert.doesNotMatch(columns, />12:00 AM<\/div>|>8:00 PM<\/div>|>11:45 PM<\/div>/);
     const daily = render('calendar', 'en', { ...overrides, calendarViewMode: 'daily' }, userProps);
-    assert.match(daily, /aria-label="Add appointment at 06:00 AM"/);
-    assert.match(daily, /aria-label="Add appointment at 09:00 PM"/);
-    assert.match(daily, /aria-label="Add appointment at 11:00 PM"/);
+    assert.match(daily, /aria-label="Add appointment at 10:00 AM"/);
+    assert.match(daily, /aria-label="Add appointment at 07:00 PM"/);
+    assert.doesNotMatch(daily, /aria-label="Add appointment at (06:00 AM|09:00 PM|11:00 PM)"/);
   }
+});
+
+test('calendar business hours follow the weekday, branch selection, closed days and quarter-hour boundaries', () => {
+  const hours = Object.fromEntries(['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
+    .map((day) => [day, { open: '10:15', close: '18:30', closed: day === 'tue' }]));
+  const branches = [
+    { ...props.branches[0], businessHours: hours },
+    { id: 2, name: 'Late branch', active: true, businessHours: {
+      ...hours, mon: { open: '12:00', close: '23:45', closed: false },
+    } },
+  ];
+  for (const compactCalendar of [false, true]) {
+    for (const calendarViewMode of ['therapists', 'daily']) {
+      const state = { calendarDate: '2026-10-19', calendarBranch: '1', compactCalendar, calendarViewMode };
+      const selected = render('calendar', 'en', state, { branches });
+      if (calendarViewMode === 'therapists') {
+        assert.match(selected, />10:15 AM<\/div>/);
+        assert.match(selected, />6:15 PM<\/div>/);
+        assert.doesNotMatch(selected, />10:00 AM<\/div>|>6:30 PM<\/div>/);
+      } else {
+        assert.match(selected, /aria-label="Add appointment at 10:15 AM"/);
+        assert.doesNotMatch(selected, /aria-label="Add appointment at 10:00 AM"/);
+      }
+      const closed = render('calendar', 'en', { ...state, calendarDate: '2026-10-20' }, { branches });
+      assert.match(closed, />Closed<\/p>/);
+      assert.doesNotMatch(closed, /aria-label="Add appointment at|>10:15 AM<\/div>/);
+    }
+  }
+  const all = render('calendar', 'en', {
+    calendarDate: '2026-10-19', calendarBranch: 'all', calendarViewMode: 'therapists', compactCalendar: false,
+  }, { branches });
+  assert.match(all, />10:15 AM<\/div>/);
+  assert.match(all, />11:30 PM<\/div>/);
+  assert.doesNotMatch(all, />11:45 PM<\/div>/);
 });
 
 test('dashboard calendar does not reserve the public booking buffer for staff', () => {

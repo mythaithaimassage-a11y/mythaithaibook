@@ -478,7 +478,7 @@ test('daily calendar, agenda and appointment details display the shared start-en
   assert.match(app, /<AppointmentList bookings=\{agendaBookings\}/);
   assert.match(app, /\{formatTime\(selectedCalendarEvent\.timeRange \|\| selectedCalendarEvent\.localTime\)\}/);
   assert.match(app, /\['Appointment time', selectedCalendarEvent\.timeRange \|\| selectedCalendarEvent\.localTime\]/);
-  assert.match(app, /const hourEvents = visibleCalendarEvents\.filter\(\(event\) => Number\(event\.localTime/);
+  assert.match(app, /const hourEvents = visibleCalendarEvents\.filter\(\(event\) => \{[\s\S]*?calendarEventRange\(event\)[\s\S]*?Math\.floor\(Math\.max\(start, calendarFirstMinute\) \/ 60\) === hour/);
 });
 
 test('owner can delete calendar appointments from hover- and focus-revealed controls', () => {

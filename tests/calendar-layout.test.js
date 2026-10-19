@@ -44,6 +44,17 @@ test('overlapping appointments get separate lanes, adjacent appointments regain 
   assert.equal(calendarEventStyle(c, events).width, 'calc(100% - 8px)');
 });
 
+test('appointments crossing business hours are clipped without changing their stored times', () => {
+  const early = appointment('early', '09:30', '2026-10-17T09:30:00-04:00', '2026-10-17T10:30:00-04:00');
+  const late = appointment('late', '19:30', '2026-10-17T19:30:00-04:00', '2026-10-17T20:30:00-04:00');
+  for (const event of [early, late]) {
+    const style = calendarEventStyle(event, [event], { start: 600, end: 1200 });
+    assert.equal(style.top, 2);
+    assert.equal(style.height, 76);
+    assert.equal(calendarEventStyle(event).height, 156);
+  }
+});
+
 test('the actual therapist grid renders full-duration cards and keeps covered rows occupied', () => {
   const source = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
   const ast = ts.createSourceFile('App.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -63,6 +74,7 @@ test('the actual therapist grid renders full-duration cards and keeps covered ro
   vm.runInNewContext(compiled, {
     exports: module.exports, require: createRequire(import.meta.url),
     calendarDisplaySlots: Array.from({ length: 7 }, (_, index) => ({ label: String(index), minutes: 600 + index * 15 })),
+    calendarFirstMinute: 600, calendarLastMinute: 1200,
     calendarColumnTherapists: [{ id: 1, name: 'Therapist' }], therapists: [],
     calendarHasUnassignedColumn: true, visibleCalendarEvents: [assigned, unassigned],
     calendarUnavailability: [], calendarGapMinutes: 0,

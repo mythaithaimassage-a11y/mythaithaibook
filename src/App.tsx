@@ -6406,8 +6406,18 @@ function AdminPortal({
   const calendarBusinessBranches = branches.filter((branch) => branch.active !== false &&
     (dashboardUser.role === 'owner' || dashboardUser.branchIds.includes(String(branch.id))) &&
     (calendarBranch === 'all' || String(branch.id) === calendarBranch));
-  const calendarBookTimes = calendarBusinessBranches.length ? dashboardAppointmentTimes() : [];
-  const calendarDisplayHours = Array.from({ length: 24 }, (_, hour) => hour);
+  const calendarBusinessHours = calendarBusinessBranches
+    .map((branch) => businessHoursForDate(branch, calendarDate))
+    .filter((hours) => !hours.closed);
+  const calendarFirstMinute = calendarBusinessHours.length
+    ? Math.min(...calendarBusinessHours.map((hours) => Number(hours.open.slice(0, 2)) * 60 + Number(hours.open.slice(3)))) : 0;
+  const calendarLastMinute = calendarBusinessHours.length
+    ? Math.max(...calendarBusinessHours.map((hours) => Number(hours.close.slice(0, 2)) * 60 + Number(hours.close.slice(3)))) : 0;
+  const calendarBookTimes = dashboardAppointmentTimes(15).filter((time) => {
+    const minutes = appointmentTimeMinutes(time);
+    return minutes >= calendarFirstMinute && minutes < calendarLastMinute;
+  });
+  const calendarDisplayHours = [...new Set(calendarBookTimes.map((time) => Math.floor(appointmentTimeMinutes(time) / 60)))];
   const calendarAvailableTherapists = therapists.filter((therapist) =>
     therapist.active !== false &&
     (calendarTherapist === 'all' || String(therapist.id) === calendarTherapist) &&
@@ -6429,8 +6439,6 @@ function AdminPortal({
     : calendarAvailableTherapists;
   const calendarHasUnassignedColumn = calendarIncludesUnassigned &&
     (!compactCalendar || activeMobileCalendarColumn === 'unassigned');
-  const calendarFirstMinute = 0;
-  const calendarLastMinute = 24 * 60;
   const calendarDisplaySlots = Array.from(
     { length: Math.ceil((calendarLastMinute - calendarFirstMinute) / 15) },
     (_, index) => {
@@ -7308,9 +7316,15 @@ function AdminPortal({
               <CalendarIcon className="w-5 h-5 text-emerald-700" />
             </div>
             <div className={`calendar-scroll ${calendarFullscreen ? 'min-h-0 flex-1 overflow-y-auto' : 'max-h-[620px] overflow-y-auto'}`}>
+              {!calendarDisplayHours.length && <p className="p-4 text-sm text-stone-500">{tr("Closed")}</p>}
               {calendarDisplayHours.map((hour) => {
-                const hourLabel = new Date(2000, 0, 1, hour).toLocaleTimeString(locale, { hour: 'numeric' });
-                const hourEvents = visibleCalendarEvents.filter((event) => Number(event.localTime?.split(':')[0]) === hour);
+                const firstMinute = Math.max(hour * 60, calendarFirstMinute);
+                const hourLabel = new Date(2000, 0, 1, hour, firstMinute % 60).toLocaleTimeString(locale, { hour: 'numeric', ...(firstMinute % 60 ? { minute: '2-digit' } : {}) });
+                const hourEvents = visibleCalendarEvents.filter((event) => {
+                  const { start, end } = calendarEventRange(event);
+                  return start < calendarLastMinute && end > calendarFirstMinute &&
+                    Math.floor(Math.max(start, calendarFirstMinute) / 60) === hour;
+                });
                 const hourBlocks = calendarUnavailability.filter((block) => Number(block.startTime?.split(':')[0]) <= hour && Number(block.endTime?.split(':')[0]) > hour);
                 const bookTime = calendarBookTimes.find((time) => Math.floor(appointmentTimeMinutes(time) / 60) === hour);
                 return (
@@ -7444,6 +7458,7 @@ function AdminPortal({
                     </div>}
                   </div>
                 </div>
+                {!calendarDisplaySlots.length && <p className="p-4 text-sm text-stone-500">{tr("Closed")}</p>}
                 {calendarDisplaySlots.map(({ label, minutes }) => (
                   <div key={label} className="grid h-[40px] border-b border-stone-100" style={{ gridTemplateColumns: `56px repeat(${calendarColumnTherapists.length + Number(calendarHasUnassignedColumn)}, minmax(128px, 220px))` }}>
                     <div className="border-r border-stone-100 px-1 py-1.5 text-right text-[10px] text-stone-400">{formatTime(label)}</div>
@@ -7459,8 +7474,8 @@ function AdminPortal({
                         Number(block.endTime?.split(':')[0]) * 60 + Number(block.endTime?.split(':')[1]) > minutes);
                       return (
                         <div key={therapist.id} className="relative min-w-0 border-r border-stone-100">
-                          {therapistEvents.filter((event) => calendarEventRange(event).start >= minutes).map((event) => (
-                            <button key={event.id} type="button" style={calendarEventStyle(event, visibleCalendarEvents.filter((item) => getAssignedTherapistNames(item.therapistName, therapists).includes(therapist.name)))} onClick={() => { setSelectedCalendarEvent(event); setIssuedReceipt(null); setReceiptError(''); setReceiptNotice(''); }} className={`absolute inset-x-1 z-10 overflow-hidden rounded-md border-l-4 px-2 py-1.5 text-left align-top text-[10px] ${getTherapistCalendarColor(therapist.name, therapists).event}`}>
+                          {therapistEvents.filter((event) => calendarEventRange(event).start >= minutes || minutes === calendarFirstMinute).map((event) => (
+                            <button key={event.id} type="button" style={calendarEventStyle(event, visibleCalendarEvents.filter((item) => getAssignedTherapistNames(item.therapistName, therapists).includes(therapist.name)), { start: calendarFirstMinute, end: calendarLastMinute })} onClick={() => { setSelectedCalendarEvent(event); setIssuedReceipt(null); setReceiptError(''); setReceiptNotice(''); }} className={`absolute inset-x-1 z-10 overflow-hidden rounded-md border-l-4 px-2 py-1.5 text-left align-top text-[10px] ${getTherapistCalendarColor(therapist.name, therapists).event}`}>
                               <span className="absolute inset-x-2 top-1.5">
                               <span className={`block truncate font-bold ${getTherapistCalendarColor(therapist.name, therapists).text}`}>{event.summary}</span>
                               <span className={getTherapistCalendarColor(therapist.name, therapists).text}>{formatTime(event.timeRange || event.localTime)}</span>
@@ -7476,9 +7491,10 @@ function AdminPortal({
                     {calendarHasUnassignedColumn && (
                       <div className="relative min-w-0">
                         {visibleCalendarEvents.filter((event) =>
-                          calendarEventRange(event).start >= minutes && calendarEventRange(event).start < minutes + 15 &&
+                          (calendarEventRange(event).start >= minutes || minutes === calendarFirstMinute) &&
+                          calendarEventRange(event).start < minutes + 15 && calendarEventRange(event).end > minutes &&
                           (!event.therapistName || event.therapistName === 'Any Available')).map((event) => (
-                          <button key={event.id} type="button" style={calendarEventStyle(event, visibleCalendarEvents.filter((item) => !item.therapistName || item.therapistName === 'Any Available'))} onClick={() => { setSelectedCalendarEvent(event); setIssuedReceipt(null); setReceiptError(''); setReceiptNotice(''); }} className="absolute inset-x-1 z-10 overflow-hidden rounded-lg border-l-4 border-stone-400 bg-stone-100 px-2.5 py-2 text-left text-[11px] text-stone-700">
+                          <button key={event.id} type="button" style={calendarEventStyle(event, visibleCalendarEvents.filter((item) => !item.therapistName || item.therapistName === 'Any Available'), { start: calendarFirstMinute, end: calendarLastMinute })} onClick={() => { setSelectedCalendarEvent(event); setIssuedReceipt(null); setReceiptError(''); setReceiptNotice(''); }} className="absolute inset-x-1 z-10 overflow-hidden rounded-lg border-l-4 border-stone-400 bg-stone-100 px-2.5 py-2 text-left text-[11px] text-stone-700">
                             <span className="absolute inset-x-2 top-1.5"><span className="block truncate font-bold">{event.summary}</span><span>{formatTime(event.timeRange || event.localTime)}</span>{event.booking?.rescheduled && <span className="ml-1 rounded bg-blue-100 px-1 text-[9px] text-blue-700">{tr("Rescheduled")}</span>}</span>
                           </button>
                         ))}
