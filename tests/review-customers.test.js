@@ -55,23 +55,21 @@ test('search tokens, branch, service and honest request/open statuses compose', 
   assert.equal(emails({ query: 'not-found' }), '');
 });
 
-test('only visible selected non-unsubscribed recipients are sent, retaining manual resend eligibility and the cap', () => {
+test('only matching selected non-unsubscribed recipients are sent, with no recipient cap', () => {
   const candidates = [
     { ...candidate, eligible: false, lastRequestedAt: tracking.sentAt },
     { ...candidate, email: 'unsubscribed@example.com', unsubscribed: true },
   ];
-  const result = reviewRecipients(candidates, [candidate.email, 'unsubscribed@example.com', 'hidden@example.com'], 50);
-  assert.equal(result.recipients.join(), candidate.email);
-  assert.equal(result.tooMany, false);
-  const fiftyOne = Array.from({ length: 51 }, (_, index) => ({ ...candidate, email: `${index}@example.com` }));
-  assert.equal(reviewRecipients(fiftyOne, fiftyOne.map((row) => row.email), 50).tooMany, true);
-  assert.equal(reviewRecipients(fiftyOne.slice(0, 50), fiftyOne.map((row) => row.email), 50).tooMany, false);
+  const result = reviewRecipients(candidates, [candidate.email, 'unsubscribed@example.com', 'hidden@example.com']);
+  assert.equal(result.join(), candidate.email);
+  const many = Array.from({ length: 501 }, (_, index) => ({ ...candidate, email: `${index}@example.com` }));
+  assert.equal(reviewRecipients(many, many.map((row) => row.email)).length, 501);
 });
 
 const currentDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Toronto' }).format(new Date());
 const props = {
   candidates: [{ ...candidate, visitDate: currentDate, reviewTracking: tracking, lastRequestedAt: tracking.sentAt }],
-  maximum: 50, busy: false, sending: false, sendBlocked: false, revision: 'revision-1', onOpen() {}, onSend: async () => true,
+  busy: false, sending: false, sendBlocked: false, revision: 'revision-1', onOpen() {}, onSend: async () => {},
 };
 const render = (language, changes = {}) => renderToStaticMarkup(React.createElement(LanguageProvider, { language },
   React.createElement(ReviewCustomers, { ...props, ...changes })));
@@ -89,8 +87,8 @@ test('mobile cards render accessible controls, escaped customer text, accurate o
 
 test('new follow-up controls and date presets translate into Thai without changing customer data', () => {
   const html = render('th');
-  for (const text of ['ค้นหาลูกค้าสำหรับขอรีวิว', '2 เดือนที่ผ่านมา', 'ตรวจสอบการตอบกลับ', 'ดูประวัติการติดต่อ', 'พบสัญญาณการเปิด', 'MTT-101', candidate.email]) assert.ok(html.includes(text), text);
-  assert.doesNotMatch(html, />Search review customers<|>Last attended visit<|>View communication history</);
+  for (const text of ['ค้นหาลูกค้าสำหรับขอรีวิว', '2 เดือนที่ผ่านมา', 'ตรวจสอบการตอบกลับ', 'ดูประวัติการติดต่อ', 'พบสัญญาณการเปิด', 'เลือกทั้งหมด', 'เลือกผู้รับที่แนะนำ', 'MTT-101', candidate.email]) assert.ok(html.includes(text), text);
+  assert.doesNotMatch(html, />Search review customers<|>Last attended visit<|>View communication history<|>Select all<|>Select suggested</);
 });
 
 function hookHarness(extra = {}) {
@@ -143,16 +141,31 @@ const text = (node) => typeof node === 'string' ? node : Array.isArray(node) ? n
 const button = (tree, label) => nodes(tree).find((node) => node.type === 'button' && text(node).includes(label));
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
-test('filter changes clear selection, suggested selection caps at fifty, and sending clears a successful batch', async () => {
+test('select all includes off-page and previously asked customers without a cap, excludes unsubscribed customers and respects filters', async () => {
   const harness = hookHarness();
-  const candidates = Array.from({ length: 55 }, (_, index) => ({ ...candidate, visitDate: currentDate, email: `${index}@example.com` }));
+  const candidates = Array.from({ length: 56 }, (_, index) => ({
+    ...candidate, visitDate: currentDate, email: `${index}@example.com`,
+    eligible: index !== 0 && index !== 55, lastRequestedAt: index === 0 ? tracking.sentAt : '',
+    unsubscribed: index === 55,
+  }));
   let opened = '', sent = [];
-  const options = { ...props, candidates, onOpen: (id) => { opened = id; }, onSend: async (emails) => { sent = emails; return true; } };
+  const options = { ...props, candidates, onOpen: (id) => { opened = id; }, onSend: async (emails) => { sent = emails; } };
   const render = () => harness.render(harness.loaded.default, options);
   let tree = render();
   button(tree, 'Select suggested').props.onClick();
   tree = render();
-  assert.equal(button(tree, 'Send to 50').props.disabled, false);
+  assert.equal(button(tree, 'Send to 54').props.disabled, false);
+  button(tree, 'Select all').props.onClick();
+  tree = render();
+  assert.equal(button(tree, 'Send to 55').props.disabled, false);
+  await button(tree, 'Send to 55').props.onClick();
+  assert.equal(sent.length, 55);
+  assert.equal(sent.includes('0@example.com'), true);
+  assert.equal(sent.includes('54@example.com'), true);
+  assert.equal(sent.includes('55@example.com'), false);
+  tree = render();
+  button(tree, 'Select all').props.onClick();
+  tree = render();
   const search = nodes(tree).find((node) => node.type === 'input' && node.props.type === 'search');
   search.props.onChange({ target: { value: '0@example.com' } });
   tree = render();
@@ -300,7 +313,7 @@ test('send outcomes use explicit selected addresses and keep delivery warnings s
       }) };
     },
   });
-  assert.equal(await send([candidate.email]), true);
+  await send([candidate.email]);
   assert.equal(requests, 1);
   assert.match(result, /1 sent, 0 failed, 0 skipped/);
   assert.match(sendError, /Sheet log unavailable/);
@@ -308,8 +321,63 @@ test('send outcomes use explicit selected addresses and keep delivery warnings s
   refresh();
   assert.equal(loadError, '');
   assert.match(sendError, /open tracking could not be saved/);
-  assert.equal(await send([]), false);
+  await send([]);
   assert.equal(requests, 1);
+});
+
+test('large review selections send every address once in sequential bounded batches and accumulate totals', async () => {
+  const emails = Array.from({ length: 125 }, (_, index) => `${index}@example.com`);
+  const sent = [], summaries = [];
+  let active = 0, refreshed = 0, error = '', busy = false;
+  const send = vm.runInNewContext(`(${loaders.sendReviewRequests})`, {
+    isSendingReviewRequests: false,
+    setIsSendingReviewRequests: (value) => { busy = value; },
+    setReviewRequestSendError: (value) => { error = value; },
+    setReviewRequestResult: (value) => { summaries.push(value); },
+    loadReviewRequests: async () => { refreshed++; },
+    tr: (text, params = {}) => text.replace(/\{(\w+)\}/g, (match, key) => params[key] ?? match),
+    fetch: async (_url, options) => {
+      assert.equal(active++, 0);
+      const batch = JSON.parse(options.body).emails;
+      assert.ok(batch.length <= 10 && batch.length > 0);
+      sent.push(...batch);
+      await settle();
+      active--;
+      return { ok: true, json: async () => ({ sent: batch.length, failed: 0, skipped: 0, trackingWarnings: [], logError: '' }) };
+    },
+  });
+  await send(emails);
+  assert.deepEqual(sent, emails);
+  assert.equal(refreshed, 1);
+  assert.equal(busy, false);
+  assert.equal(error, '');
+  assert.match(summaries.at(-1), /125 sent, 0 failed, 0 skipped/);
+  assert.equal(summaries.length, 14);
+});
+
+test('interrupted bulk sends stop without retrying, preserve known totals and warnings, and refresh customer status', async () => {
+  let requests = 0, result = '', error = '', refreshed = 0, busy = false;
+  const send = vm.runInNewContext(`(${loaders.sendReviewRequests})`, {
+    isSendingReviewRequests: false,
+    setIsSendingReviewRequests: (value) => { busy = value; },
+    setReviewRequestSendError: (value) => { error = value; },
+    setReviewRequestResult: (value) => { result = value; },
+    loadReviewRequests: async () => { refreshed++; },
+    tr: (text, params = {}) => text.replace(/\{(\w+)\}/g, (match, key) => params[key] ?? match),
+    fetch: async () => {
+      requests++;
+      if (requests === 2) return { ok: false, status: 503, json: async () => ({ message: 'Gmail unavailable' }) };
+      return { ok: true, json: async () => ({ sent: 8, failed: 1, skipped: 1, logError: 'Sheet warning' }) };
+    },
+  });
+  await send(Array.from({ length: 75 }, (_, index) => `${index}@example.com`));
+  assert.equal(requests, 2);
+  assert.match(result, /8 sent, 1 failed, 1 skipped/);
+  assert.match(error, /Sheet warning/);
+  assert.match(error, /Gmail unavailable/);
+  assert.match(error, /Sending stopped.*Check communication history/);
+  assert.equal(refreshed, 1);
+  assert.equal(busy, false);
 });
 
 test('review loaders do not overlap, request uncached data, support manual force and retain data on failure', async () => {

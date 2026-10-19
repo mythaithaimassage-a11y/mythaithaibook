@@ -150,12 +150,13 @@ test('tracking failures in audience do not disable search or existing sending el
     req: {}, res, sheets: {}, isGoogleReviewsConfigured: () => true, getBigQueryClient: () => ({}),
     collectReviewRequestCandidates: async () => ({ candidates: [candidate], stats: {} }), getBusinessProfile: async () => ({}),
     getCampaignSendBlockReason: () => '', getCustomerEmailStore: () => ({ readReviewEngagement: async () => { throw new Error('Denied'); } }),
-    reviewEngagementForCustomer, REVIEW_REQUEST_COOLDOWN_DAYS: 180, REVIEW_REQUEST_LOOKBACK_DAYS: 730, REVIEW_REQUEST_MAX_RECIPIENTS: 50,
+    reviewEngagementForCustomer, REVIEW_REQUEST_COOLDOWN_DAYS: 180, REVIEW_REQUEST_LOOKBACK_DAYS: 730,
     MARKETING_SENDER_EMAIL: 'clinic@example.com', console: { error() {} },
   });
   assert.equal(res.body.candidates.length, 1);
   assert.equal(res.body.candidates[0].reviewTracking, null);
   assert.equal(res.body.sendReady, true);
+  assert.equal('maxRecipients' in res.body, false);
   assert.match(res.body.trackingError, /unavailable/);
   assert.ok(Number.isFinite(Date.parse(res.body.fetchedAt)));
 });
@@ -166,7 +167,7 @@ test('review tracking or sheet-log failures never retry or fail a successfully d
     const res = response();
     await run('send', {
       req: { body: { emails: [candidate.email, 'unsubscribed@example.com'] } }, res, sheets: {},
-      isGoogleReviewsConfigured: () => true, REVIEW_REQUEST_MAX_RECIPIENTS: 50, getBigQueryClient: () => ({}),
+      isGoogleReviewsConfigured: () => true, getBigQueryClient: () => ({}),
       collectReviewRequestCandidates: async () => ({ candidates: [{ ...candidate, eligible: false }, { ...candidate, email: 'unsubscribed@example.com', unsubscribed: true }] }),
       getBusinessProfile: async () => ({}), fetchGoogleReviews: async () => ({ reviewUrl: 'https://example.com/review' }),
       getCampaignSendBlockReason: () => '', createGmailApi: () => ({}), createEmailTracking,
@@ -205,14 +206,36 @@ test('review tracking or sheet-log failures never retry or fail a successfully d
   }
 });
 
-test('review request sending enforces the existing fifty-recipient maximum', async () => {
+test('review request endpoint accepts more than fifty recipients while excluding unsubscribed and unknown addresses', async () => {
+  const candidates = Array.from({ length: 65 }, (_, index) => ({ ...candidate, email: `${index}@example.com`, unsubscribed: index === 64 }));
+  const sent = [];
   const res = response();
   await run('send', {
-    req: { body: { emails: Array.from({ length: 51 }, (_, index) => `${index}@example.com`) } }, res,
-    isGoogleReviewsConfigured: () => true, REVIEW_REQUEST_MAX_RECIPIENTS: 50,
+    req: { body: { emails: [...candidates.map((row) => row.email), 'unknown@example.com', candidates[0].email] } }, res, sheets: {},
+    isGoogleReviewsConfigured: () => true, getBigQueryClient: () => ({}),
+    collectReviewRequestCandidates: async () => ({ candidates }),
+    getBusinessProfile: async () => ({}), fetchGoogleReviews: async () => ({ reviewUrl: 'https://example.com/review' }),
+    getCampaignSendBlockReason: () => '', createGmailApi: () => ({}), createEmailTracking,
+    getConfirmAttendanceUrl: () => 'https://example.com/api/booking?view=confirm-attendance',
+    getCustomerEmailStore: () => ({ prepare: async () => {}, recordSent: async () => {} }),
+    sendReviewRequestEmail: async (_gmail, { candidate }) => {
+      sent.push(candidate.email);
+      return { messageId: 'message', subject: 'How was your visit to Clinic?' };
+    },
+    recordReviewRequests: async (_sheets, entries) => { assert.equal(entries.length, 64); },
   });
-  assert.equal(res.statusCode, 409);
-  assert.match(res.body.message, /50/);
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.sent, 64);
+  assert.equal(res.body.failed, 0);
+  assert.equal(res.body.skipped, 2);
+  assert.deepEqual(sent, candidates.slice(0, 64).map((row) => row.email));
+});
+
+test('review request endpoint still rejects an empty selection', async () => {
+  const res = response();
+  await run('send', { req: { body: { emails: [] } }, res, isGoogleReviewsConfigured: () => true });
+  assert.equal(res.statusCode, 400);
+  assert.match(res.body.message, /Select at least one/);
 });
 
 test('review email retains Google review URL, safe HTML and multipart delivery, with optional disclosed tracking', async () => {

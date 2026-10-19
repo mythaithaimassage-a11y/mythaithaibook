@@ -39,9 +39,9 @@ export function filterReviewCustomers(candidates: ReviewCandidate[], filters: Re
   });
 }
 
-export function reviewRecipients(candidates: ReviewCandidate[], selected: string[], maximum: number) {
-  const recipients = candidates.filter((candidate) => selected.includes(candidate.email) && !candidate.unsubscribed).map((candidate) => candidate.email);
-  return { recipients, tooMany: recipients.length > maximum };
+export function reviewRecipients(candidates: ReviewCandidate[], selected: string[]) {
+  const addresses = new Set(selected);
+  return candidates.filter((candidate) => addresses.has(candidate.email) && !candidate.unsubscribed).map((candidate) => candidate.email);
 }
 
 function ReviewReply({ candidate, revision }: { candidate: ReviewCandidate; revision: string }) {
@@ -102,16 +102,16 @@ function ReviewReply({ candidate, revision }: { candidate: ReviewCandidate; revi
   );
 }
 
-export default function ReviewCustomers({ candidates, maximum, busy, sending, sendBlocked, revision, onOpen, onSend }: {
-  candidates: ReviewCandidate[]; maximum: number; busy: boolean; sending: boolean; sendBlocked: boolean; revision: string;
-  onOpen: (bookingId: string) => void; onSend: (emails: string[]) => Promise<boolean>;
+export default function ReviewCustomers({ candidates, busy, sending, sendBlocked, revision, onOpen, onSend }: {
+  candidates: ReviewCandidate[]; busy: boolean; sending: boolean; sendBlocked: boolean; revision: string;
+  onOpen: (bookingId: string) => void; onSend: (emails: string[]) => Promise<void>;
 }) {
   const { translate: tr, locale } = useTranslation();
   const [filters, setFilters] = useState(defaultReviewFilters);
   const [selected, setSelected] = useState<string[]>([]);
   const [limit, setLimit] = useState(20);
   const filtered = useMemo(() => filterReviewCustomers(candidates, filters), [candidates, filters, revision]);
-  const { recipients, tooMany } = reviewRecipients(filtered, selected, maximum);
+  const recipients = reviewRecipients(filtered, selected);
   function update(key: keyof ReviewFilters, value: string) {
     setFilters((current) => ({ ...current, [key]: value }));
     setSelected([]);
@@ -140,7 +140,11 @@ export default function ReviewCustomers({ candidates, maximum, busy, sending, se
       </div>
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
         <p role="status" className="font-bold text-slate-600">{tr('{count} matching customers · {selected} selected', { count: filtered.length, selected: recipients.length })}</p>
-        <div className="flex gap-2"><button type="button" disabled={busy} onClick={() => setSelected(filtered.filter((candidate) => candidate.eligible && !candidate.unsubscribed).slice(0, maximum).map((candidate) => candidate.email))} className="min-h-11 rounded-lg px-2 font-bold text-emerald-800 disabled:opacity-50">{tr('Select suggested (up to {count})', { count: maximum })}</button><button type="button" disabled={busy} onClick={() => setSelected([])} className="min-h-11 rounded-lg px-2 font-bold text-slate-500">{tr('Clear')}</button></div>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" disabled={busy} onClick={() => setSelected(filtered.filter((candidate) => !candidate.unsubscribed).map((candidate) => candidate.email))} className="min-h-11 rounded-lg px-2 font-bold text-emerald-800 disabled:opacity-50">{tr('Select all')}</button>
+          <button type="button" disabled={busy} onClick={() => setSelected(filtered.filter((candidate) => candidate.eligible && !candidate.unsubscribed).map((candidate) => candidate.email))} className="min-h-11 rounded-lg px-2 font-bold text-emerald-800 disabled:opacity-50">{tr('Select suggested')}</button>
+          <button type="button" disabled={busy} onClick={() => setSelected([])} className="min-h-11 rounded-lg px-2 font-bold text-slate-500">{tr('Clear')}</button>
+        </div>
       </div>
       {!filtered.length && <p className="rounded-2xl border border-dashed border-slate-200 p-8 text-center text-sm text-slate-500">{tr('No customers match these filters. Try a wider visit range or clear the search.')}</p>}
       <ul className="space-y-3">
@@ -165,8 +169,7 @@ export default function ReviewCustomers({ candidates, maximum, busy, sending, se
       </ul>
       {filtered.length > limit && <button type="button" onClick={() => setLimit((value) => value + 20)} className="min-h-11 w-full rounded-xl border border-slate-200 px-4 text-sm font-bold text-slate-600">{tr('Show more customers')}</button>}
       <div className="sticky bottom-0 rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-lg">
-        {tooMany && <p role="alert" className="mb-2 text-xs text-rose-800">{tr('Select no more than {count} customers per send.', { count: maximum })}</p>}
-        <button type="button" disabled={busy || sendBlocked || !recipients.length || tooMany || Boolean(invalidRange)} onClick={async () => { if (await onSend(recipients)) setSelected([]); }} className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-emerald-950 px-4 py-3 text-sm font-bold text-white disabled:opacity-40"><Mail aria-hidden="true" className="h-4 w-4" />{tr(sending ? 'Sending…' : 'Send to {value0}', { value0: recipients.length })}</button>
+        <button type="button" disabled={busy || sendBlocked || !recipients.length || Boolean(invalidRange)} onClick={() => { setSelected([]); void onSend(recipients); }} className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-emerald-950 px-4 py-3 text-sm font-bold text-white disabled:opacity-40"><Mail aria-hidden="true" className="h-4 w-4" />{tr(sending ? 'Sending…' : 'Send to {value0}', { value0: recipients.length })}</button>
       </div>
     </div>
   );

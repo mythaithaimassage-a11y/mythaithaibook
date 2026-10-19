@@ -3575,7 +3575,6 @@ async function recordMarketingConsent(sheets, payload) {
 const REVIEW_REQUEST_HEADERS = ['Email', 'Customer Name', 'Booking ID', 'Requested At'];
 const REVIEW_REQUEST_COOLDOWN_DAYS = 180;
 const REVIEW_REQUEST_LOOKBACK_DAYS = 730;
-const REVIEW_REQUEST_MAX_RECIPIENTS = 50;
 
 async function ensureReviewRequestsSheet(sheets) {
   const spreadsheetId = process.env.GOOGLE_SPREADSHEET_ID;
@@ -5920,7 +5919,6 @@ export default async function handler(req, res) {
         stats,
         cooldownDays: REVIEW_REQUEST_COOLDOWN_DAYS,
         lookbackDays: REVIEW_REQUEST_LOOKBACK_DAYS,
-        maxRecipients: REVIEW_REQUEST_MAX_RECIPIENTS,
         senderEmail: MARKETING_SENDER_EMAIL,
         sendReady: !sendBlockReason,
         sendBlockReason,
@@ -5937,9 +5935,6 @@ export default async function handler(req, res) {
       );
       if (!selected.size) {
         return res.status(400).json({ message: 'Select at least one customer to ask for a review.' });
-      }
-      if (selected.size > REVIEW_REQUEST_MAX_RECIPIENTS) {
-        return res.status(409).json({ message: `Review requests are limited to ${REVIEW_REQUEST_MAX_RECIPIENTS} customers at a time.` });
       }
       const bigquery = getBigQueryClient();
       const [{ candidates }, businessProfile, reviews] = await Promise.all([

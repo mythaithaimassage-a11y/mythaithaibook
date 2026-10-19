@@ -1191,7 +1191,7 @@ one a short message with a button linking to your Google review form.
   An email open or reply does **not** prove a Google review was posted. Google
   does not provide reviewer email addresses for customer-level matching.
 - Changing filters clears recipient selection. Only matching, explicitly selected
-  customers are sent emails; successfully submitted batches clear the selection
+  customers are sent emails; submitting clears the selection
   to prevent accidental repeat sends. Refreshing does not reset the filters.
 - An appointment counts as attended as soon as its end time passes, so a
   customer who was treated earlier the same day can be asked immediately.
@@ -1202,7 +1202,14 @@ one a short message with a button linking to your Google review form.
 - Every send is logged to a `ReviewRequests` tab in the Google Sheet (created
   automatically), so customers asked within the last 180 days are shown as
   already asked and are excluded from **Select suggested**. They can still be selected manually.
-- Up to 50 customers can be emailed at a time.
+- **Select all** selects every matching non-unsubscribed customer across all pages,
+  including customers already asked. **Select suggested** still excludes recent
+  requests. There is no app-level recipient cap. The dashboard sends the selection
+  in sequential batches of 10 to keep individual requests bounded and updates the
+  sent/failed/skipped totals after each batch. Keep the screen open until complete.
+  Gmail's own sending quotas still apply. If a request fails, sending stops without
+  automatic retries and clears the selection; check communication history before
+  resending because some emails may already have been delivered.
 - Sending uses the same Gmail OAuth mailbox and business-profile requirements
   as email campaigns; if those are not configured the button explains what is
   missing.

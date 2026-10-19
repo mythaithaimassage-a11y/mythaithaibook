@@ -4896,30 +4896,33 @@ function AdminPortal({
   }, [activeTab]);
 
   const sendReviewRequests = async (emails) => {
-    if (!emails?.length || isSendingReviewRequests) return false;
+    if (!emails?.length || isSendingReviewRequests) return;
     setIsSendingReviewRequests(true);
     setReviewRequestSendError('');
     setReviewRequestResult('');
+    const totals = { sent: 0, failed: 0, skipped: 0 };
+    const warnings = [];
     try {
-      const response = await fetch('/api/booking?view=review-request-send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ emails }),
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
-      const summary = tr('Review requests: {sent} sent, {failed} failed, {skipped} skipped.', { sent: data.sent, failed: data.failed, skipped: data.skipped });
+      for (let index = 0; index < emails.length; index += 10) {
+        const response = await fetch('/api/booking?view=review-request-send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ emails: emails.slice(index, index + 10) }),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
+        totals.sent += data.sent;
+        totals.failed += data.failed;
+        totals.skipped += data.skipped;
+        if (data.logError) warnings.push(tr(data.logError));
+        if (data.trackingWarnings?.length) warnings.push(tr('Review emails were sent, but open tracking could not be saved for: {emails}', { emails: data.trackingWarnings.join(', ') }));
+        setReviewRequestResult(tr('Review requests: {sent} sent, {failed} failed, {skipped} skipped.', totals));
+        if (warnings.length) setReviewRequestSendError(warnings.join(' '));
+      }
       await loadReviewRequests();
-      setReviewRequestResult(summary);
-      const warnings = [
-        data.logError ? tr(data.logError) : '',
-        data.trackingWarnings?.length ? tr('Review emails were sent, but open tracking could not be saved for: {emails}', { emails: data.trackingWarnings.join(', ') }) : '',
-      ].filter(Boolean).join(' ');
-      if (warnings) setReviewRequestSendError(warnings);
-      return data.sent > 0;
     } catch (error) {
-      setReviewRequestSendError(error.message || 'Unable to send review requests.');
-      return false;
+      setReviewRequestSendError([...warnings, tr(error.message || 'Unable to send review requests.'), tr('Sending stopped. Some emails may already have been sent. Check communication history before sending again.')].join(' '));
+      await loadReviewRequests();
     } finally {
       setIsSendingReviewRequests(false);
     }
@@ -8982,7 +8985,7 @@ function AdminPortal({
 
                   {isLoadingReviewRequests && !reviewRequestData && <p role="status" className="py-8 text-center text-sm text-slate-500">{tr("Finding customers who have visited…")}</p>}
                   {reviewRequestData && <ReviewCustomers
-                    candidates={reviewRequestData.candidates || []} maximum={reviewRequestData.maxRecipients || 50}
+                    candidates={reviewRequestData.candidates || []}
                     busy={isSendingReviewRequests || isLoadingReviewRequests}
                     sending={isSendingReviewRequests} sendBlocked={reviewRequestData.sendReady === false}
                     revision={reviewRequestData.fetchedAt || ''} onOpen={setCommunicationBookingId} onSend={sendReviewRequests}
