@@ -394,7 +394,7 @@ test('a roster with no available therapists displays an explicit error and disab
   assert.match(html, /<button type="submit" disabled=""/);
 });
 
-test('quick booking times reflect branch weekday hours, selected service duration and closed days', () => {
+test('dashboard quick booking ignores public hours and closed weekdays but keeps visits within the day', () => {
   const businessHours = defaultBusinessHours();
   businessHours.sun = { open: '08:15', close: '22:00', closed: false };
   const changes = {
@@ -403,15 +403,17 @@ test('quick booking times reflect branch weekday hours, selected service duratio
   };
   const extended = render(changes);
   assert.match(extended, /value="08:15 AM"/);
-  assert.match(extended, /value="08:30 PM"/);
-  assert.doesNotMatch(extended, /value="08:45 PM"|value="09:00 PM"/);
+  assert.match(extended, /value="12:00 AM"/);
+  assert.match(extended, /value="10:30 PM"/);
+  assert.doesNotMatch(extended, /value="10:45 PM"/);
   businessHours.sun.closed = true;
   const closed = render(changes);
-  assert.match(closed, /No appointment times fit the business hours/);
-  assert.match(closed, /<button type="submit" disabled=""/);
+  assert.match(closed, /value="06:00 AM"/);
+  assert.match(closed, /value="10:30 PM"/);
+  assert.doesNotMatch(closed, /No appointment times fit the business hours/);
   const longService = render({ services: [{ id: 1, name: 'Massage', duration: 120 }] });
-  assert.match(longService, /value="06:00 PM"/);
-  assert.doesNotMatch(longService, /value="06:15 PM"|value="07:00 PM"/);
+  assert.match(longService, /value="10:00 PM"/);
+  assert.doesNotMatch(longService, /value="10:15 PM"/);
 });
 
 test('calendar toolbar opens manual booking with search applied to both calendar surfaces', () => {

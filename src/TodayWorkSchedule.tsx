@@ -184,6 +184,7 @@ export default function TodayWorkSchedule({ branches, therapists, initialBranchI
         <div>
           <h3 className="font-bold text-slate-900">{tr(initialDate ? 'Therapist availability' : "Today's therapist availability")}</h3>
           <MobileHelp><p className="mt-1 text-xs text-slate-500">{tr(initialDate ? 'Changes affect the selected date only and are saved to Work schedule.' : 'Changes are saved to Work schedule and affect appointment availability for today.')}</p></MobileHelp>
+          <p className="mt-1 text-xs text-slate-500">{tr('Saved hours and public visibility apply to online booking. Dashboard staff can book any time on a working day; conflicts and time off still apply.')}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {initialDate && <label className="text-xs font-semibold text-slate-600">{tr('Date')}

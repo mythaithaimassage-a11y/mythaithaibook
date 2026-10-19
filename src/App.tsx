@@ -28,7 +28,7 @@ import BookingNote from './BookingNote';
 import AppointmentCheckIn, { formatCheckInTime } from './AppointmentCheckIn';
 import CheckInReminders from './CheckInReminders';
 import { LanguageProvider, createTranslator, message, useTranslation } from './localization';
-import { AVAILABLE_TIMES, BOOKING_DEPOSIT_AMOUNT, branchPaymentOptions, bookingCategories, branchAppointmentTimes, businessHoursForDate, appointmentTimeMinutes } from '../lib/booking-options.js';
+import { AVAILABLE_TIMES, BOOKING_DEPOSIT_AMOUNT, branchPaymentOptions, bookingCategories, branchAppointmentTimes, dashboardAppointmentTimes, businessHoursForDate, appointmentTimeMinutes } from '../lib/booking-options.js';
 import BusinessHours from './BusinessHours';
 import TherapistNameMerge from './TherapistNameMerge';
 import { emptyPatientHistory } from '../lib/patient-history.js';
@@ -4684,6 +4684,7 @@ function AdminPortal({
   const [workScheduleInitialBranchId, setWorkScheduleInitialBranchId] = useState('');
   const [workScheduleInitialDate, setWorkScheduleInitialDate] = useState('');
   const [calendarEvents, setCalendarEvents] = useState([]);
+  const [calendarWorkingTherapists, setCalendarWorkingTherapists] = useState(null);
   const [isLoadingCalendar, setIsLoadingCalendar] = useState(false);
   const [calendarLoadError, setCalendarLoadError] = useState('');
   const [calendarUrl, setCalendarUrl] = useState('');
@@ -6360,6 +6361,10 @@ function AdminPortal({
       if (controller.signal.aborted) return;
       if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
       for (const event of data.events || []) calendarEventRange(event);
+      if (!Array.isArray(data.workingTherapistIds) || !data.workingTherapistIds.every((id) => typeof id === 'number' || typeof id === 'string')) {
+        throw new Error('Therapist availability could not be verified. Refresh and try again.');
+      }
+      setCalendarWorkingTherapists({ date: calendarDate, branch: calendarBranch, ids: data.workingTherapistIds.map(String) });
       setCalendarEvents(data.events || []);
       setCalendarUrl(data.calendarUrl || '');
       setCalendarWarnings(data.errors || []);
@@ -6401,23 +6406,15 @@ function AdminPortal({
   const calendarBusinessBranches = branches.filter((branch) => branch.active !== false &&
     (dashboardUser.role === 'owner' || dashboardUser.branchIds.includes(String(branch.id))) &&
     (calendarBranch === 'all' || String(branch.id) === calendarBranch));
-  const calendarBookTimes = [...new Set(calendarBusinessBranches.flatMap((branch) => branchAppointmentTimes(branch, calendarDate)))];
-  const calendarHours = calendarBusinessBranches.map((branch) => businessHoursForDate(branch, calendarDate)).filter((hours) => !hours.closed);
-  const visibleHours = [
-    ...calendarHours.flatMap((hours) => [Number(hours.open.split(':')[0]), Number(hours.close.split(':')[0])]),
-    ...visibleCalendarEvents.map((event) => Number(event.localTime?.split(':')[0])).filter(Number.isFinite),
-    ...calendarUnavailability.flatMap((block) => [Number(block.startTime?.split(':')[0]), Number(block.endTime?.split(':')[0])]).filter(Number.isFinite),
-  ];
-  const calendarFirstHour = Math.min(8, ...visibleHours);
-  const calendarLastHour = Math.max(19, ...visibleHours);
-  const calendarDisplayHours = Array.from({ length: calendarLastHour - calendarFirstHour + 1 }, (_, index) => index + calendarFirstHour);
+  const calendarBookTimes = calendarBusinessBranches.length ? dashboardAppointmentTimes() : [];
+  const calendarDisplayHours = Array.from({ length: 24 }, (_, hour) => hour);
   const calendarAvailableTherapists = therapists.filter((therapist) =>
     therapist.active !== false &&
     (calendarTherapist === 'all' || String(therapist.id) === calendarTherapist) &&
-    calendarBusinessBranches.some((branch) =>
-      isTherapistScheduledAtBranch(therapist, branch.id, calendarDate) &&
-      (dashboardUser.role === 'owner' || dashboardUser.branchIds.includes(String(branch.id))),
-    ),
+    (((calendarWorkingTherapists?.date === calendarDate && calendarWorkingTherapists.branch === calendarBranch)
+      ? calendarWorkingTherapists.ids.includes(String(therapist.id))
+      : calendarBusinessBranches.some((branch) => isTherapistScheduledAtBranch(therapist, branch.id, calendarDate))) ||
+      visibleCalendarEvents.some((event) => getAssignedTherapistNames(event.therapistName, therapists).includes(therapist.name))),
   );
   const calendarIncludesUnassigned = calendarTherapist === 'all' &&
     visibleCalendarEvents.some((event) => !event.therapistName || event.therapistName === 'Any Available');
@@ -6433,18 +6430,10 @@ function AdminPortal({
   const calendarHasUnassignedColumn = calendarIncludesUnassigned &&
     (!compactCalendar || activeMobileCalendarColumn === 'unassigned');
   const calendarGapMinutes = Math.max(0, Number(businessProfile.therapistBufferMinutes) || 0);
-  const calendarFirstMinute = Math.min(
-    10 * 60,
-    ...visibleCalendarEvents.map((event) => Math.floor(calendarEventRange(event).start / 15) * 15),
-    ...calendarHours.map((hours) => Number(hours.open.split(':')[0]) * 60 + Number(hours.open.split(':')[1])),
-  );
-  const calendarLastMinute = Math.max(
-    20 * 60,
-    ...visibleCalendarEvents.map((event) => Math.ceil(calendarEventRange(event).end / 15) * 15),
-    ...calendarHours.map((hours) => Number(hours.close.split(':')[0]) * 60 + Number(hours.close.split(':')[1])),
-  );
+  const calendarFirstMinute = 0;
+  const calendarLastMinute = 24 * 60;
   const calendarDisplaySlots = Array.from(
-    { length: Math.ceil((calendarLastMinute - calendarFirstMinute) / 15) + 1 },
+    { length: Math.ceil((calendarLastMinute - calendarFirstMinute) / 15) },
     (_, index) => {
       const minutes = Math.floor(calendarFirstMinute / 15) * 15 + index * 15;
       return {
@@ -6489,14 +6478,9 @@ function AdminPortal({
         const candidateBranches = branches.filter((branch) =>
           branch.active !== false &&
           (dashboardUser.role === 'owner' || dashboardUser.branchIds.includes(String(branch.id))) &&
-          (calendarBranch === 'all' || String(branch.id) === calendarBranch) &&
-          (therapist
-            ? isTherapistScheduledAtBranch(therapist, branch.id, candidateDate)
-            : therapists.some((candidate) => candidate.active !== false &&
-              (dashboardUser.role === 'owner' || dashboardUser.branchIds.includes(String(branch.id))) &&
-              isTherapistScheduledAtBranch(candidate, branch.id, candidateDate))));
+          (calendarBranch === 'all' || String(branch.id) === calendarBranch));
         const branchAvailability = await Promise.all(candidateBranches.map(async (branch) => {
-          let times = branchAppointmentTimes(branch, candidateDate, 60);
+          let times = dashboardAppointmentTimes();
           if (candidateDate === today) {
             times = times.filter((time) => appointmentTimeMinutes(time) > todayMinutes);
           }
@@ -6507,6 +6491,7 @@ function AdminPortal({
             times: JSON.stringify(times),
             durationMinutes: '60',
             isRmt: 'false',
+            staffBooking: 'true',
           });
           const response = await fetch(`/api/booking?view=available-therapists&${query}`, {
             signal: controller.signal,
@@ -6565,8 +6550,7 @@ function AdminPortal({
 
   const openQuickBooking = (time = '') => {
     setQuickBookingNotice('');
-    const slotBranch = calendarBranch === 'all' && time
-      ? calendarBusinessBranches.find((branch) => branchAppointmentTimes(branch, calendarDate).includes(time)) : null;
+    const slotBranch = calendarBranch === 'all' && time ? calendarBusinessBranches[0] : null;
     setQuickBooking({ date: calendarDate, branchId: slotBranch ? String(slotBranch.id) : calendarBranch, therapistId: calendarTherapist, time });
   };
   const openCalendarWorkSchedule = async (branchId = calendarBranch, date = calendarDate) => {
@@ -7278,6 +7262,7 @@ function AdminPortal({
             branches={dashboardBranches.filter((branch) => branch.active !== false)}
             therapists={therapists.filter((therapist) => therapist.active !== false)}
             initialBranchId={calendarBranch}
+            onSaved={() => void loadCalendar()}
             onOpenFullSchedule={(branchId, date) => {
               setWorkScheduleInitialBranchId(branchId);
               setWorkScheduleInitialDate(date);

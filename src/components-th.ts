@@ -161,6 +161,7 @@ export const componentThai: Record<string, string> = {
   'Time reserved after each therapist appointment before the next booking. Use 0 for no gap; changes apply immediately.': 'เวลาที่เว้นหลังนัดหมายของผู้ให้บริการแต่ละครั้งก่อนรับการจองถัดไป ตั้งค่า 0 หากไม่ต้องการเว้นช่วง การเปลี่ยนแปลงมีผลทันที',
   'Quick appointment': 'เพิ่มนัดหมายด่วน',
   'Save now. Handle payment and medical history separately.': 'บันทึกนัดหมายก่อน แล้วจัดการการชำระเงินและประวัติสุขภาพแยกต่างหาก',
+  'Saved hours and public visibility apply to online booking. Dashboard staff can book any time on a working day; conflicts and time off still apply.': 'เวลาที่บันทึกและการแสดงชื่อต่อสาธารณะใช้สำหรับการจองออนไลน์ พนักงานในแดชบอร์ดสามารถจองเวลาใดก็ได้ในวันที่ทำงาน โดยยังตรวจสอบการจองซ้อนและเวลาลา',
   'Close quick appointment': 'ปิดหน้าต่างเพิ่มนัดหมายด่วน',
   'Internal booking note (optional)': 'บันทึกภายในเกี่ยวกับการจอง (ไม่บังคับ)',
   'For the clinic team, e.g. client requested Tanya': 'สำหรับทีมคลินิก เช่น ลูกค้าขอรับบริการกับ Tanya',

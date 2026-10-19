@@ -174,9 +174,14 @@ retain their assigned-branch restrictions. Native fullscreen exits before
 navigating to Work schedule; closing availability keeps the calendar expanded.
 Quick appointment and booking-edit therapist choices use the saved date-specific
 shifts, even when they differ from the regular weekly branch schedule. Therapists
-must be available for the full service duration, including conflict and break checks.
+marked as working at the branch that day can be booked or assigned by owners,
+managers and receptionists at any quarter-hour, outside their published shift or
+branch hours, including weekdays closed to public bookings. Visits must finish
+within the selected day. Off-days, qualifications, branch access, appointment
+conflicts, buffers and explicit time-off/closure blocks remain enforced.
+Public visibility does not hide working staff from dashboard assignment choices.
 Quick appointment includes **Why is a therapist unavailable?** with staff-only
-explanations for shift coverage, qualifications, closures, time off and booking
+explanations for off-days, qualifications, closures, time off and booking
 conflicts. An expired dashboard session explicitly requests sign-in instead of
 silently applying customer rules that hide past appointment times. Staff can
 enter historical appointments; there is no four-therapist booking limit.
@@ -345,10 +350,11 @@ Appointment starts use 15-minute intervals and must be at least **one hour
 before closing**. The full service duration (including timed add-ons) must
 also finish by closing: at an 8:00 PM close, the last 60-minute booking starts
 at 7:00 PM, the last 90-minute booking at 6:30 PM, and the last 120-minute
-booking at 6:00 PM. Customer booking, quick appointments, scheduling edits,
-and customer rescheduling all use the branch/date hours, enforced server-side.
-The daily calendar expands for changed hours and retains existing appointments
-outside the new hours. Hours changes do not move existing bookings or reject
+booking at 6:00 PM. Customer booking and customer rescheduling use these
+branch/date hours, enforced server-side, even when the customer portal is opened
+by a signed-in dashboard user. Dashboard quick appointments and scheduling edits
+instead offer full-day times for staff working that day; the daily and therapist
+calendars display the full day. Hours changes do not move existing bookings or reject
 historical/future Wix imports; staff schedules and availability blocks still apply.
 
 These appointments save to BigQuery and Google Calendar as **unpaid / pay at

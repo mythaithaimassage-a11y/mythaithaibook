@@ -29,7 +29,7 @@ import {
   isReminderSent,
   isValidEmail,
 } from '../lib/appointment-alerts.js';
-import { BOOKING_DEPOSIT_AMOUNT, validateBranchPaymentOptions, validateAppointmentTime, validateBusinessHours, appointmentTimeMinutes } from '../lib/booking-options.js';
+import { BOOKING_DEPOSIT_AMOUNT, validateBranchPaymentOptions, validateAppointmentTime, validateDashboardAppointmentTime, validateBusinessHours, appointmentTimeMinutes } from '../lib/booking-options.js';
 import { validatePatientHistory, patientHistoryValues } from '../lib/patient-history.js';
 import {
   DEFAULT_THERAPIST_END,
@@ -6496,6 +6496,7 @@ export default async function handler(req, res) {
       let timeWindows;
       try {
         timeWindows = requestedTimes.map((time) => ({ time, start: appointmentTimeMinutes(time) }));
+        if (staffBooking && !publicBooking) requestedTimes.forEach((time) => validateDashboardAppointmentTime(time, durationMinutes));
       } catch {
         return res.status(400).json({ message: 'Choose a valid appointment time.' });
       }
@@ -6631,7 +6632,8 @@ export default async function handler(req, res) {
         const scheduleEligible = therapists.filter((therapist) => {
           if (therapist.active === false || (isRmt && !therapist.rmtCertified)) return false;
           const shift = therapistShiftForDate(therapist, branchId, date, overrides);
-          return shiftCoversAppointment(shift, date, `${String(Math.floor(start / 60)).padStart(2, '0')}:${String(start % 60).padStart(2, '0')}`, durationMinutes);
+          return staffBooking && !publicBooking ? shift.isWorking
+            : shiftCoversAppointment(shift, date, `${String(Math.floor(start / 60)).padStart(2, '0')}:${String(start % 60).padStart(2, '0')}`, durationMinutes);
         });
         const businessBlocked = unavailability.some((block) => block.scope === 'business');
         if (staffBooking && !publicBooking) {
@@ -8971,8 +8973,18 @@ export default async function handler(req, res) {
             reason: block.reason,
           }));
 
+        const [scheduleBranches, scheduleTherapists, scheduleOverrides] = await Promise.all([
+          getBranches(sheets), getTherapists(sheets), getStaffWorkScheduleRows(sheets),
+        ]);
+        const workingTherapistIds = scheduleTherapists.filter((item) => item.active !== false &&
+          scheduleBranches.some((scheduleBranch) => scheduleBranch.active !== false &&
+            (!allowedBranchNames || allowedBranchNames.has(scheduleBranch.name.trim().toLowerCase())) &&
+            ((!branch && !branchName) || matchesBranchName(scheduleBranch.name) || matchesBranchName(scheduleBranch.address)) &&
+            therapistShiftForDate(item, scheduleBranch.id, date, scheduleOverrides).isWorking))
+          .map((item) => item.id);
         return res.status(200).json({
           date,
+          workingTherapistIds,
           calendarId: PRIMARY_CALENDAR_ID,
           calendarUrl: `https://calendar.google.com/calendar/u/0/r?cid=${encodeURIComponent(PRIMARY_CALENDAR_ID)}`,
           events,
@@ -9099,15 +9111,12 @@ export default async function handler(req, res) {
       const eventId = row[16] || '';
       if (schedulingChanged) {
         if ((req.body.serviceId === '__existing__' && (edited.date !== row[7] || edited.time !== row[8])) || service.active === false || branch.active === false) return res.status(400).json({ message: 'Choose an active service with a valid duration.' });
-        validateAppointmentTime(edited.time, branch, edited.date, durationMinutes);
+        validateDashboardAppointmentTime(edited.time, durationMinutes);
         const overrides = await getStaffWorkScheduleRows(sheets);
-        const startTime = time24FromMinutes(appointmentTimeMinutes(normalizeBookingTime(edited.time)));
         if (therapistNames.some((name) => {
           const therapist = therapists.find((item) => item.name === name && item.active !== false &&
             (!service.isRmt || item.rmtCertified));
-          return !therapist || !shiftCoversAppointment(
-            therapistShiftForDate(therapist, branch.id, edited.date, overrides), edited.date, startTime, durationMinutes,
-          );
+          return !therapist || !therapistShiftForDate(therapist, branch.id, edited.date, overrides).isWorking;
         })) {
           return res.status(400).json({ message: 'Choose a scheduled, qualified therapist (two different therapists for a couple session).' });
         }
@@ -10336,14 +10345,12 @@ export default async function handler(req, res) {
         ]);
         const therapists = assignmentRoster;
         const service = findBookingService(row[5], services);
-        const startTime = time24FromMinutes(appointmentTimeMinutes(normalizeBookingTime(time)));
         if (!service || realNames.some((name) => {
           const therapist = therapists.find((item) => item.name === name && item.active !== false &&
             (!service.isRmt || item.rmtCertified) &&
             (!isCompletedAppointment || isTherapistScheduledAtBranch(item, branch.id, date)));
-          return !therapist || (!isCompletedAppointment && !shiftCoversAppointment(
-            therapistShiftForDate(therapist, branch.id, date, overrides), date, startTime, durationMinutes,
-          ));
+          return !therapist || (!isCompletedAppointment &&
+            !therapistShiftForDate(therapist, branch.id, date, overrides).isWorking);
         })) {
           return res.status(409).json({ message: 'The selected therapist is not scheduled or qualified for this appointment.' });
         }
@@ -10530,15 +10537,14 @@ export default async function handler(req, res) {
       if (dashboardSession.role !== 'owner' && !dashboardSession.branchIds.includes(String(branch.id))) {
         return res.status(403).json({ message: 'You can only create bookings for your assigned branches.' });
       }
-      let requestedStart;
       try {
-        requestedStart = appointmentTimeMinutes(String(payload.time || ''));
+        validateDashboardAppointmentTime(String(payload.time || ''), service.duration);
       } catch (error) {
         return res.status(400).json({ message: error.message });
       }
       const scheduleOverrides = await getStaffWorkScheduleRows(sheets);
       const eligible = therapists.filter((item) => item.active !== false && (!service.isRmt || item.rmtCertified) &&
-        shiftCoversAppointment(therapistShiftForDate(item, branch.id, date, scheduleOverrides), date, time24FromMinutes(requestedStart), service.duration));
+        therapistShiftForDate(item, branch.id, date, scheduleOverrides).isWorking);
       const therapist = eligible.find((item) => String(item.id) === String(payload.therapistId));
       const couple = /couple/i.test(service.name);
       const therapist2 = couple ? eligible.find((item) => String(item.id) === String(payload.therapistId2)) : null;
@@ -10564,7 +10570,8 @@ export default async function handler(req, res) {
     }
     const selectedBranch = (await getBranches(sheets)).find((branch) => branch.active !== false && branch.name === payload.branchName);
     if (!selectedBranch) return res.status(400).json({ message: 'Choose an active branch.' });
-    validateAppointmentTime(payload.time, selectedBranch, payload.date, Number(payload.durationMinutes));
+    if (view === 'manual-booking') validateDashboardAppointmentTime(payload.time, Number(payload.durationMinutes));
+    else validateAppointmentTime(payload.time, selectedBranch, payload.date, Number(payload.durationMinutes));
     const bookingProfile = await getBusinessProfile(sheets);
     if (view !== 'manual-booking') {
       validateBookingNotice(zonedBookingInstant(parseBookingDateTime(payload.date, payload.time), CALENDAR_TIME_ZONE), bookingProfile);
@@ -10579,12 +10586,12 @@ export default async function handler(req, res) {
     const appointmentStartMinutes = appointmentTimeMinutes(payload.time);
     const availableBySchedule = scheduledTherapists.filter((therapist) => therapist.active !== false &&
       (!matchedService?.isRmt || therapist.rmtCertified) &&
-      shiftCoversAppointment(
+      (view === 'manual-booking' ? therapistShiftForDate(therapist, selectedBranch.id, payload.date, scheduleOverrides).isWorking : shiftCoversAppointment(
         therapistShiftForDate(therapist, selectedBranch.id, payload.date, scheduleOverrides),
         payload.date,
         time24FromMinutes(appointmentStartMinutes),
         Number(payload.durationMinutes),
-      ));
+      )));
     const publicAvailableBySchedule = dashboardSession
       ? availableBySchedule
       : availableBySchedule.filter((therapist) =>

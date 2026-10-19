@@ -83,17 +83,20 @@ test('changing service and the Hot Stone add-on recalculates the catalogue total
   assert.equal(total().props.value, '158.20', 'Selecting Hot Stone adds its catalogue price before tax');
 });
 
-test('editor offers branch-specific times and preserves existing schedules after business hours change', () => {
+test('dashboard editor offers full-day times regardless of public business hours or closed weekdays', () => {
   const businessHours = defaultBusinessHours();
   businessHours.tue = { open: '08:00', close: '22:00', closed: false };
   const custom = render('en', { branch: { businessHours }, services: [{ ...props.services[0], duration: 90 }] });
   assert.match(custom, /value="08:00 AM"/);
   assert.match(custom, /value="08:30 PM"/);
-  assert.doesNotMatch(custom, /value="08:45 PM"/);
+  assert.match(custom, /value="12:00 AM"/);
+  assert.match(custom, /value="10:30 PM"/);
+  assert.doesNotMatch(custom, /value="10:45 PM"/);
   businessHours.tue.closed = true;
   const retained = render('en', { branch: { businessHours } });
   assert.match(retained, /value="10:00 AM" selected=""/);
-  assert.doesNotMatch(retained, /value="11:00 AM"/);
+  assert.match(retained, /value="11:00 AM"/);
+  assert.match(retained, /value="06:00 AM"/);
 });
 
 test('editor submits changes with a version, prevents duplicate saves and reports failed writes', async () => {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { AVAILABLE_TIMES, BOOKING_DEPOSIT_AMOUNT, branchPaymentOptions, validateBranchPaymentOptions, bookingCategories, validateAppointmentTime, defaultBusinessHours, validateBusinessHours, branchAppointmentTimes, businessHoursForDate } from '../lib/booking-options.js';
+import { AVAILABLE_TIMES, BOOKING_DEPOSIT_AMOUNT, branchPaymentOptions, validateBranchPaymentOptions, bookingCategories, validateAppointmentTime, defaultBusinessHours, validateBusinessHours, branchAppointmentTimes, businessHoursForDate, dashboardAppointmentTimes, validateDashboardAppointmentTime } from '../lib/booking-options.js';
 import { emptyPatientHistory, validatePatientHistory, patientHistoryValues, HISTORY_CONDITION_FIELDS } from '../lib/patient-history.js';
 import { anatomicalBodyParts } from '../lib/body-map.js';
 
@@ -33,6 +33,24 @@ test('all seven weekdays default to 10 AM to 8 PM with a one-hour last-start cut
   }
   defaults.mon.open = '08:00';
   assert.equal(defaultBusinessHours().mon.open, '10:00');
+});
+
+test('dashboard times cover the full day without public hours or closing cutoffs', () => {
+  const times = dashboardAppointmentTimes();
+  assert.equal(times.length, 93);
+  assert.equal(times[0], '12:00 AM');
+  assert.equal(times.at(-1), '11:00 PM');
+  assert.ok(times.includes('06:15 AM'));
+  assert.ok(times.includes('09:45 PM'));
+  assert.equal(dashboardAppointmentTimes(90).at(-1), '10:30 PM');
+  assert.equal(dashboardAppointmentTimes(30).at(-1), '11:30 PM');
+  for (const time of times) validateDashboardAppointmentTime(time);
+  for (const time of ['11:15 PM', '10:01 AM', '24:00', '']) {
+    assert.throws(() => validateDashboardAppointmentTime(time), { statusCode: 400 });
+  }
+  for (const duration of [0, -1, 1.5, NaN, 1441]) {
+    assert.throws(() => dashboardAppointmentTimes(duration), /duration/);
+  }
 });
 
 test('per-branch weekly hours allow earlier/later slots, closed days and non-hour openings', () => {

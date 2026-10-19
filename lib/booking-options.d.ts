@@ -17,6 +17,8 @@ export function businessHoursForDate(branch: BookingBranch | undefined, date: st
 export function appointmentTimeMinutes(time: string): number;
 export function appointmentTimeLabel(minutes: number): string;
 export function branchAppointmentTimes(branch: BookingBranch | undefined, date: string, duration?: number): string[];
+export function dashboardAppointmentTimes(duration?: number): string[];
+export function validateDashboardAppointmentTime(time: string, duration?: number): void;
 export function validateAppointmentTime(time: string, branch?: BookingBranch, date?: string, duration?: number): void;
 export function branchPaymentOptions(branch?: BookingBranch): { clinic: boolean; deposit: boolean; full: boolean };
 export function validateBranchPaymentOptions(branch?: BookingBranch): { clinic: boolean; deposit: boolean; full: boolean };

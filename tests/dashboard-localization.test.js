@@ -214,6 +214,30 @@ test('business profile configures appointment gaps and the calendar offers thera
   assert.match(source, /Buffer · \{value0\} min/);
 });
 
+test('dashboard calendar uses the working-day roster and full-day times for every booking role', () => {
+  const date = '2026-10-19';
+  const therapists = [
+    { id: 1, name: 'Extra shift therapist', active: true, branches: [2], schedule: {} },
+    { id: 2, name: 'Off today therapist', active: true, branches: [1], schedule: {} },
+  ];
+  for (const role of ['owner', 'branch_manager', 'branch_receptionist']) {
+    const overrides = {
+      calendarDate: date, calendarBranch: '1', compactCalendar: false,
+      calendarWorkingTherapists: { date, branch: '1', ids: ['1'] },
+    };
+    const userProps = { therapists, dashboardUser: { role, branchIds: ['1'] } };
+    const columns = render('calendar', 'en', { ...overrides, calendarViewMode: 'therapists' }, userProps);
+    assert.match(columns, /aria-controls="therapist-next-availability-1"/);
+    assert.doesNotMatch(columns, /aria-controls="therapist-next-availability-2"/);
+    assert.match(columns, />12:00 AM<\/div>/);
+    assert.match(columns, />11:45 PM<\/div>/);
+    const daily = render('calendar', 'en', { ...overrides, calendarViewMode: 'daily' }, userProps);
+    assert.match(daily, /aria-label="Add appointment at 06:00 AM"/);
+    assert.match(daily, /aria-label="Add appointment at 09:00 PM"/);
+    assert.match(daily, /aria-label="Add appointment at 11:00 PM"/);
+  }
+});
+
 test('dashboard KPIs are scoped to sales, bookings and calendar context', () => {
   const today = new Date().toISOString().slice(0, 10);
   const tomorrow = new Date(`${today}T12:00:00`);

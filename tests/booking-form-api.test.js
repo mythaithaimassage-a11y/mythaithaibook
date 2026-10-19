@@ -141,7 +141,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   const originalEvent = { summary: 'Original appointment', description: 'Customer: Old name\nTherapist: Test Therapist\nPrivate integration metadata',
     start: { dateTime: '2026-11-01T10:00:00-05:00' }, end: { dateTime: '2026-11-01T11:00:00-05:00' }, etag: '"original"' };
   const coupleCalendarEvents = new Map();
-  t.mock.method(google, 'calendar', () => ({ events: {
+  t.mock.method(google, 'calendar', () => ({ calendarList: { list: async () => ({ data: { items: [] } }) }, events: {
     list: async (options) => {
       if (options.maxResults === 20) {
         const index = Number(options.pageToken || 0);
@@ -709,7 +709,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   for (const invalid of [
     { customerName: ' ' }, { customerName: 'x'.repeat(151) }, { contact: '' },
     { contact: 'invalid@email' }, { contact: 'not a phone' }, { contact: '123' },
-    { date: '2026-02-30' }, { date: '' }, { time: '09:45 AM' },
+    { date: '2026-02-30' }, { date: '' }, { time: '09:46 AM' }, { time: '11:15 PM' },
     { serviceId: '404' }, { serviceId: '4' }, { therapistId: '3' },
     { therapistId: '4' }, { therapistId: '' }, { serviceId: '3', therapistId: '1' },
     { serviceId: '2', therapistId2: '1' }, { serviceId: '2', therapistId2: '' },
@@ -1114,7 +1114,7 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   assert.equal(addonEditRecord.service_name, 'Massage + Hot Stone Add-on');
   assert.equal(addonEditRecord.duration_minutes, 75);
   assert.equal(addonEditRecord.total, 135.6, 'Service and Hot Stone prices are recalculated from the catalogue');
-  for (const invalid of [{ serviceId: '404' }, { serviceId: '4' }, { time: '09:45 AM' }, { therapistNames: ['Inactive Therapist'] },
+  for (const invalid of [{ serviceId: '404' }, { serviceId: '4' }, { time: '09:46 AM' }, { time: '11:15 PM' }, { therapistNames: ['Inactive Therapist'] },
     { therapistNames: ['Off Duty'] }, { serviceId: '3', therapistNames: ['Test Therapist'] }, { serviceId: '2', therapistNames: ['Test Therapist', 'Test Therapist'] },
     { paidAmount: '114' }, { total: '-1' }, { date: '2026-02-30' }, { bookingNote: null }]) {
     const result = await request('edit-booking', { ...editBody(), ...invalid });
@@ -1299,8 +1299,9 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
       date: extraShiftDate, branchId: '1', time: '04:00 PM', durationMinutes: '120', staffBooking: 'true',
     },
   });
-  assert.equal(staffShiftDiagnostics.data.unavailableTherapists.find((item) => item.id === 3).reason,
-    'The full appointment does not fit within the saved shift.');
+  assert.ok(staffShiftDiagnostics.data.therapistIds.includes(3),
+    'Dashboard appointments can extend beyond the public shift hours');
+  assert.ok(!staffShiftDiagnostics.data.unavailableTherapists.some((item) => item.id === 3));
   assert.ok(!(await extraShiftAvailability('04:00 PM')).data.therapistIds.includes(3),
     'The full two-hour service must fit inside the date-specific shift');
   const extraShiftBooking = await request('manual-booking', {
@@ -1343,6 +1344,68 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
     });
     assert.equal(reassignment.code, 200, JSON.stringify(reassignment.data));
   }
+  scheduleRows.at(-1)[8] = 'FALSE';
+  for (const staffCookie of [ownerCookie, managerCookie, receptionistCookie]) {
+    cookie = staffCookie;
+    const afterHoursAvailability = await request('available-therapists', null, {
+      method: 'GET', query: {
+        date: extraShiftDate, branchId: '1', time: '06:00 AM', durationMinutes: '120', staffBooking: 'true',
+      },
+    });
+    assert.equal(afterHoursAvailability.code, 200, JSON.stringify(afterHoursAvailability.data));
+    assert.ok(afterHoursAvailability.data.therapistIds.includes(3),
+      'All dashboard booking roles can select hidden working staff outside their published hours');
+    const publicHours = await request('available-therapists', null, {
+      method: 'GET', query: {
+        date: extraShiftDate, branchId: '1', time: '06:00 AM', durationMinutes: '120',
+        staffBooking: 'true', publicBooking: 'true',
+      },
+    });
+    assert.ok(!publicHours.data.therapistIds.includes(3),
+      'Explicit public booking mode cannot bypass published hours even with a dashboard session');
+    const afterHoursBooking = await request('manual-booking', {
+      ...manual, date: extraShiftDate, time: '06:00 AM', serviceId: '6', therapistId: '3',
+    });
+    assert.equal(afterHoursBooking.code, 200, JSON.stringify(afterHoursBooking.data));
+    const afterHoursRecord = records.find((record) => record.booking_id === afterHoursBooking.data.bookingId);
+    assert.equal(afterHoursRecord.time, '06:00 AM');
+    const afterHoursEdit = await request('edit-booking', {
+      ...editBody(), bookingId: afterHoursRecord.booking_id,
+      expectedVersion: bookingEditVersion(BOOKING_TABLE_FIELDS.map((field) => afterHoursRecord[field.name])),
+      date: extraShiftDate, time: '09:00 PM', serviceId: '6', therapistNames: ['Test Therapist'],
+    });
+    assert.equal(afterHoursEdit.code, 200, JSON.stringify(afterHoursEdit.data));
+    const afterHoursAssignment = await request('reassign-therapist', {
+      bookingId: afterHoursRecord.booking_id, therapistName: 'Off Duty',
+    });
+    assert.equal(afterHoursAssignment.code, 200, JSON.stringify(afterHoursAssignment.data));
+    records.splice(records.indexOf(afterHoursRecord), 1);
+  }
+  const workingCalendar = await request('calendar', null, {
+    method: 'GET', query: { date: extraShiftDate, branchName: 'Test Branch' },
+  });
+  assert.equal(workingCalendar.code, 200, JSON.stringify(workingCalendar.data));
+  assert.ok(workingCalendar.data.workingTherapistIds.includes(3),
+    'Calendar columns include a hidden therapist with a date-specific extra shift');
+  scheduleRows.at(-1)[3] = 'FALSE';
+  const offDayCalendar = await request('calendar', null, {
+    method: 'GET', query: { date: extraShiftDate, branchName: 'Test Branch' },
+  });
+  assert.equal(offDayCalendar.code, 200, JSON.stringify(offDayCalendar.data));
+  assert.ok(!offDayCalendar.data.workingTherapistIds.includes(3));
+  const offDayAvailability = await request('available-therapists', null, {
+    method: 'GET', query: { date: extraShiftDate, branchId: '1', time: '06:00 AM', durationMinutes: '120', staffBooking: 'true' },
+  });
+  assert.ok(!offDayAvailability.data.therapistIds.includes(3));
+  assert.equal((await request('manual-booking', {
+    ...manual, date: extraShiftDate, time: '06:00 AM', serviceId: '6', therapistId: '3',
+  })).code, 400, 'Dashboard booking must not override an explicit off-day');
+  assert.equal((await request('reassign-therapist', {
+    bookingId: extraShiftRecord.booking_id, therapistName: 'Second Therapist',
+  })).code, 200);
+  assert.equal((await request('reassign-therapist', {
+    bookingId: extraShiftRecord.booking_id, therapistName: 'Off Duty',
+  })).code, 409, 'Dashboard reassignment must not override an explicit off-day');
   scheduleRows.pop();
   assert.equal((await request('edit-booking', { ...extraShiftEdit(), time: '01:00 PM' })).code, 400,
     'Removing the extra shift restores the regular weekly schedule restrictions');
@@ -1434,8 +1497,12 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
     'A one-hour appointment can start exactly one hour before a later closing');
   const flexibleEdit = await request('edit-booking', { ...editBody(), date: base.date, time: '08:45 AM' });
   assert.equal(flexibleEdit.code, 200, JSON.stringify(flexibleEdit.data));
-  for (const time of ['07:45 AM', '09:15 PM']) {
-    assert.equal((await request('edit-booking', { ...editBody(), time })).code, 400);
+  const conflictingAfterHoursEdit = await request('edit-booking', { ...editBody(), time: '09:15 PM' });
+  assert.equal(conflictingAfterHoursEdit.code, 409);
+  assert.match(conflictingAfterHoursEdit.data.message, /another appointment|booking|gap/);
+  for (const time of ['07:45 AM', '10:15 PM']) {
+    const afterHoursEdit = await request('edit-booking', { ...editBody(), time });
+    assert.equal(afterHoursEdit.code, 200, JSON.stringify(afterHoursEdit.data));
     assert.equal((await request('reschedule-booking', { bookingId: editable.booking_id, email: editable.email, date: base.date, time })).code, 400);
   }
   const beforeRescheduleCount = records.length;
@@ -1454,7 +1521,10 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   branchConfigRows[0].business_hours = JSON.stringify(hours);
   assert.equal((await request('edit-booking', { ...editBody(), bookingNote: 'Retained existing appointment after hours change' })).code, 200,
     'Changing branch hours does not prevent non-scheduling edits to existing appointments');
-  assert.equal((await request('manual-booking', manual)).code, 400, 'Closed days reject new appointments');
+  const closedDayBooking = await request('manual-booking', { ...manual, time: '06:00 AM' });
+  assert.equal(closedDayBooking.code, 200, JSON.stringify(closedDayBooking.data));
+  assert.equal((await request('', { ...base, id: 'MTT-public-closed', time: '06:00 AM' })).code, 400,
+    'Public bookings still reject a closed weekday');
 
   const mergeBody = { sourceName: 'Legacy Staff', targetId: 1, targetName: 'Test Therapist' };
   cookie = '';

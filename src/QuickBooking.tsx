@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import { message, useTranslation, type TranslationMessage } from './localization';
-import { branchAppointmentTimes, type WeeklyBusinessHours } from '../lib/booking-options.js';
+import { dashboardAppointmentTimes, type WeeklyBusinessHours } from '../lib/booking-options.js';
 import useTherapistAvailability from './useTherapistAvailability';
 import { validateBookingContact } from '../lib/booking-contact.js';
 
@@ -52,7 +52,7 @@ export default function QuickBooking(props: Props) {
   const selectableServices = couplePackage ? couplePackages : singleServices;
   const service = selectableServices.find((item) => String(item.id) === serviceId);
   const branch = props.branches.find((item) => String(item.id) === branchId);
-  const availableTimes = date && branch ? branchAppointmentTimes(branch, date, service?.duration ?? 60) : [];
+  const availableTimes = date && branch ? dashboardAppointmentTimes(service?.duration ?? 60) : [];
   const validTime = availableTimes.includes(time) ? time : '';
   const couple = couplePackage;
   const availability = useTherapistAvailability({
@@ -211,6 +211,7 @@ export default function QuickBooking(props: Props) {
           }} aria-describedby="quick-booking-contact-help" placeholder="+1 437 898 7424" className={inputClass} /></label>
         </div>
         <p id="quick-booking-contact-help" className="text-xs text-stone-500">{tr('Enter at least one email address or phone number.')}</p>
+        <p className="text-xs text-stone-500">{tr('Saved hours and public visibility apply to online booking. Dashboard staff can book any time on a working day; conflicts and time off still apply.')}</p>
         <label className="flex items-start gap-3 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm font-semibold text-stone-800">
           <input type="checkbox" checked={couplePackage} disabled={saving} onChange={(event) => toggleCouplePackage(event.target.checked)}
             className="mt-0.5 h-4 w-4 accent-blue-600" />

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import { useTranslation } from './localization';
 import { bookingTaxTreatment, HST_RATE, isCashPayment, preTaxSubtotal, taxOn } from '../lib/booking-tax.js';
-import { branchAppointmentTimes, type WeeklyBusinessHours } from '../lib/booking-options.js';
+import { dashboardAppointmentTimes, type WeeklyBusinessHours } from '../lib/booking-options.js';
 import useTherapistAvailability from './useTherapistAvailability';
 
 export type EditableBooking = {
@@ -90,7 +90,7 @@ export default function EditBooking({ booking, services, therapists, times, bran
   const service = services.find((item) => String(item.id) === form.serviceId);
   const durationMinutes = (service?.duration ?? booking.durationMinutes ?? 60) +
     (form.hotStoneAddOn && hotStoneAddOnService ? Number(hotStoneAddOnService.duration) || 0 : 0);
-  const availableTimes = branch && form.date ? branchAppointmentTimes(branch, form.date, durationMinutes) : times;
+  const availableTimes = form.date ? dashboardAppointmentTimes(durationMinutes) : times;
   const availability = useTherapistAvailability({
     branchId, date: form.date, time: form.time,
     durationMinutes, isRmt: Boolean(service?.isRmt),
