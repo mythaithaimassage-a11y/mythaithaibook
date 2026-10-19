@@ -92,6 +92,11 @@ The Alerts reminder list marks email as missing only when the stored address
 is absent or invalid. Valid-email bookings enable reminder controls unless
 otherwise ineligible (for example, no-show appointments). Upcoming filters
 and totals use the same fields as the reminder audience API.
+The mobile layout includes a three-step guide, large labelled send/history
+buttons, clear selection highlights and a selected-customer summary beside the
+bulk send action. Activity filters scroll horizontally on small screens.
+These presentation changes do not alter recipients, eligibility, delivery,
+refresh timing or the activity feed's seven-day scope.
 
 ### Customer email history and email open signals
 

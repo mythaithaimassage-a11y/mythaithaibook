@@ -2,6 +2,35 @@
 @tailwind components;
 @tailwind utilities;
 
+.alerts-workspace {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.alerts-workspace :is(button, select, input):focus-visible {
+  outline: 3px solid #0284c7;
+  outline-offset: 3px;
+}
+
+.alerts-workspace .alerts-customer-card:focus-within {
+  border-color: #059669;
+}
+
+@media (max-width: 639px) {
+  .alerts-workspace :is(button, select) {
+    min-height: 44px;
+  }
+
+  .alerts-workspace select {
+    max-width: 100%;
+    font-size: 16px;
+  }
+
+  .alerts-workspace .alerts-customer-card > * {
+    min-width: 0;
+  }
+}
+
 .appointment-details-dialog {
   flex-shrink: 0;
   max-height: calc(100vh - 2rem);

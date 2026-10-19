@@ -28,6 +28,8 @@ function renderAudience(candidates, alertsFilter = 'all') {
   const selected = candidates.filter((candidate) => candidate.eligible).map((candidate) => candidate.id);
   const sent = [];
   const opened = [];
+  const selections = [];
+  const toggled = [];
   const module = { exports: {} };
   const compiled = ts.transpileModule(`export default function List() { return ${listExpression}; }`, {
     fileName: 'List.tsx', compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
@@ -36,7 +38,7 @@ function renderAudience(candidates, alertsFilter = 'all') {
     exports: module.exports, require: createRequire(import.meta.url),
     alertsData: { candidates }, alertsFilter, alertsSelected: selected, isSendingAlerts: false, isLoadingAlerts: false,
     tr: (value) => value, formatTime: (value) => value,
-    setAlertsSelected: () => {}, setAlertsFilter: () => {}, toggleAlertRecipient: () => {}, setCommunicationBookingId: (id) => opened.push(id),
+    setAlertsSelected: (ids) => selections.push(Array.from(ids)), setAlertsFilter: () => {}, toggleAlertRecipient: (id) => toggled.push(id), setCommunicationBookingId: (id) => opened.push(id),
     sendAlertReminders: (id) => sent.push(id),
     Check: () => null, Mail: () => null,
   });
@@ -46,7 +48,7 @@ function renderAudience(candidates, alertsFilter = 'all') {
     if (Array.isArray(node)) return node.flatMap((child) => findAll(child, predicate));
     return [...(predicate(node) ? [node] : []), ...findAll(node.props?.children, predicate)];
   };
-  return { html: renderToStaticMarkup(tree), rows: findAll(tree, (node) => node.type === 'li'), findAll, sent, opened };
+  return { html: renderToStaticMarkup(tree), tree, rows: findAll(tree, (node) => node.type === 'li'), findAll, sent, opened, selections, toggled };
 }
 
 function audience() {
@@ -95,6 +97,43 @@ test('tapping a reminder customer opens communication history without sending or
   assert.equal(history.props.disabled, false);
   history.props.onClick();
   assert.deepEqual(ui.opened, ['no-show']);
+  assert.deepEqual(ui.sent, []);
+});
+
+test('mobile reminder cards show labelled actions, large touch controls and a reason when email is missing', () => {
+  const candidates = audience();
+  candidates.find((candidate) => candidate.id === 'valid').reminderSent = true;
+  const ui = renderAudience(candidates);
+  const valid = ui.rows.find((entry) => entry.key === 'valid');
+  const html = renderToStaticMarkup(valid);
+  assert.match(html, /alerts-customer-card/);
+  assert.match(html, />10:30 AM<\/p>/);
+  assert.match(html, />Email history<\/button>/);
+  assert.match(html, />Send again<\/span>/);
+  assert.doesNotMatch(html, /hidden sm:inline/);
+  const actions = ui.findAll(valid, (node) => node.type === 'button');
+  assert.ok(actions.every((node) => node.props.className.includes('min-h-11')));
+  const checkboxLabel = ui.findAll(valid, (node) => node.type === 'label')[0];
+  assert.match(checkboxLabel.props.className, /min-h-11 w-11/);
+  const history = actions.find((node) => node.props.children === 'Email history');
+  history.props.onClick();
+  assert.deepEqual(ui.opened, ['valid']);
+  assert.deepEqual(ui.sent, []);
+  const missing = ui.rows.find((entry) => entry.key === 'missing');
+  assert.match(renderToStaticMarkup(missing), /An email address is needed to send a reminder/);
+});
+
+test('cosmetic selection controls keep the same eligible audience and checkbox actions', () => {
+  const ui = renderAudience(audience(), 'upcoming');
+  const selectAll = ui.findAll(ui.tree, (node) => node.type === 'button' && node.props.children === 'Select all')[0];
+  selectAll.props.onClick();
+  assert.deepEqual(ui.selections, [['valid']]);
+  const clear = ui.findAll(ui.tree, (node) => node.type === 'button' && node.props.children === 'Clear')[0];
+  clear.props.onClick();
+  assert.deepEqual(ui.selections.at(-1), []);
+  const row = ui.rows.find((entry) => entry.key === 'valid');
+  ui.findAll(row, (node) => node.type === 'input')[0].props.onChange();
+  assert.deepEqual(ui.toggled, ['valid']);
   assert.deepEqual(ui.sent, []);
 });
 test('the reminder summary reads the API total rather than a nonexistent totalToday field', () => {

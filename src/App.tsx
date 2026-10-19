@@ -7580,28 +7580,27 @@ function AdminPortal({
 
       {/* TAB CONTENT: ALERTS */}
       {activeTab === 'alerts' && (
-        <div className="space-y-5">
+        <div className="alerts-workspace space-y-5">
           <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-            <div className="bg-gradient-to-r from-slate-950 via-slate-900 to-emerald-950 px-5 py-6 text-white sm:px-7">
+            <div className="bg-gradient-to-br from-emerald-950 to-emerald-800 px-4 py-5 text-white sm:px-6 sm:py-6">
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div className="flex items-start gap-4">
-                  <span className="rounded-xl bg-white/10 p-3 text-emerald-300">
-                    <Bell className="h-5 w-5" />
+                  <span className="rounded-2xl bg-white/10 p-3 text-emerald-200">
+                    <Bell aria-hidden="true" className="h-6 w-6" />
                   </span>
                   <div>
-                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-300">{tr("Workspace")}</p>
-                    <h2 className="mt-1 text-xl font-bold">{tr("Alerts")}</h2>
-                    <MobileHelp><p className="mt-1 max-w-2xl text-sm text-slate-300">
-                      {tr("Filter today's upcoming appointments and send timely reminders with attendance confirmation and self-service rescheduling.")}
-                    </p></MobileHelp>
+                    <h2 className="text-xl font-bold sm:text-2xl">{tr("Alerts")}</h2>
+                    <p className="mt-1 max-w-xl text-sm leading-6 text-emerald-100">
+                      {tr("Help customers remember their appointment today.")}
+                    </p>
                   </div>
                 </div>
-                <div className="flex flex-wrap gap-2">
+                <div className="alerts-header-actions flex w-full flex-wrap gap-2 sm:w-auto">
                   <button
                     type="button"
                     onClick={loadAlerts}
                     disabled={isLoadingAlerts || isSendingAlerts}
-                    className="inline-flex items-center gap-2 rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-xs font-semibold text-white transition hover:bg-white/15 disabled:opacity-50"
+                    className="inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl border border-white/25 bg-white/10 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/15 disabled:opacity-50 sm:flex-none"
                   >
                     <RefreshCw className={`h-3.5 w-3.5 ${isLoadingAlerts ? 'animate-spin' : ''}`} />
                     {tr("Refresh")}
@@ -7610,12 +7609,22 @@ function AdminPortal({
                     type="button"
                     onClick={() => sendAlertReminders()}
                     disabled={isSendingAlerts || isLoadingAlerts || !alertsSelected.length}
-                    className="inline-flex items-center gap-2 rounded-lg bg-emerald-500 px-3 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-45"
+                    className="inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-white px-4 py-3 text-sm font-bold text-emerald-950 shadow-sm transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50 sm:flex-none"
                   >
                     <Mail className="h-3.5 w-3.5" />
                     {isSendingAlerts ? tr("Sending…") : tr("Send reminders ({value0})", { value0: alertsSelected.length })}
                   </button>
                 </div>
+                <ol aria-label={tr("How to send reminders")} className="grid gap-3 bg-emerald-50/60 p-4 sm:grid-cols-3 sm:px-6">
+                  {[
+                    ['1', 'Choose customers', 'Use the checkboxes or Select all.'],
+                    ['2', 'Check your selection', 'Checked customers will get an email.'],
+                    ['3', 'Send reminders', 'Customers can confirm, cancel or change their time.'],
+                  ].map(([step, title, description]) => <li key={step} className="flex items-start gap-3">
+                    <span aria-hidden="true" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-sm font-bold text-emerald-900">{step}</span>
+                    <div><p className="text-sm font-bold text-slate-900">{tr(title)}</p><p className="mt-0.5 text-xs leading-5 text-slate-600">{tr(description)}</p></div>
+                  </li>)}
+                </ol>
               </div>
             </div>
           </section>
@@ -7631,43 +7640,45 @@ function AdminPortal({
             </div>
           )}
 
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div aria-label={tr("Today at a glance")} className="alerts-summary grid grid-cols-2 gap-2 sm:grid-cols-4 sm:gap-3">
             <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-              <p className="text-xs font-medium text-slate-500">{tr("Upcoming today")}</p>
+              <p className="text-xs font-semibold text-slate-600">{tr("Still to come")}</p>
               <p className="mt-1 text-2xl font-bold text-slate-900">{alertsData?.stats?.upcoming ?? 0}</p>
             </section>
             <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-              <p className="text-xs font-medium text-slate-500">{tr("Confirmed on time")}</p>
+              <p className="text-xs font-semibold text-slate-600">{tr("Confirmed on time")}</p>
               <p className="mt-1 text-2xl font-bold text-emerald-800">{alertsData?.stats?.confirmed ?? 0}</p>
             </section>
             <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-              <p className="text-xs font-medium text-slate-500">{tr("Reminders sent")}</p>
+              <p className="text-xs font-semibold text-slate-600">{tr("Reminders sent")}</p>
               <p className="mt-1 text-2xl font-bold text-sky-800">{alertsData?.stats?.remindersSent ?? 0}</p>
             </section>
             <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-              <p className="text-xs font-medium text-slate-500">{tr("Total today")}</p>
+              <p className="text-xs font-semibold text-slate-600">{tr("Total today")}</p>
               <p className="mt-1 text-2xl font-bold text-slate-900">{alertsData?.stats?.total ?? 0}</p>
             </section>
           </div>
 
-          <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
+          <section className="alerts-reminders rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-4 py-4 sm:px-5">
               <div className="flex items-center gap-2">
                 <span className="text-sm font-bold text-slate-900">{tr("Appointments today")}</span>
                 <span className="text-xs text-slate-400">({alertsData?.todayDate || new Date().toISOString().slice(0, 10)})</span>
               </div>
-              <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs">
+              <div aria-label={tr("Show appointments")} className="grid w-full grid-cols-2 rounded-xl border border-slate-200 bg-slate-100 p-1 text-xs sm:w-auto">
                 <button
                   type="button"
                   onClick={() => setAlertsFilter('upcoming')}
-                  className={`rounded-md px-3 py-1.5 font-semibold transition ${alertsFilter === 'upcoming' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+                  aria-pressed={alertsFilter === 'upcoming'}
+                  className={`min-h-11 rounded-lg px-3 py-2 font-semibold transition ${alertsFilter === 'upcoming' ? 'bg-white text-emerald-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
                 >
                   {tr("Upcoming today")} ({alertsData?.candidates?.filter((c) => c.isUpcoming).length ?? 0})
                 </button>
                 <button
                   type="button"
                   onClick={() => setAlertsFilter('all')}
-                  className={`rounded-md px-3 py-1.5 font-semibold transition ${alertsFilter === 'all' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+                  aria-pressed={alertsFilter === 'all'}
+                  className={`min-h-11 rounded-lg px-3 py-2 font-semibold transition ${alertsFilter === 'all' ? 'bg-white text-emerald-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
                 >
                   {tr("All today")} ({alertsData?.candidates?.length ?? 0})
                 </button>
@@ -7690,22 +7701,22 @@ function AdminPortal({
               const eligibleDisplayed = displayed.filter((c) => c.eligible);
               return (
                 <div className="p-4 sm:p-5">
-                  <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-xs">
-                    <span className="font-semibold text-slate-600">
-                      {alertsSelected.length} {tr("of")} {displayed.length} {tr("selected")}
+                  <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-xl bg-slate-50 p-3 text-sm">
+                    <span className="font-semibold text-slate-700" aria-live="polite">
+                      {tr("{count} selected", { count: alertsSelected.length })}
                     </span>
-                    <div className="flex gap-3">
+                    <div className="flex gap-2">
                       <button
                         type="button"
                         onClick={() => setAlertsSelected(eligibleDisplayed.map((c) => c.id))}
-                        className="font-semibold text-emerald-800 hover:underline"
+                        className="min-h-11 rounded-lg border border-emerald-200 bg-white px-3 py-2 text-xs font-bold text-emerald-800 hover:bg-emerald-50"
                       >
                         {tr("Select all")}
                       </button>
                       <button
                         type="button"
                         onClick={() => setAlertsSelected([])}
-                        className="font-semibold text-slate-500 hover:underline"
+                        className="min-h-11 rounded-lg px-3 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-200"
                       >
                         {tr("Clear")}
                       </button>
@@ -7724,67 +7735,76 @@ function AdminPortal({
                       </button>
                     </div>
                   ) : (
-                    <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200">
+                    <ul className="space-y-3">
                       {displayed.map((candidate) => (
-                        <li key={candidate.id} className="flex items-start gap-3 p-3.5 transition hover:bg-slate-50/70 sm:items-center">
-                          <input
-                            type="checkbox"
-                            className="mt-1 h-4 w-4 accent-emerald-700 disabled:opacity-40 sm:mt-0"
-                            checked={alertsSelected.includes(candidate.id)}
-                            disabled={!candidate.eligible}
-                            onChange={() => toggleAlertRecipient(candidate.id)}
-                            aria-label={`Select ${candidate.customerName || candidate.id}`}
-                          />
+                        <li key={candidate.id} className={`alerts-customer-card grid grid-cols-[44px_minmax(0,1fr)] gap-x-2 rounded-2xl border p-3 transition sm:grid-cols-[44px_minmax(0,1fr)_auto] sm:items-center sm:p-4 ${alertsSelected.includes(candidate.id) ? 'border-emerald-300 bg-emerald-50/40' : 'border-slate-200 bg-white'}`}>
+                          <label className="flex min-h-11 w-11 cursor-pointer items-center justify-center self-start rounded-xl hover:bg-emerald-100/60">
+                            <input
+                              type="checkbox"
+                              className="h-5 w-5 accent-emerald-700 disabled:opacity-40"
+                              checked={alertsSelected.includes(candidate.id)}
+                              disabled={!candidate.eligible}
+                              onChange={() => toggleAlertRecipient(candidate.id)}
+                              aria-label={tr("Select {value0}", { value0: candidate.customerName || candidate.id })}
+                            />
+                          </label>
                           <div className="min-w-0 flex-1">
+                            <p className="text-base font-bold text-emerald-900">{formatTime(candidate.time)}</p>
                             <div className="flex flex-wrap items-center gap-2">
                               <button type="button" onClick={() => setCommunicationBookingId(candidate.id)} disabled={!candidate.hasEmail}
                                 aria-label={tr('Email history for {name}', { name: candidate.customerName || tr("Guest customer") })}
-                                className="min-h-11 text-left font-bold text-slate-900 underline decoration-emerald-200 underline-offset-4 hover:text-emerald-800 disabled:no-underline">{candidate.customerName || tr("Guest customer")}</button>
+                                className="min-h-11 break-words text-left text-base font-bold text-slate-900 underline decoration-emerald-200 underline-offset-4 hover:text-emerald-800 disabled:no-underline">{candidate.customerName || tr("Guest customer")}</button>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-1.5">
                               {candidate.confirmedOnTime && (
-                                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-900">
+                                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-1 text-xs font-semibold text-emerald-900">
                                   <Check className="h-3 w-3" />
                                   {tr("Confirmed on time")}
                                 </span>
                               )}
                               {candidate.reminderSent && (
-                                <span className="inline-flex items-center gap-1 rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-bold text-sky-900">
+                                <span className="inline-flex items-center gap-1 rounded-full bg-sky-100 px-2 py-1 text-xs font-semibold text-sky-900">
                                   <Mail className="h-3 w-3" />
                                   {tr("Reminder sent")}
                                 </span>
                               )}
                               {!candidate.hasEmail && (
-                                <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-900">
+                                <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-900">
                                   {tr("Missing email")}
                                 </span>
                               )}
                               {!candidate.isUpcoming && (
-                                <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600">
+                                <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-600">
                                   {tr("Past time")}
                                 </span>
                               )}
                             </div>
-                            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-slate-500">
-                              <span className="font-semibold text-slate-700">{formatTime(candidate.time)}</span>
-                              {candidate.branchName && <span>· {candidate.branchName}</span>}
-                              {candidate.serviceName && <span>· {candidate.serviceName}</span>}
-                              {candidate.therapistName && <span>· {candidate.therapistName}</span>}
+                            <div className="mt-2 space-y-1 text-sm text-slate-600">
+                              {candidate.serviceName && <p className="break-words font-medium text-slate-800">{candidate.serviceName}</p>}
+                              {(candidate.branchName || candidate.therapistName) && <p className="break-words">{[candidate.branchName, candidate.therapistName].filter(Boolean).join(' · ')}</p>}
                             </div>
-                            <div className="mt-0.5 flex flex-wrap items-center gap-x-3 text-[11px] text-slate-400">
-                              {candidate.email && <span>{candidate.email}</span>}
-                              {candidate.phone && <span>{candidate.phone}</span>}
-                              <span>{tr("Ref:")} {candidate.id}</span>
+                            <div className="mt-2 space-y-1 break-words text-xs text-slate-500">
+                              {candidate.email && <p>{candidate.email}</p>}
+                              {candidate.phone && <p>{candidate.phone}</p>}
+                              <p>{tr("Ref:")} {candidate.id}</p>
                             </div>
+                            {!candidate.hasEmail && <p className="mt-2 text-xs font-medium leading-5 text-amber-900">{tr("An email address is needed to send a reminder.")}</p>}
                           </div>
-                          <div className="flex items-center gap-2">
+                          <div className="col-start-2 mt-3 flex flex-wrap gap-2 sm:col-start-auto sm:mt-0 sm:flex-col">
+                            <button type="button" onClick={() => setCommunicationBookingId(candidate.id)} disabled={!candidate.hasEmail}
+                              aria-label={tr('Email history for {name}', { name: candidate.customerName || tr("Guest customer") })}
+                              className="inline-flex min-h-11 flex-1 items-center justify-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40 sm:flex-none">
+                              {tr("Email history")}
+                            </button>
                             <button
                               type="button"
                               aria-label={tr('Send reminder to {name}', { name: candidate.customerName || tr("Guest customer") })}
                               onClick={() => sendAlertReminders(candidate.id)}
                               disabled={isSendingAlerts || !candidate.eligible}
-                              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:opacity-40"
+                              className="inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-emerald-800 px-3 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-emerald-900 disabled:opacity-40 sm:flex-none"
                             >
-                              <Mail className="h-3.5 w-3.5 text-slate-500" />
-                              <span className="hidden sm:inline">{candidate.reminderSent ? tr("Resend") : tr("Send")}</span>
+                              <Mail aria-hidden="true" className="h-4 w-4 shrink-0" />
+                              <span>{candidate.reminderSent ? tr("Send again") : tr("Send reminder")}</span>
                             </button>
                           </div>
                         </li>
@@ -7792,15 +7812,16 @@ function AdminPortal({
                     </ul>
                   )}
 
-                  <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50/70 p-3 text-xs text-slate-500">
-                    <p className="leading-5">
-                      {tr("Reminders contain a 1-click confirmation link for customers to confirm they will arrive on time, as well as links to cancel or reschedule.")}
-                    </p>
+                  <div className="alerts-send-bar mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-slate-600">
+                    <div className="min-w-0 flex-1">
+                      <p className="font-bold text-emerald-950">{tr("{count} selected", { count: alertsSelected.length })}</p>
+                      <p className="mt-1 text-xs leading-5">{alertsSelected.length ? tr("Only checked customers will get a reminder email.") : tr("Choose at least one customer above.")}</p>
+                    </div>
                     <button
                       type="button"
                       onClick={() => sendAlertReminders()}
                       disabled={isSendingAlerts || isLoadingAlerts || !alertsSelected.length}
-                      className="inline-flex items-center gap-2 rounded-xl bg-emerald-950 px-4 py-2 text-xs font-bold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-45"
+                      className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-emerald-900 px-4 py-3 text-sm font-bold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-45 sm:w-auto"
                     >
                       <Mail className="h-4 w-4" />
                       {isSendingAlerts ? tr("Sending…") : tr("Send reminders ({value0})", { value0: alertsSelected.length })}

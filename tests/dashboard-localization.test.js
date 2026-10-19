@@ -143,6 +143,51 @@ test('all dashboard sections retain a current title and usable mobile navigation
   assert.match(render('patient-history', 'en', { compactCalendar: true }), /Confidential health information/);
 });
 
+test('Alerts provides a simple mobile guide and labelled actions in both languages for every staff role', () => {
+  const candidate = {
+    id: 'ALERT-1', customerName: 'English Customer', email: 'client@example.com', phone: '4375550101',
+    branchName: 'Central Branch', serviceName: 'Thai Traditional Massage (60 min)', therapistName: 'Tanya',
+    time: '11:00 AM', eligible: true, hasEmail: true, isUpcoming: true, reminderSent: false, confirmedOnTime: false,
+  };
+  const alertsData = { todayDate: '2026-10-19', candidates: [candidate], stats: { upcoming: 1, confirmed: 0, remindersSent: 0, total: 1 } };
+  for (const role of ['owner', 'branch_manager', 'branch_receptionist']) {
+    const state = { alertsData, alertsSelected: ['ALERT-1'], alertsFilter: 'upcoming', compactCalendar: true };
+    const user = { dashboardUser: { role, branchIds: ['1'] } };
+    const english = render('alerts', 'en', state, user);
+    assert.match(english, /aria-label="How to send reminders"/);
+    assert.match(english, /Choose customers/);
+    assert.match(english, /Check your selection/);
+    assert.match(english, /1 selected/);
+    assert.match(english, /Only checked customers will get a reminder email/);
+    assert.match(english, /aria-pressed="true"[^>]*>Upcoming today/);
+    assert.match(english, />Email history<\/button>/);
+    assert.match(english, />Send reminder<\/span>/);
+    assert.match(english, /Send reminders \(1\)/);
+    const thai = render('alerts', 'th', state, user);
+    assert.match(thai, /เลือกลูกค้า/);
+    assert.match(thai, /ตรวจสอบรายชื่อที่เลือก/);
+    assert.match(thai, /เลือกแล้ว 1 ราย/);
+    assert.match(thai, /ประวัติอีเมล/);
+    assert.match(thai, /English Customer/);
+    assert.match(thai, /client@example.com/);
+    assert.doesNotMatch(thai, /Choose customers|Check your selection|How to send reminders|Only checked customers/);
+  }
+  const empty = render('alerts', 'en', { alertsData: { ...alertsData, candidates: [] } });
+  assert.match(empty, /No appointments scheduled for today/);
+});
+
+test('Alerts mobile styling uses scoped touch targets, readable inputs and visible keyboard focus', () => {
+  const css = postcss.parse(readFileSync(new URL('../src/index.css', import.meta.url), 'utf8'));
+  const rules = [];
+  css.walkRules((rule) => rules.push(rule));
+  const controls = rules.find((rule) => rule.selector === '.alerts-workspace :is(button, select)');
+  assert.ok(controls);
+  assert.equal(controls.parent.params, '(max-width: 639px)');
+  assert.ok(controls.nodes.some((node) => node.prop === 'min-height' && node.value === '44px'));
+  const focus = rules.find((rule) => rule.selector === '.alerts-workspace :is(button, select, input):focus-visible');
+  assert.ok(focus.nodes.some((node) => node.prop === 'outline' && node.value === '3px solid #0284c7'));
+});
+
 test('marketing offers a one-click audience for all opted-in customers in both languages', () => {
   const english = render('marketing', 'en');
   assert.match(english, /Select all opted-in customers/);
