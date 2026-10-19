@@ -809,7 +809,7 @@ Unmapped names are kept unchanged. `therapistGroups` and
 Regression tests:
 `node --test tests/wix-contacts.test.js tests/wix-bookings.test.js tests/wix-paid-receipts.test.js tests/packages.test.js`.
 
-## Four-session prepaid package tracking
+## Prepaid package tracking by session duration
 
 Open **Grow → Package tracking** in the owner dashboard. This is separate
 from loyalty points and corporate prepaid hours; no existing booking or
@@ -817,22 +817,26 @@ loyalty schema is changed. The authorized new BigQuery table
 `session_packages` is created on first use in the existing dataset (override
 with `BIGQUERY_PACKAGES_TABLE`). Existing IAM permissions cover it. The table
 contains the customer's email/name, package duration/price/tax, unique
-purchase reference/date, verified starting balance, remaining sessions,
-revision, and JSON usage history.
+purchase reference/date, verified starting balance, remaining minutes,
+revision, and JSON usage history. A package session's duration is its unit:
+using a 90-minute booking from a four-session, 60-minute package deducts 90
+minutes (1.5 session-equivalents) and leaves 150 minutes (2.5
+session-equivalents).
 
-1. **Register a verified purchase.** Enter the actual full four-session price
+1. **Register a verified purchase.** Enter the actual full package price
    before tax, purchase date, session duration, and a unique purchase
    reference. Confirm that payment and the starting balance have been
-   verified. Start with four sessions for a new purchase or the verified
-   remaining number (0-4) for an existing package.
+   verified. Start with four session-equivalents for a new purchase or the
+   verified remaining number (0-4) for an existing package.
 2. **Find the customer/package** by name, email, package name or purchase
    reference. Multiple genuine purchases use different purchase references.
    Registering the same reference again never resets or replenishes a balance;
    conflicting registrations fail explicitly.
-3. **Link a completed booking** with the same email and duration. Confirm
-   that it belongs to the package and has not already been deducted from the
-   registered starting balance. One session is deducted, and the booking is
-   covered by the allocated prepaid session value. There is no new charge.
+3. **Link a completed booking** with the same email. Confirm that it belongs
+   to the package and has not already been deducted from the registered
+   starting balance. The booking's actual duration is deducted in minutes
+   (including fractional session-equivalents), and the booking is covered by
+   the proportional allocated prepaid value. There is no new charge.
 4. **Issue the receipt** through the existing booking controls. The receipt
    email (text/HTML), dashboard receipt, and printed receipt include package
    name/reference, one deducted session, remaining balance **after that visit**,
@@ -1399,9 +1403,13 @@ and membership names is sent to Gemini — never customer names, email addresses
 patient data, or booking rows. When `GEMINI_API_KEY` is not configured, or when
 the Gemini request fails, the original offline keyword matcher is used instead.
 **Manual filters** builds the same audience from membership tier, branch,
-service, weekday (optionally regulars only), recent-visit window, and a
-most-recent-customer cap, entirely on your own data with no AI involved. The
-choices offered come from `GET /api/booking?view=campaign-audience-options`,
+service, weekday (optionally regulars only), recent-visit window,
+most-recent-customer cap, past booking count (excluding cancellations and
+no-shows), and upcoming birthdays. The birthday audience query selects only
+the patient-history email and date-of-birth columns, and runs only when a
+birthday filter is selected; birth dates and patient-history fields are never
+sent to Gemini. All manual filters run on your own data without AI.
+The choices offered come from `GET /api/booking?view=campaign-audience-options`,
 which returns the branches, services, and membership tiers that actually occur
 in your records.
 

@@ -143,6 +143,20 @@ test('all dashboard sections retain a current title and usable mobile navigation
   assert.match(render('patient-history', 'en', { compactCalendar: true }), /Confidential health information/);
 });
 
+test('marketing offers a one-click audience for all opted-in customers in both languages', () => {
+  const english = render('marketing', 'en');
+  assert.match(english, /Select all opted-in customers/);
+  assert.match(english, /Customers with birthdays in the next 30 days/);
+  assert.match(english, /Campaigns go only to people who checked the optional marketing consent box/);
+  const englishManual = render('marketing', 'en', { campaignAudienceMode: 'manual' });
+  assert.match(englishManual, /Returning \(2\+ past bookings\)/);
+  const thai = render('marketing', 'th', { campaignAudienceMode: 'manual' });
+  assert.match(thai, /เลือกลูกค้าที่สมัครรับอีเมลทั้งหมด/);
+  assert.match(thai, /วันเกิด/);
+  assert.match(thai, /กลับมาใช้บริการ \(จองแล้ว 2 ครั้งขึ้นไป\)/);
+  assert.doesNotMatch(thai, />Select all opted-in customers</);
+});
+
 test('expanded mobile calendar retains one permission-filtered navigation and menu inside its panel', () => {
   for (const [role, sections] of [['owner', 20], ['branch_manager', 6], ['branch_receptionist', 4]]) {
     const html = render('calendar', 'en', { compactCalendar: true, calendarFullscreen: true, mobileNavOpen: true }, {

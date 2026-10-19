@@ -72,10 +72,10 @@ test('registration validates owner confirmation, price, duration, tax, remaining
   ]) assert.throws(() => validatePackageRegistration({ ...registration, ...change }), { statusCode: 400 });
 });
 
-test('legacy package tables gain only the nullable customer phone column during customer search', async () => {
+test('legacy package tables gain nullable customer phone and exact remaining-minutes columns', async () => {
   const packageRecord = pkg();
-  const legacySchema = Object.entries(packageRecord).filter(([name]) => name !== 'customer_phone').map(([name, value]) => ({
-    name, type: typeof value === 'number' ? ['subtotal', 'tax_rate'].includes(name) ? 'FLOAT64' : 'INT64' : 'STRING',
+  const legacySchema = Object.entries(packageRecord).filter(([name]) => !['customer_phone', 'remaining_minutes'].includes(name)).map(([name, value]) => ({
+    name, type: typeof value === 'number' ? ['subtotal', 'tax_rate', 'remaining_minutes'].includes(name) ? 'FLOAT64' : 'INT64' : 'STRING',
   }));
   let schema = legacySchema;
   let queryOptions;
@@ -91,8 +91,11 @@ test('legacy package tables gain only the nullable customer phone column during 
   };
   const customers = await createPackageStore(bigquery, { projectId: 'test-project', datasetId: 'booking_system', bookingsTableId: 'bookings' })
     .searchCustomers('4165550101');
-  assert.equal(schema.length, legacySchema.length + 1);
-  assert.deepEqual(schema.at(-1), { name: 'customer_phone', type: 'STRING', mode: 'NULLABLE' });
+  assert.equal(schema.length, legacySchema.length + 2);
+  assert.deepEqual(schema.slice(-2), [
+    { name: 'customer_phone', type: 'STRING', mode: 'NULLABLE' },
+    { name: 'remaining_minutes', type: 'FLOAT64', mode: 'NULLABLE' },
+  ]);
   assert.equal(queryOptions.params.phone_search, '4165550101');
   assert.deepEqual(customers, [{ name: 'Test Client', email: 'client@example.com', phone: packageRecord.customer_phone }]);
 });
@@ -108,6 +111,7 @@ test('four distinct completed bookings deduct 4→3→2→1→0; retry does not 
     assert.equal(JSON.parse(result.notes).sourceFields['Form answer 1'], 'preserve');
     assert.match(result.statusNotes, /Preserve original provenance/);
     packageRecord.remaining_sessions = result.remaining;
+    packageRecord.remaining_minutes = result.remainingMinutes;
     packageRecord.usages_json = result.usages;
     record.intake_notes = result.notes;
     records.push(record);
@@ -119,38 +123,37 @@ test('four distinct completed bookings deduct 4→3→2→1→0; retry does not 
     assert.equal(receipt.allocatedSubtotal, 90);
     assert.equal(receipt.allocatedTax, 11.7);
     assert.equal(receipt.newPayment, 0);
-    assert.match(receipt.description, new RegExp(`session ${index + 1} of 4 deducted`));
+    assert.equal(receipt.minutesDeducted, 60);
+    assert.match(receipt.description, /60 of 240 prepaid minutes used/);
   }
   assert.equal(JSON.parse(packageRecord.usages_json).length, 4);
   assert.throws(() => preparePackageRedemption(packageRecord, booking('WIX-fifth'), { completed: true }), /no sessions remaining/);
   assert.equal(packageReceiptDetails(records[0].intake_notes).remainingSessions, 3, 'Earlier receipt keeps balance-at-visit snapshot');
 });
 
-test('completed package visits can check in a specific unused session and keep the ledger balance synchronized', () => {
+test('package use deducts actual booking minutes and prorates remaining session-equivalents', () => {
   const packageRecord = pkg();
-  const thirdSession = preparePackageRedemption(packageRecord, booking('WIX-session-3'), { completed: true, sessionNumber: 3 });
-  assert.equal(thirdSession.usage.sessionNumber, 3);
-  assert.equal(thirdSession.remaining, 3);
-  assert.equal(packageReceiptDetails(thirdSession.notes).sessionNumber, 3);
-  packageRecord.remaining_sessions = thirdSession.remaining;
-  packageRecord.usages_json = thirdSession.usages;
-
-  const firstSession = preparePackageRedemption(packageRecord, booking('WIX-session-1'), { completed: true, sessionNumber: 1 });
-  assert.equal(firstSession.usage.sessionNumber, 1);
-  assert.equal(firstSession.remaining, 2);
-  packageRecord.remaining_sessions = firstSession.remaining;
-  packageRecord.usages_json = firstSession.usages;
-  assert.throws(() => preparePackageRedemption(packageRecord, booking('WIX-duplicate-session'), {
-    completed: true, sessionNumber: 3,
-  }), /unused session/);
+  const firstVisit = preparePackageRedemption(packageRecord, { ...booking('WIX-90min'), duration_minutes: 90 }, { completed: true });
+  assert.equal(firstVisit.usage.minutesDeducted, 90);
+  assert.equal(firstVisit.usage.sessionsDeducted, 1.5);
+  assert.equal(firstVisit.usage.remainingMinutes, 150);
+  assert.equal(firstVisit.usage.remainingSessions, 2.5);
+  assert.equal(firstVisit.total, 152.55);
+  assert.match(packageReceiptDetails(firstVisit.notes).description, /90 of 240 prepaid minutes used \(1.5 session-equivalents\); 150 minutes \(2.5 session-equivalents\) remain/);
+  packageRecord.remaining_sessions = Math.floor(firstVisit.remaining);
+  packageRecord.remaining_minutes = firstVisit.remainingMinutes;
+  packageRecord.usages_json = firstVisit.usages;
+  const secondVisit = preparePackageRedemption(packageRecord, { ...booking('WIX-60min'), duration_minutes: 60 }, { completed: true });
+  assert.equal(secondVisit.remainingMinutes, 90);
+  assert.equal(secondVisit.remaining, 1.5);
 
   const partial = validatePackageRegistration({ ...registration, remainingSessions: 2 });
-  assert.throws(() => preparePackageRedemption(partial, booking('WIX-already-consumed'), {
-    completed: true, sessionNumber: 2,
-  }), /unused session/);
-  assert.equal(preparePackageRedemption(partial, booking('WIX-session-3'), {
-    completed: true, sessionNumber: 3,
-  }).remaining, 1);
+  assert.throws(() => preparePackageRedemption(partial, { ...booking('WIX-too-long'), duration_minutes: 150 }, {
+    completed: true,
+  }), /longer than the remaining prepaid package time/);
+  assert.equal(preparePackageRedemption(partial, { ...booking('WIX-90min'), duration_minutes: 90 }, {
+    completed: true,
+  }).remaining, 0.5);
 });
 
 test('verified partial balance deducts only what remains; fractional cents conserve complete package value', () => {
@@ -161,6 +164,7 @@ test('verified partial balance deducts only what remains; fractional cents conse
     subtotal += result.usage.allocatedSubtotal;
     tax += result.usage.allocatedTax;
     packageRecord.remaining_sessions = result.remaining;
+    packageRecord.remaining_minutes = result.remainingMinutes;
     packageRecord.usages_json = result.usages;
   }
   assert.equal(Math.round(subtotal * 100), 36003);
@@ -169,9 +173,9 @@ test('verified partial balance deducts only what remains; fractional cents conse
   assert.equal(preparePackageRedemption(partial, booking(), { completed: true }).remaining, 1);
 });
 
-test('prevents customer/duration mismatch, uncompleted/cancelled visits, receipt rewrites, extra payments and double benefits', () => {
+test('prevents customer mismatch, uncompleted/cancelled visits, receipt rewrites, extra payments and double benefits', () => {
   for (const changes of [
-    { email: 'other@example.com' }, { duration_minutes: 90 }, { status: 'Cancelled' },
+    { email: 'other@example.com' }, { status: 'Cancelled' },
     { status: 'No Show' }, { receipt_number: 'RECEIPT' }, { receipt_email_status: 'pending' },
     { receipt_issued_at: '2025-01-01' }, { date: '2024-12-31' },
     { booking_id: 'MTT-normal-paid' }, { membership_discount_amount: 1 }, { service_name: 'RMT service' },
@@ -183,10 +187,10 @@ test('prevents customer/duration mismatch, uncompleted/cancelled visits, receipt
 });
 
 test('store commits package decrement and booking link in one transaction with revision and snapshot guards', async () => {
-  const packageRecord = pkg(), record = booking();
+  const packageRecord = pkg(), record = { ...booking(), duration_minutes: 90 };
   const calls = [];
   const schema = Object.entries(packageRecord).map(([name, value]) => ({
-    name, type: typeof value === 'number' ? ['subtotal', 'tax_rate'].includes(name) ? 'FLOAT64' : 'INT64' : 'STRING',
+    name, type: typeof value === 'number' ? ['subtotal', 'tax_rate', 'remaining_minutes'].includes(name) ? 'FLOAT64' : 'INT64' : 'STRING',
   }));
   const bigquery = {
     dataset: () => ({
@@ -202,9 +206,9 @@ test('store commits package decrement and booking link in one transaction with r
     },
   };
   const config = { projectId: 'test-project', datasetId: 'booking_system', bookingsTableId: 'bookings' };
-  const result = await createPackageStore(bigquery, config).redeem({ packageId: packageRecord.package_id, bookingId: record.booking_id, sessionNumber: 3, isCompleted: () => true });
-  assert.equal(result.usage.remainingSessions, 3);
-  assert.equal(result.usage.sessionNumber, 3);
+  const result = await createPackageStore(bigquery, config).redeem({ packageId: packageRecord.package_id, bookingId: record.booking_id, isCompleted: () => true });
+  assert.equal(result.usage.remainingSessions, 2.5);
+  assert.equal(result.usage.minutesDeducted, 90);
   const script = calls.find(({ query }) => query.startsWith('BEGIN TRANSACTION'));
   assert.match(script.query, /revision = @revision/);
   assert.match(script.query, /COALESCE\(intake_notes, ''\) = @old_notes/);
@@ -212,8 +216,9 @@ test('store commits package decrement and booking link in one transaction with r
   assert.match(script.query, /UPDATE `test-project.booking_system.session_packages`/);
   assert.match(script.query, /UPDATE `test-project.booking_system.bookings`/);
   assert.match(script.query, /COMMIT TRANSACTION/);
-  assert.equal(script.params.remaining, 3);
-  assert.equal(script.params.total, 101.7);
+  assert.equal(script.params.remaining, 2);
+  assert.equal(script.params.remaining_minutes, 150);
+  assert.equal(script.params.total, 152.55);
   assert.throws(() => createPackageStore(bigquery, { ...config, tableId: 'bookings' }), /separate/);
   assert.throws(() => createPackageStore(bigquery, { ...config, tableId: 'loyalty_ledger', forbiddenTables: ['loyalty_ledger'] }), /separate/);
   bigquery.query = async (options) => {
@@ -227,7 +232,7 @@ test('store commits package decrement and booking link in one transaction with r
 test('transaction failure is surfaced, not reported as a successful deduction', async () => {
   const packageRecord = pkg(), record = booking();
   const schema = Object.entries(packageRecord).map(([name, value]) => ({
-    name, type: typeof value === 'number' ? ['subtotal', 'tax_rate'].includes(name) ? 'FLOAT64' : 'INT64' : 'STRING',
+    name, type: typeof value === 'number' ? ['subtotal', 'tax_rate', 'remaining_minutes'].includes(name) ? 'FLOAT64' : 'INT64' : 'STRING',
   }));
   const bigquery = {
     dataset: () => ({ table: () => ({ exists: async () => [true], getMetadata: async () => [{ schema: { fields: schema } }] }) }),

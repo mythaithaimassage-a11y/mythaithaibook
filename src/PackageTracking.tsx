@@ -4,11 +4,14 @@ import { useEffect, useState } from 'react';
 import { readWixResponse } from './wixImportApi';
 import { message, useTranslation, type TranslationMessage } from './localization';
 
-type Usage = { bookingId: string; remainingSessions: number; redeemedAt: string; allocatedTotal: number; sessionNumber?: number };
+type Usage = {
+  bookingId: string; remainingSessions: number; redeemedAt: string; allocatedTotal: number;
+  minutesDeducted?: number; remainingMinutes?: number; sessionsDeducted?: number; sessionNumber?: number;
+};
 type Package = {
   package_id: string; email: string; customer_name: string; customer_phone?: string; package_name: string;
   purchase_reference: string; purchase_date: string; duration_minutes: number;
-  initial_remaining: number; remaining_sessions: number; subtotal: number; tax_rate: number; usages: Usage[];
+  initial_remaining: number; remaining_sessions: number; remaining_minutes: number; subtotal: number; tax_rate: number; usages: Usage[];
 };
 type Booking = {
   id: string; email: string; customerName: string; serviceName: string; date: string; time: string;
@@ -45,18 +48,12 @@ export default function PackageTracking({ onViewBookings }: { onViewBookings: ()
   const [notice, setNotice] = useState<string | TranslationMessage>('');
   const [refresh, setRefresh] = useState(0);
   const [confirmUse, setConfirmUse] = useState(false);
-  const [sessionNumber, setSessionNumber] = useState('');
   const [customerLookup, setCustomerLookup] = useState('');
   const [customerMatches, setCustomerMatches] = useState<Array<{ name: string; email: string; phone: string }>>([]);
   const [customerLookupOpen, setCustomerLookupOpen] = useState(false);
   const [customerSearching, setCustomerSearching] = useState(false);
   const [customerSearchError, setCustomerSearchError] = useState('');
   const selected = packages.find((pkg) => pkg.package_id === selectedId);
-  const usedSessionNumbers = new Set((selected?.usages || []).map((usage) =>
-    usage.sessionNumber ?? 4 - Number(usage.remainingSessions)));
-  const availableSessionNumbers = selected
-    ? [1, 2, 3, 4].filter((number) => number >= 5 - Number(selected.initial_remaining) && !usedSessionNumbers.has(number))
-    : [];
 
   useEffect(() => {
     const controller = new AbortController();
@@ -117,7 +114,9 @@ export default function PackageTracking({ onViewBookings }: { onViewBookings: ()
         ...form, durationMinutes: Number(form.durationMinutes), remainingSessions: Number(form.remainingSessions),
         subtotal: Number(form.subtotal), taxRate: Number(form.taxRate),
       });
-      setNotice(message('Package {id} registered/verified. Remaining: {remaining} of 4.', { id: data.package.package_id, remaining: data.package.remaining_sessions }));
+      setNotice(message('Package {id} registered/verified. Balance: {minutes} prepaid minutes ({remaining} session-equivalents).', {
+        id: data.package.package_id, minutes: data.package.remaining_minutes, remaining: data.package.remaining_sessions,
+      }));
       setForm(initialForm);
       setCustomerLookup(''); setCustomerLookupOpen(false); setCustomerMatches([]);
       setQuery(''); setSearch(''); setOffset(0);
@@ -126,18 +125,25 @@ export default function PackageTracking({ onViewBookings }: { onViewBookings: ()
     } catch (failure) { setError(errorMessage(failure)); } finally { setBusy(false); }
   };
   const redeem = async () => {
-    if (!selected || !bookingId || !confirmUse || !sessionNumber) return;
+    if (!selected || !bookingId || !confirmUse) return;
     setBusy(true); setError(''); setNotice('');
     try {
-      const data = await post<{ alreadyLinked: boolean; usage: Usage & { sessionNumber?: number } }>('package-redeem', { packageId: selected.package_id, bookingId, sessionNumber: Number(sessionNumber) });
-      setNotice(message('{result} Session {session} of 4. {remaining} sessions remained after this visit. Receipt is now available in Events & bookings.', { result: message(data.alreadyLinked ? 'Already linked; no duplicate deduction.' : 'Deducted one session.'), session: data.usage.sessionNumber ?? sessionNumber, remaining: data.usage.remainingSessions }));
-      setBookingId(''); setSessionNumber(''); setConfirmUse(false);
+      const data = await post<{ alreadyLinked: boolean; usage: Usage }>('package-redeem', { packageId: selected.package_id, bookingId });
+      setNotice(data.usage.minutesDeducted === undefined
+        ? message('Already linked; no duplicate deduction.')
+        : message('{result} {minutes} prepaid minutes deducted. {remainingMinutes} minutes ({remaining} session-equivalents) remain. Receipt is now available in Events & bookings.', {
+          result: message(data.alreadyLinked ? 'Already linked; no duplicate deduction.' : 'Deducted visit duration.'),
+          minutes: data.usage.minutesDeducted,
+          remainingMinutes: data.usage.remainingMinutes ?? '',
+          remaining: data.usage.remainingSessions,
+        }));
+      setBookingId(''); setConfirmUse(false);
       setRefresh((value) => value + 1);
     } catch (failure) { setError(`${errorMessage(failure)} Refresh and retry if another update occurred; the same booking is never deducted twice.`); }
     finally { setBusy(false); }
   };
   const candidates = selected ? bookings.filter((booking) =>
-    booking.email.trim().toLowerCase() === selected.email && booking.durationMinutes === selected.duration_minutes &&
+    booking.email.trim().toLowerCase() === selected.email &&
     ['Confirmed', 'Completed'].includes(booking.status) && !booking.receiptNumber,
   ).sort((a, b) => `${a.date} ${a.id}`.localeCompare(`${b.date} ${b.id}`)) : [];
   const chosenBooking = candidates.find((booking) => booking.id === bookingId);
@@ -158,7 +164,7 @@ export default function PackageTracking({ onViewBookings }: { onViewBookings: ()
   };
 
   return <section className="space-y-5 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-    <h2 className="text-lg font-bold">{tr('Four-session package tracking')}</h2>
+    <h2 className="text-lg font-bold">{tr('Package tracking')}</h2>
     <MobileHelp><p className="text-sm text-slate-600">{tr('Register an owner-verified purchase and remaining balance. Then link each completed visit once to deduct a session. Wix exports do not establish package purchases. Register a new purchase with a different reference; reusing a reference never replenishes a balance.')}</p></MobileHelp>
     <p className="rounded-lg bg-amber-50 p-3 text-xs text-amber-900">{tr('If entering a remaining balance that already accounts for old visits, do not deduct those visits again. To link old visits for receipt tracking, register the verified balance before those visits and link them chronologically. Use the actual package purchase price. A linked receipt records an allocated prepaid session value, not a new charge.')}</p>
     {error && <p role="alert" className="text-sm text-red-700">{tr(error)}</p>}
@@ -169,7 +175,7 @@ export default function PackageTracking({ onViewBookings }: { onViewBookings: ()
         ['customerName', 'Customer name', 'text'], ['email', 'Customer email', 'email'],
         ['customerPhone', 'Customer phone', 'tel'], ['packageName', 'Package name', 'text'], ['purchaseReference', 'Unique purchase reference', 'text'],
         ['purchaseDate', 'Purchase date', 'date'], ['durationMinutes', 'Minutes per session', 'number'],
-        ['remainingSessions', 'Verified sessions remaining (0-4)', 'number'], ['subtotal', 'Full four-session package price before tax ($)', 'number'],
+        ['remainingSessions', 'Verified session-equivalents remaining (0-4)', 'number'], ['subtotal', 'Full package price before tax ($)', 'number'],
       ] as const).map(([key, label, type]) => <label key={key} className="text-xs font-semibold">{tr(label)}
         <input required={key !== 'customerPhone'} disabled={busy} type={type} value={form[key]} maxLength={200}
           min={key === 'remainingSessions' ? 0 : type === 'number' ? 1 : undefined}
@@ -206,20 +212,22 @@ export default function PackageTracking({ onViewBookings }: { onViewBookings: ()
       <tbody>{packages.map((pkg) => <tr key={pkg.package_id} className="border-t">
         <td className="p-3">{pkg.customer_name}<span className="block">{pkg.email}</span>{pkg.customer_phone && <span className="block">{pkg.customer_phone}</span>}</td>
         <td className="p-3">{tr(pkg.package_name)} | {tr('{minutes} min', { minutes: pkg.duration_minutes })}<span className="block">{pkg.purchase_reference} | {pkg.purchase_date}</span><span className="block font-mono">{pkg.package_id}</span></td>
-        <td className="p-3 font-semibold">{tr('{remaining} / 4 remaining', { remaining: pkg.remaining_sessions })}<span className="block font-normal">{tr('Starting verified balance: {balance}', { balance: pkg.initial_remaining })}</span></td>
+        <td className="p-3 font-semibold">{tr('{minutes} prepaid minutes remaining', { minutes: pkg.remaining_minutes })}<span className="block font-normal">{tr('{remaining} session-equivalents remaining', { remaining: pkg.remaining_sessions })}</span><span className="block font-normal">{tr('Starting verified balance: {balance}', { balance: pkg.initial_remaining })}</span></td>
         <td className="p-3">{tr('{count} linked visits', { count: pkg.usages.length })}</td>
-        <td className="p-3"><button type="button" disabled={busy} className="rounded border px-3 py-2" onClick={() => { setSelectedId(pkg.package_id); setBookingId(''); setSessionNumber(''); setConfirmUse(false); }}>{tr('View / deduct')}</button></td>
+        <td className="p-3"><button type="button" disabled={busy} className="rounded border px-3 py-2" onClick={() => { setSelectedId(pkg.package_id); setBookingId(''); setConfirmUse(false); }}>{tr('View / deduct')}</button></td>
       </tr>)}</tbody>
     </ResponsiveTable>{!packages.length && <p className="p-3 text-sm">{tr('No matching packages.')}</p>}</div>}
     <div className="flex items-center gap-3 text-sm"><button disabled={busy || offset === 0} onClick={() => { setOffset(Math.max(0, offset - 50)); setSelectedId(''); }} className="rounded border p-2 disabled:opacity-40">{tr('Previous')}</button><span>{tr('{count} packages', { count: total })}</span><button disabled={busy || offset + 50 >= total} onClick={() => { setOffset(offset + 50); setSelectedId(''); }} className="rounded border p-2 disabled:opacity-40">{tr('Next')}</button></div>
     {selected && <div className="space-y-3 rounded-xl border p-4">
       <h3 className="font-semibold">{tr('{package} - {remaining} sessions remaining', { package: tr(selected.package_name), remaining: selected.remaining_sessions })}</h3>
-      <ul className="space-y-2 text-xs">{selected.usages.map((usage) => <li key={usage.bookingId}>{tr('Session {session} of 4 | {id} | 1 deducted | {remaining} remained after visit | allocated ${total}', { session: usage.sessionNumber ?? 4 - usage.remainingSessions, id: usage.bookingId, remaining: usage.remainingSessions, total: usage.allocatedTotal.toFixed(2) })}</li>)}</ul>
-      <label className="block text-sm">{tr('Link a completed booking')}<select disabled={busy} value={bookingId} onChange={(event) => { setBookingId(event.target.value); setConfirmUse(false); }} className="mt-1 block w-full rounded-lg border p-2"><option value="">{tr('Select a matching customer/duration booking')}</option>{candidates.map((booking) => <option key={booking.id} value={booking.id}>{booking.date} {formatTime(booking.time)} | {tr(booking.serviceName)} | {booking.id}</option>)}</select></label>
-      <label className="block text-sm">{tr('Package session')}<select required disabled={busy || !availableSessionNumbers.length} value={sessionNumber} onChange={(event) => { setSessionNumber(event.target.value); setConfirmUse(false); }} className="mt-1 block w-full rounded-lg border p-2"><option value="">{tr('Select unused package session')}</option>{availableSessionNumbers.map((number) => <option key={number} value={number}>{tr('Session {session} of 4', { session: number })}</option>)}</select></label>
+      <ul className="space-y-2 text-xs">{selected.usages.map((usage) => <li key={usage.bookingId}>{usage.minutesDeducted !== undefined
+        ? tr('{minutes} prepaid minutes used | {id} | {remainingMinutes} minutes ({remaining} session-equivalents) remained | allocated ${total}', { minutes: usage.minutesDeducted ?? '', id: usage.bookingId, remainingMinutes: usage.remainingMinutes ?? '', remaining: usage.remainingSessions, total: usage.allocatedTotal.toFixed(2) })
+        : tr('Session {session} of 4 | {id} | 1 deducted | {remaining} remained after visit | allocated ${total}', { session: usage.sessionNumber ?? 4 - usage.remainingSessions, id: usage.bookingId, remaining: usage.remainingSessions, total: usage.allocatedTotal.toFixed(2) })}</li>)}</ul>
+      <label className="block text-sm">{tr('Link a completed booking')}<select disabled={busy} value={bookingId} onChange={(event) => { setBookingId(event.target.value); setConfirmUse(false); }} className="mt-1 block w-full rounded-lg border p-2"><option value="">{tr('Select a matching customer booking')}</option>{candidates.map((booking) => <option key={booking.id} value={booking.id}>{booking.date} {formatTime(booking.time)} | {tr(booking.serviceName)} ({tr('{minutes} min', { minutes: booking.durationMinutes })}) | {booking.id}</option>)}</select></label>
       {chosenBooking && <p className="text-xs text-amber-900">{tr('The session will be covered by this prepaid package. Its allocated total/paid amount replaces the booking amount before receipt issuance. No new payment is collected. Existing normal paid bookings are rejected; reconstructed Wix payments can be linked.')}</p>}
+      {chosenBooking && <p className="text-xs font-semibold text-emerald-900">{tr('{minutes} minutes will be deducted ({sessions} session-equivalents).', { minutes: chosenBooking.durationMinutes, sessions: chosenBooking.durationMinutes / selected.duration_minutes })}</p>}
       <label className="flex gap-2 text-xs"><input type="checkbox" disabled={busy} checked={confirmUse} onChange={(event) => setConfirmUse(event.target.checked)} /><span>{tr('I confirm this visit occurred, belongs to this package, and has not already been deducted from the registered starting balance.')}</span></label>
-      <button type="button" disabled={busy || !bookingId || !sessionNumber || !confirmUse || selected.remaining_sessions < 1} onClick={() => void redeem()} className="rounded-lg bg-emerald-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{tr('Check in session & link receipt')}</button>
+      <button type="button" disabled={busy || !bookingId || !confirmUse || selected.remaining_minutes < 1 || (chosenBooking !== undefined && chosenBooking.durationMinutes > selected.remaining_minutes)} onClick={() => void redeem()} className="rounded-lg bg-emerald-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{tr('Deduct visit duration & link receipt')}</button>
     </div>}
     <button type="button" disabled={busy} onClick={onViewBookings} className="rounded border px-4 py-2 text-sm">{tr('View bookings / issue receipt')}</button>
   </section>;

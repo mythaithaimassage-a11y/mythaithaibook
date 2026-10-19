@@ -4642,7 +4642,7 @@ function AdminPortal({
   const [campaignGoal, setCampaignGoal] = useState('');
   const [campaignChatInput, setCampaignChatInput] = useState('');
   const [campaignConversation, setCampaignConversation] = useState([
-    { role: 'assistant', text: 'Describe a group, or choose “All active opted-in subscribers” to include everyone. Branch, weekday, and recent-booking filters only match customers with corresponding booking history.' },
+    { role: 'assistant', text: 'Describe a group, or choose “All active opted-in subscribers” to include everyone. Birthday, booking history, branch, weekday, and recent-booking filters are available.' },
   ]);
   const [campaignAudience, setCampaignAudience] = useState(null);
   const [campaignAudienceMode, setCampaignAudienceMode] = useState('assistant');
@@ -4655,6 +4655,8 @@ function AdminPortal({
     recurring: false,
     days: '',
     limit: '',
+    birthdayWindow: '',
+    customerType: '',
     allOptedIn: false,
   });
   const [isBuildingCampaignAudience, setIsBuildingCampaignAudience] = useState(false);
@@ -6151,12 +6153,11 @@ function AdminPortal({
     return parts.length ? `Manual filters: ${parts.join(', ')}` : 'Manual filters';
   };
 
-  const findCampaignAudienceManually = async () => {
+  const findCampaignAudienceManually = async (filters = campaignManualFilters) => {
     if (isBuildingCampaignAudience || isSendingCampaign) return;
     setCampaignError('');
     setCampaignNotice('');
     setCampaignAudience(null);
-    const filters = campaignManualFilters;
     setCampaignConversation((current) => [...current, { role: 'user', text: describeManualFilters(filters, campaignAudienceOptions) }]);
     setIsBuildingCampaignAudience(true);
     try {
@@ -9021,6 +9022,19 @@ function AdminPortal({
                 <button key={mode} type="button" onClick={() => setCampaignAudienceMode(mode)} disabled={isBuildingCampaignAudience || isSendingCampaign} className={`rounded-lg px-3.5 py-2 text-xs font-bold transition disabled:opacity-50 ${campaignAudienceMode === mode ? 'bg-emerald-950 text-white' : 'text-slate-600 hover:text-emerald-900'}`}>{tr(label)}</button>
               ))}
             </div>
+            <button
+              type="button"
+              onClick={() => {
+                const filters = { membershipType: '', branch: '', service: '', weekday: '', recurring: false, days: '', limit: '', birthdayWindow: '', customerType: '', allOptedIn: true };
+                setCampaignManualFilters(filters);
+                setCampaignAudienceMode('manual');
+                void findCampaignAudienceManually(filters);
+              }}
+              disabled={isBuildingCampaignAudience || isSendingCampaign}
+              className="ml-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-2 text-xs font-bold text-emerald-900 hover:bg-emerald-100 disabled:opacity-50"
+            >
+              {tr("Select all opted-in customers")}
+            </button>
             {campaignAudienceMode === 'assistant' && campaignAudienceOptions && !campaignAudienceOptions.geminiReady && <p className="mt-2 text-xs font-semibold text-amber-800">{tr(campaignAudienceOptions.geminiBlockReason)}</p>}
             <div aria-live="polite" className="mt-4 max-h-56 space-y-2 overflow-y-auto rounded-xl bg-slate-50 p-3">
               {campaignConversation.map((entry, index) => <div key={`${entry.role}-${index}`} className={`max-w-[90%] rounded-xl px-3.5 py-2.5 text-xs leading-5 ${entry.role === 'user' ? 'ml-auto bg-emerald-950 text-white' : 'bg-white text-slate-700 shadow-sm'}`}>{entry.role === "assistant" ? tr(entry.text) : entry.text}</div>)}
@@ -9033,6 +9047,10 @@ function AdminPortal({
             <div className={`mt-3 flex-wrap gap-2 ${campaignAudienceMode === 'assistant' ? 'flex' : 'hidden'}`}>
               {[
                 'All active opted-in subscribers',
+                'Customers with birthdays in the next 30 days',
+                'Customers with birthdays next month',
+                'New customers with one past booking',
+                'Returning customers',
                 'Customers who visit every Wednesday',
                 `Most recent customers at ${branches[0]?.name || 'a branch'} in the last 30 days`,
                 `All opted-in customers at ${branches[0]?.name || 'a branch'}`,
@@ -9070,15 +9088,31 @@ function AdminPortal({
                 <label className="block"><span className="mb-1.5 block text-xs font-semibold text-slate-700">{tr("Most recent customers")}</span>
                   <input type="number" min={1} max={50} value={campaignManualFilters.limit} onChange={(event) => setCampaignManualFilters((current) => ({ ...current, limit: event.target.value }))} placeholder={tr("e.g. 20")} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100" />
                 </label>
+                <label className="block"><span className="mb-1.5 block text-xs font-semibold text-slate-700">{tr("Birthday")}</span>
+                  <select value={campaignManualFilters.birthdayWindow} onChange={(event) => setCampaignManualFilters((current) => ({ ...current, birthdayWindow: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100">
+                    <option value="">{tr("Any birthday")}</option>
+                    <option value="7">{tr("In the next 7 days")}</option>
+                    <option value="30">{tr("In the next 30 days")}</option>
+                    <option value="month">{tr("This month")}</option>
+                    <option value="nextMonth">{tr("Next month")}</option>
+                  </select>
+                </label>
+                <label className="block"><span className="mb-1.5 block text-xs font-semibold text-slate-700">{tr("Booking history")}</span>
+                  <select value={campaignManualFilters.customerType} onChange={(event) => setCampaignManualFilters((current) => ({ ...current, customerType: event.target.value }))} className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm outline-none focus:border-emerald-700 focus:ring-4 focus:ring-emerald-100">
+                    <option value="">{tr("Any customer")}</option>
+                    <option value="new">{tr("One past booking")}</option>
+                    <option value="returning">{tr("Returning (2+ past bookings)")}</option>
+                  </select>
+                </label>
               </div>
               <div className="mt-3 flex flex-wrap items-center gap-4">
                 <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700"><input type="checkbox" checked={campaignManualFilters.recurring} disabled={!campaignManualFilters.weekday} onChange={(event) => setCampaignManualFilters((current) => ({ ...current, recurring: event.target.checked }))} className="h-4 w-4 rounded border-slate-300" />{tr("Only regulars (two or more visits that weekday)")}</label>
                 <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700"><input type="checkbox" checked={campaignManualFilters.allOptedIn} onChange={(event) => setCampaignManualFilters((current) => ({ ...current, allOptedIn: event.target.checked }))} className="h-4 w-4 rounded border-slate-300" />{tr("All active opted-in subscribers")}</label>
               </div>
               <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
-                <p className="text-[10px] leading-4 text-slate-500">{tr("Manual filters run entirely on your own data — nothing is sent to an AI service.")}</p>
+                <p className="text-[10px] leading-4 text-slate-500">{tr("Manual filters run entirely on your own data — nothing is sent to an AI service.")} {tr("Birthday filtering uses date of birth only when selected; birth dates are never sent to AI.")}</p>
                 <div className="flex gap-2">
-                  <button type="button" onClick={() => setCampaignManualFilters({ membershipType: '', branch: '', service: '', weekday: '', recurring: false, days: '', limit: '', allOptedIn: false })} disabled={isBuildingCampaignAudience || isSendingCampaign} className="rounded-xl border border-slate-200 px-4 py-2.5 text-xs font-bold text-slate-600 hover:border-emerald-300 hover:bg-emerald-50 disabled:opacity-50">{tr("Clear filters")}</button>
+                  <button type="button" onClick={() => setCampaignManualFilters({ membershipType: '', branch: '', service: '', weekday: '', recurring: false, days: '', limit: '', birthdayWindow: '', customerType: '', allOptedIn: false })} disabled={isBuildingCampaignAudience || isSendingCampaign} className="rounded-xl border border-slate-200 px-4 py-2.5 text-xs font-bold text-slate-600 hover:border-emerald-300 hover:bg-emerald-50 disabled:opacity-50">{tr("Clear filters")}</button>
                   <button type="submit" disabled={isBuildingCampaignAudience || isSendingCampaign} className="rounded-xl bg-emerald-950 px-4 py-2.5 text-xs font-bold text-white hover:bg-emerald-800 disabled:opacity-50">{isBuildingCampaignAudience ? tr("Matching…") : tr("Find audience")}</button>
                 </div>
               </div>

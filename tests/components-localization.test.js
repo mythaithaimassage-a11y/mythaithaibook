@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import test from 'node:test';
 import vm from 'node:vm';
@@ -61,7 +61,10 @@ function harness(name, locale = 'en-CA', overrides = {}, fetch = async () => { t
     if (path.startsWith('./')) {
       if (!cache.has(path)) {
         const dependency = { exports: {} };
-        vm.runInNewContext(compile(`${path.slice(2)}.ts`), {
+        const typescriptModule = `${path.slice(2)}.ts`;
+        const moduleName = existsSync(new URL(`../src/${typescriptModule}`, import.meta.url))
+          ? typescriptModule : `${path.slice(2)}.tsx`;
+        vm.runInNewContext(compile(moduleName), {
           exports: dependency.exports, require: load, fetch, setTimeout, clearTimeout,
         });
         cache.set(path, dependency.exports);
@@ -103,7 +106,7 @@ const screens = [
   ['WixCalendarSync', { async onSynced() {} }, 'Sync Wix bookings', 'ซิงค์การจอง Wix'],
   ['WixBookings', { onViewBookings() {} }, 'Import Wix bookings', 'นำเข้าการจองจาก Wix'],
   ['WixContacts', {}, 'Historical Wix contacts', 'รายชื่อติดต่อเดิมจาก Wix'],
-  ['PackageTracking', { onViewBookings() {} }, 'Four-session package tracking', 'ติดตามแพ็กเกจ 4 ครั้ง'],
+  ['PackageTracking', { onViewBookings() {} }, 'Package tracking', 'ติดตามแพ็กเกจ'],
   ['ClearBookingHistory', { async onCleared() {} }, 'Clear past booking history', 'ลบประวัติการจองที่ผ่านมา'],
 ];
 for (const [name, props, english, thai] of screens) {
@@ -405,11 +408,12 @@ test('Thai time options preserve original API values when a different time is se
 });
 
 test('package matching bookings show Thai time but retain booking IDs and raw time data', () => {
-  const pkg = { package_id: 'PKG1', email: 'alice@example.com', customer_name: 'Alice', package_name: 'Custom package', duration_minutes: 60, remaining_sessions: 3, initial_remaining: 4, usages: [] };
-  const booking = { id: 'B2', email: 'alice@example.com', serviceName: 'Thai Traditional Massage (60 min)', date: '2026-10-10', time: '02:15 PM', durationMinutes: 60, status: 'Confirmed', receiptNumber: '' };
+  const pkg = { package_id: 'PKG1', email: 'alice@example.com', customer_name: 'Alice', package_name: 'Custom package', duration_minutes: 60, remaining_sessions: 2.5, remaining_minutes: 150, initial_remaining: 4, usages: [] };
+  const booking = { id: 'B2', email: 'alice@example.com', serviceName: 'Thai Traditional Massage (90 min)', date: '2026-10-10', time: '02:15 PM', durationMinutes: 90, status: 'Confirmed', receiptNumber: '' };
   const props = { onViewBookings() {} };
-  const output = html(harness('PackageTracking', 'th-TH', { 1: [pkg], 6: 'PKG1', 8: [booking], 9: false }).render(props));
-  assert.match(output, /value="B2">2026-10-10 14:15 น\. \| นวดไทยแผนโบราณ \(60 นาที\) \| B2/);
+  const output = html(harness('PackageTracking', 'th-TH', { 1: [pkg], 6: 'PKG1', 7: 'B2', 8: [booking], 9: false }).render(props));
+  assert.match(output, /value="B2" selected="">2026-10-10 14:15 น\. \| นวดไทยแผนโบราณ \(90 นาที\) \(90 นาที\) \| B2/);
+  assert.match(output, /จะหักเวลา 90 นาที \(เทียบเท่า 1\.5 ครั้ง\)/);
   assert.equal(booking.time, '02:15 PM');
   assert.equal(booking.status, 'Confirmed');
   assert.match(output, /Custom package/);

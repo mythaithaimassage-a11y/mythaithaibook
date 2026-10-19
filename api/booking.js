@@ -898,6 +898,14 @@ async function bqPatientHistoryValuesGet(bigquery, sheets) {
   };
 }
 
+async function bqMarketingBirthdayRowsGet(bigquery, sheets) {
+  await ensurePatientHistoryStorage(bigquery, sheets);
+  const [records] = await bigquery.query({
+    query: `SELECT email, date_of_birth FROM ${patientHistoryTableRef()} WHERE TRIM(COALESCE(email, '')) != '' AND TRIM(COALESCE(date_of_birth, '')) != ''`,
+  });
+  return records;
+}
+
 async function bqAppendPatientHistory(bigquery, sheets, values) {
   await ensurePatientHistoryStorage(bigquery, sheets);
   const params = { record_id: crypto.randomUUID() };
@@ -3761,7 +3769,9 @@ const WEEKDAYS = [
   ['thursday', 4], ['friday', 5], ['saturday', 6],
 ];
 const AUDIENCE_MEMBERSHIP_TYPES = ['regular', 'silver', 'gold', 'platinum'];
-const AUDIENCE_HELP_MESSAGE = 'I can find opted-in customers by membership, weekday, recent visit, branch, service, or most recent customer count. Try “Gold members” or “customers who visit every Wednesday at Oakville Downtown”.';
+const AUDIENCE_BIRTHDAY_WINDOWS = ['7', '30', 'month', 'nextMonth'];
+const AUDIENCE_CUSTOMER_TYPES = ['new', 'returning'];
+const AUDIENCE_HELP_MESSAGE = 'I can find opted-in customers by birthday, booking history, membership, weekday, recent visit, branch, service, or most recent customer count. Try “customers with birthdays in the next 30 days” or “returning Gold members”.';
 
 // The branch and service names that actually occur in booking history; used to
 // validate both assistant-parsed and manually chosen filters.
@@ -3795,8 +3805,16 @@ function finalizeAudienceCriteria(input) {
   }
   const branch = input.branch || '';
   const service = input.service || '';
+  const birthdayWindow = String(input.birthdayWindow || '');
+  if (birthdayWindow && !AUDIENCE_BIRTHDAY_WINDOWS.includes(birthdayWindow)) {
+    throw new Error('Choose a valid birthday date range.');
+  }
+  const customerType = String(input.customerType || '');
+  if (customerType && !AUDIENCE_CUSTOMER_TYPES.includes(customerType)) {
+    throw new Error('Choose new or returning customers.');
+  }
   const allOptedIn = Boolean(input.allOptedIn);
-  if (!weekdayEntry && !days && !branch && !service && !limit && !allOptedIn && !membershipType) {
+  if (!weekdayEntry && !days && !branch && !service && !limit && !allOptedIn && !membershipType && !birthdayWindow && !customerType) {
     throw new Error(input.emptyMessage || AUDIENCE_HELP_MESSAGE);
   }
   const recurring = Boolean(weekdayEntry && input.recurring);
@@ -3806,6 +3824,12 @@ function finalizeAudienceCriteria(input) {
   if (branch) descriptions.push(`the ${branch} branch`);
   if (service) descriptions.push(`${service} appointments`);
   if (membershipType) descriptions.push(`${membershipType} members`);
+  if (birthdayWindow) descriptions.push(
+    birthdayWindow === 'month' ? 'a birthday this month'
+      : birthdayWindow === 'nextMonth' ? 'a birthday next month'
+        : `a birthday in the next ${birthdayWindow} days`,
+  );
+  if (customerType) descriptions.push(customerType === 'new' ? 'one past booking' : 'two or more past bookings');
   if (allOptedIn && descriptions.length === 0) descriptions.push('all active opted-in subscribers');
   if (limit) descriptions.push(`the ${limit} most recently active customers`);
   return {
@@ -3817,6 +3841,8 @@ function finalizeAudienceCriteria(input) {
     branch,
     service,
     membershipType,
+    birthdayWindow,
+    customerType,
     limit,
     allOptedIn,
     description: `Opted-in customers with ${descriptions.join(' and ')}.`,
@@ -3852,6 +3878,13 @@ function parseAudienceQuery(query, bookingRows) {
   const allOptedIn = /\b(all|everyone|everybody)\b/.test(normalized) &&
     /\b(subscribers|opted[ -]?in|customers|clients|patients|contacts)\b/.test(normalized);
   const membershipType = /\b(gold|silver|platinum|regular|points)\s+(?:membership\s+)?(?:members?|customers?)\b/.exec(normalized)?.[1] || '';
+  const birthdayWindow = /\bbirthdays?\b/.test(normalized)
+    ? /\bthis month\b/.test(normalized) ? 'month'
+      : /\bnext month\b/.test(normalized) ? 'nextMonth'
+      : /\b(?:next|coming)\s+(?:30|thirty)\s+days?\b/.test(normalized) ? '30' : '7'
+    : '';
+  const customerType = /\b(?:new|first[- ]time)\s+(?:customers?|clients?|patients?)\b/.test(normalized) ? 'new'
+    : /\b(?:returning|repeat)\s+(?:customers?|clients?|patients?)\b/.test(normalized) ? 'returning' : '';
   return finalizeAudienceCriteria({
     query: text,
     source: 'keyword',
@@ -3861,6 +3894,8 @@ function parseAudienceQuery(query, bookingRows) {
     branch,
     service,
     membershipType,
+    birthdayWindow,
+    customerType,
     limit,
     allOptedIn,
   });
@@ -3889,12 +3924,18 @@ function buildManualAudienceCriteria(filters, bookingRows) {
   const days = input.days === '' || input.days === null || input.days === undefined ? null : Number(input.days);
   const limit = input.limit === '' || input.limit === null || input.limit === undefined ? null : Number(input.limit);
   const membershipType = String(input.membershipType || '').trim().toLowerCase();
+  const birthdayWindow = String(input.birthdayWindow || '');
+  const customerType = String(input.customerType || '');
   const summaryParts = [
     weekdayEntry ? `${input.recurring ? 'every ' : ''}${weekdayEntry[0]}` : '',
     days ? `last ${days} days` : '',
     branch,
     service,
     membershipType ? `${membershipType} members` : '',
+    birthdayWindow ? (birthdayWindow === 'month' ? 'birthday this month'
+      : birthdayWindow === 'nextMonth' ? 'birthday next month'
+        : `birthday in next ${birthdayWindow} days`) : '',
+    customerType ? (customerType === 'new' ? 'new customers with one past booking' : 'returning customers with two or more past bookings') : '',
     limit ? `${limit} most recent` : '',
     input.allOptedIn ? 'all opted-in subscribers' : '',
   ].filter(Boolean);
@@ -3907,6 +3948,8 @@ function buildManualAudienceCriteria(filters, bookingRows) {
     branch,
     service,
     membershipType,
+    birthdayWindow,
+    customerType,
     limit,
     allOptedIn: Boolean(input.allOptedIn),
     emptyMessage: 'Choose at least one filter, or select “All active opted-in subscribers”.',
@@ -3927,7 +3970,7 @@ async function buildGeminiAudienceCriteria(query, bookingRows) {
     body: JSON.stringify({
       model: 'gemini-3.8-flash',
       store: false,
-      system_instruction: 'You convert a marketing audience description for a Thai massage clinic into structured filter values. Only use the branch and service names supplied in the vocabulary; leave a field empty when the description does not clearly ask for it. weekday must be empty or one of sunday, monday, tuesday, wednesday, thursday, friday, saturday. recurring is true only when the description implies repeat visits on that weekday. days is a recent-visit window between 1 and 365, or 0 when not requested. limit is the number of most recent customers between 1 and 50, or 0 when not requested. membershipType must be empty or one of regular, silver, gold, platinum. allOptedIn is true only when the description asks for everyone or all subscribers. Set unsupported to true when the description asks for something these filters cannot express. Never invent branch or service names.',
+      system_instruction: 'You convert a marketing audience description for a Thai massage clinic into structured filter values. Only use the branch and service names supplied in the vocabulary; leave a field empty when the description does not clearly ask for it. weekday must be empty or one of sunday, monday, tuesday, wednesday, thursday, friday, saturday. recurring is true only when the description implies repeat visits on that weekday. days is a recent-visit window between 1 and 365, or 0 when not requested. limit is the number of most recent customers between 1 and 50, or 0 when not requested. membershipType must be empty or one of regular, silver, gold, platinum. birthdayWindow must be empty, "7", "30", "month", or "nextMonth"; use month or nextMonth for birthdays in that calendar month and 7 or 30 for birthdays in the next stated number of days. customerType must be empty, "new", or "returning", based only on past booking count. allOptedIn is true only when the description asks for everyone or all subscribers. Set unsupported to true when the description asks for something these filters cannot express. Never invent branch or service names.',
       input: JSON.stringify({
         audienceDescription: String(query || '').slice(0, 300),
         vocabulary: { branches, services, membershipTypes: AUDIENCE_MEMBERSHIP_TYPES },
@@ -3944,11 +3987,13 @@ async function buildGeminiAudienceCriteria(query, bookingRows) {
             branch: { type: 'string' },
             service: { type: 'string' },
             membershipType: { type: 'string' },
+            birthdayWindow: { type: 'string', enum: ['', '7', '30', 'month', 'nextMonth'] },
+            customerType: { type: 'string', enum: ['', 'new', 'returning'] },
             limit: { type: 'integer' },
             allOptedIn: { type: 'boolean' },
             unsupported: { type: 'boolean' },
           },
-          required: ['weekday', 'recurring', 'days', 'branch', 'service', 'membershipType', 'limit', 'allOptedIn', 'unsupported'],
+          required: ['weekday', 'recurring', 'days', 'branch', 'service', 'membershipType', 'birthdayWindow', 'customerType', 'limit', 'allOptedIn', 'unsupported'],
         },
       },
     }),
@@ -3985,6 +4030,8 @@ async function buildGeminiAudienceCriteria(query, bookingRows) {
     branch: matchAudienceOption(parsed.branch, branches),
     service: matchAudienceOption(parsed.service, services),
     membershipType: String(parsed.membershipType || '').trim().toLowerCase(),
+    birthdayWindow: String(parsed.birthdayWindow || ''),
+    customerType: String(parsed.customerType || ''),
     limit: Number(parsed.limit) > 0 ? Math.trunc(Number(parsed.limit)) : null,
     allOptedIn: parsed.allOptedIn === true,
   });
@@ -4016,6 +4063,28 @@ function parseBookingDate(value) {
   }
   const parsed = new Date(text);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function isBirthdayInAudienceWindow(dateOfBirth, window, today) {
+  const text = String(dateOfBirth || '').trim();
+  const match = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  const monthDay = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if ((!match && !monthDay) || !AUDIENCE_BIRTHDAY_WINDOWS.includes(String(window))) return false;
+  const year = Number(match?.[1] || monthDay?.[3]);
+  const month = Number(match?.[2] || monthDay?.[1]);
+  const day = Number(match?.[3] || monthDay?.[2]);
+  const birthDate = new Date(Date.UTC(year, month - 1, day));
+  if (birthDate.getUTCFullYear() !== year ||
+      birthDate.getUTCMonth() !== month - 1 || birthDate.getUTCDate() !== day) return false;
+  const currentDate = new Date(today);
+  if (window === 'month') return month - 1 === currentDate.getUTCMonth();
+  if (window === 'nextMonth') return month - 1 === (currentDate.getUTCMonth() + 1) % 12;
+  const windowDays = Number(window);
+  for (let offset = 0; offset < windowDays; offset++) {
+    const candidate = new Date(today + offset * 86400000);
+    if (candidate.getUTCMonth() === month - 1 && candidate.getUTCDate() === day) return true;
+  }
+  return false;
 }
 
 // Every email address the business still holds a customer/patient record for.
@@ -4113,6 +4182,9 @@ async function resolveMarketingAudience(sheets, bigquery, request) {
   const criteria = mode === 'manual'
     ? buildManualAudienceCriteria(filters, bookingRows)
     : await buildAssistantAudienceCriteria(query, bookingRows, mode);
+  const birthdayRows = criteria.birthdayWindow
+    ? await bqMarketingBirthdayRowsGet(bigquery, sheets)
+    : [];
   const membershipByEmail = new Map(memberRows.map((row) => [
     normalizeLoyaltyEmail(row[0]),
     String(row[5] || 'regular').toLowerCase(),
@@ -4125,10 +4197,17 @@ async function resolveMarketingAudience(sheets, bigquery, request) {
     day: '2-digit',
   }).formatToParts(now).map((part) => [part.type, part.value]));
   const today = Date.UTC(Number(localDateParts.year), Number(localDateParts.month) - 1, Number(localDateParts.day));
+  const birthdayEmails = new Set(
+    birthdayRows
+      .filter((row) => isBirthdayInAudienceWindow(row.date_of_birth, criteria.birthdayWindow, today))
+      .map((row) => String(row.email || '').trim().toLowerCase())
+      .filter(Boolean),
+  );
   const cutoff = criteria.days
     ? today - (criteria.days - 1) * 24 * 60 * 60 * 1000
     : null;
   const bookingsByEmail = new Map();
+  const bookingCountByEmail = new Map();
   for (const row of bookingRows) {
     const email = String(row[3] || '').trim().toLowerCase();
     const date = parseBookingDate(row[7]);
@@ -4142,6 +4221,9 @@ async function resolveMarketingAudience(sheets, bigquery, request) {
     const history = bookingsByEmail.get(email) || [];
     history.push(booking);
     bookingsByEmail.set(email, history);
+    if (!['Cancelled', 'No Show'].includes(String(row[24] || '').trim())) {
+      bookingCountByEmail.set(email, (bookingCountByEmail.get(email) || 0) + 1);
+    }
   }
   const activeContacts = contacts.filter((row) =>
     String(row[2] || '').toLowerCase() === 'subscribed' &&
@@ -4151,6 +4233,10 @@ async function resolveMarketingAudience(sheets, bigquery, request) {
     .map((row) => {
       const email = String(row[0] || '').trim().toLowerCase();
       if (criteria.membershipType && membershipByEmail.get(email) !== criteria.membershipType) return null;
+      if (criteria.birthdayWindow && !birthdayEmails.has(email)) return null;
+      const bookingCount = bookingCountByEmail.get(email) || 0;
+      if (criteria.customerType === 'new' && bookingCount !== 1) return null;
+      if (criteria.customerType === 'returning' && bookingCount < 2) return null;
       const history = bookingsByEmail.get(email) || [];
       const matchedHistory = history.filter((booking) =>
         (!criteria.branch || booking.branch.toLowerCase() === criteria.branch.toLowerCase()) &&
@@ -5515,12 +5601,8 @@ export default async function handler(req, res) {
         return res.status(200).json({ customers: [...unique.values()].slice(0, 8) });
       }
       if (view === 'package-register') return res.status(200).json(await store.register(req.body));
-      const sessionNumber = req.body?.sessionNumber === undefined ? undefined : Number(req.body.sessionNumber);
-      if (sessionNumber !== undefined && (!Number.isInteger(sessionNumber) || sessionNumber < 1 || sessionNumber > 4)) {
-        return res.status(400).json({ message: 'Choose a package session from 1 to 4.' });
-      }
       return res.status(200).json(await store.redeem({
-        packageId: req.body?.packageId, bookingId: req.body?.bookingId, sessionNumber,
+        packageId: req.body?.packageId, bookingId: req.body?.bookingId,
         isCompleted: (booking) => isAppointmentCompleteByTime(booking.date, booking.time, booking.duration_minutes),
       }));
     }

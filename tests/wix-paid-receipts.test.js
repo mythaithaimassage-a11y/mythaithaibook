@@ -64,7 +64,7 @@ test('reviewed Wix import produces paid records and actual receipt endpoint issu
   const packageSchema = [
     ['package_id', 'STRING'], ['email', 'STRING'], ['customer_name', 'STRING'], ['customer_phone', 'STRING'], ['package_name', 'STRING'],
     ['purchase_reference', 'STRING'], ['purchase_date', 'STRING'], ['duration_minutes', 'INT64'],
-    ['initial_remaining', 'INT64'], ['remaining_sessions', 'INT64'], ['subtotal', 'FLOAT64'],
+    ['initial_remaining', 'INT64'], ['remaining_sessions', 'INT64'], ['remaining_minutes', 'FLOAT64'], ['subtotal', 'FLOAT64'],
     ['tax_rate', 'FLOAT64'], ['usages_json', 'STRING'], ['revision', 'INT64'], ['created_at', 'STRING'],
   ].map(([name, type]) => ({ name, type }));
   let bookingSchema = BOOKING_TABLE_FIELDS.filter((field) => !LATER_BOOKING_COLUMNS.includes(field.name));
@@ -148,7 +148,7 @@ test('reviewed Wix import produces paid records and actual receipt endpoint issu
       const pkg = packages.get(params.package_id), record = records.get(params.booking_id);
       assert.equal(pkg.revision, params.revision);
       assert.equal(record.intake_notes, params.old_notes);
-      Object.assign(pkg, { remaining_sessions: params.remaining, usages_json: params.usages, revision: pkg.revision + 1 });
+      Object.assign(pkg, { remaining_sessions: params.remaining, remaining_minutes: params.remaining_minutes, usages_json: params.usages, revision: pkg.revision + 1 });
       Object.assign(record, { total: params.total, paid_amount: params.total, intake_notes: params.notes, status_notes: params.status_notes, payment_option: 'Prepaid package redemption (no new payment)' });
       return [[]];
     }
@@ -292,11 +292,11 @@ test('reviewed Wix import produces paid records and actual receipt endpoint issu
   assert.equal(issued.data.receipt.total, 152.55);
   assert.equal(issued.data.receipt.packageUsage.remainingSessions, 3);
   assert.equal(issued.data.receipt.packageUsage.newPayment, 0);
-  assert.match(issued.data.receipt.packageUsage.description, /session 1 of 4 deducted; 3 sessions remain/);
+  assert.match(issued.data.receipt.packageUsage.description, /90 of 360 prepaid minutes used \(1 session-equivalents\); 270 minutes \(3 session-equivalents\) remain/);
   assert.equal(emails.length, 4);
   const mime = Buffer.from(emails[3].requestBody.raw, 'base64url').toString();
   const textBody = mime.match(/Content-Type: text\/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n([\s\S]*?)\r\n--/)[1];
-  assert.match(Buffer.from(textBody.replace(/\s/g, ''), 'base64').toString(), /session 1 of 4 deducted; 3 sessions remain/);
+  assert.match(Buffer.from(textBody.replace(/\s/g, ''), 'base64').toString(), /90 of 360 prepaid minutes used \(1 session-equivalents\); 270 minutes \(3 session-equivalents\) remain/);
   const htmlBody = mime.match(/Content-Type: text\/html; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n([\s\S]*?)\r\n--/)[1];
   assert.match(Buffer.from(htmlBody.replace(/\s/g, ''), 'base64').toString(), /Package usage:/);
   assert.equal((await request('delete-booking', { bookingId: packageBooking.booking_id })).code, 409);
