@@ -91,6 +91,37 @@ test('owner navigation retains each section once and identifies the current page
   assert.match(thai, /เมนูทั้งหมด/);
 });
 
+test('calendar Add menu exposes package onboarding only to owners in both fullscreen layouts and languages', () => {
+  for (const role of ['owner', 'branch_manager', 'branch_receptionist']) {
+    for (const language of ['en', 'th']) {
+      for (const compactCalendar of [false, true]) {
+        const html = render('calendar', language, { calendarFullscreen: true, compactCalendar }, {
+          dashboardUser: { role, branchIds: ['1'] },
+        });
+        const label = language === 'en' ? 'Package onboarding' : 'ลงทะเบียนแพ็กเกจ';
+        assert.equal(html.includes(label), role === 'owner');
+      }
+    }
+  }
+});
+
+test('calendar menus stay above sticky grid headers and scroll within the fullscreen viewport', () => {
+  const css = postcss.parse(readFileSync(new URL('../src/index.css', import.meta.url), 'utf8'));
+  const rules = [];
+  css.walkRules((rule) => rules.push(rule));
+  const heading = rules.find((rule) => rule.selector === '.booking-calendar .calendar-heading' && rule.parent.type === 'root');
+  assert.ok(heading);
+  const declarations = Object.fromEntries(heading.nodes.map((node) => [node.prop, node.value]));
+  assert.equal(declarations.position, 'relative');
+  assert.ok(Number(declarations['z-index']) > 20);
+  const menu = rules.find((rule) => rule.selector === '.booking-calendar .calendar-actions details > div' && rule.parent.type === 'root');
+  assert.ok(menu);
+  const menuStyles = Object.fromEntries(menu.nodes.map((node) => [node.prop, node.value]));
+  assert.equal(menuStyles['overflow-y'], 'auto');
+  assert.match(menuStyles['max-height'], /100dvh/);
+  assert.equal(menuStyles['overscroll-behavior'], 'contain');
+});
+
 test('branch migration button is shown only until BigQuery becomes the source of truth', () => {
   const owner = { dashboardUser: { role: 'owner', branchIds: [] } };
   const beforeImport = render('branches', 'en', {}, { ...owner, branchConfigSource: 'sheets' });

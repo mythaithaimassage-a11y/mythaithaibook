@@ -16,6 +16,17 @@
   border-color: #059669;
 }
 
+.booking-calendar .calendar-heading {
+  position: relative;
+  z-index: 30;
+}
+
+.booking-calendar .calendar-actions details > div {
+  max-height: calc(100dvh - 12rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
 @media (max-width: 639px) {
   .alerts-workspace :is(button, select) {
     min-height: 44px;
@@ -406,11 +417,7 @@
   .booking-calendar .calendar-actions details > div {
     right: 0;
     max-width: 100%;
-  }
-
-  .booking-calendar .calendar-heading:has(.calendar-actions details[open]) {
-    position: relative;
-    z-index: 30;
+    max-height: max(44px, calc(100dvh - 20rem));
   }
 
   .booking-calendar .calendar-actions details > div button,

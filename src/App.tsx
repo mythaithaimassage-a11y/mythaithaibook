@@ -6572,6 +6572,17 @@ function AdminPortal({
       setCalendarFullscreenError(error instanceof Error ? error.message : 'Unable to open Work schedule.');
     }
   };
+  const openCalendarPackageOnboarding = async () => {
+    if (dashboardUser.role !== 'owner') return;
+    setCalendarFullscreenError('');
+    try {
+      if (document.fullscreenElement === calendarPanelRef.current) await document.exitFullscreen();
+      setCalendarFullscreen(false);
+      setActiveTab('packages');
+    } catch (error) {
+      setCalendarFullscreenError(error instanceof Error ? error.message : 'Unable to open package onboarding.');
+    }
+  };
 
   useEffect(() => {
     if (activeTab !== 'calendar') return;
@@ -7217,6 +7228,10 @@ function AdminPortal({
                   <button type="button" onClick={(event) => { event.currentTarget.closest('details').open = false; openQuickBooking(); }} className="w-full rounded-lg px-4 py-3 text-left hover:bg-blue-50">{tr("Quick Sale")} <span className="block text-[10px] text-stone-500">{tr("Quick appointment · no payment")}</span></button>
                   <button type="button" onClick={(event) => { event.currentTarget.closest('details').open = false; openQuickBooking(); }} className="w-full border-t border-stone-100 px-4 py-3 text-left hover:bg-blue-50">{tr("Appointment")}</button>
                   {dashboardUser.role === 'owner' && <>
+                    <button type="button" onClick={(event) => {
+                      event.currentTarget.closest('details').open = false;
+                      void openCalendarPackageOnboarding();
+                    }} className="w-full border-t border-stone-100 px-4 py-3 text-left hover:bg-blue-50">{tr("Package onboarding")}</button>
                     <button type="button" onClick={() => {
                       setUnavailabilityForm((current) => ({
                         ...current, scope: calendarTherapist === 'all' ? 'business' : 'therapist',

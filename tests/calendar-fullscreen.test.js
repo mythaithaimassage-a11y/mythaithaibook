@@ -11,6 +11,9 @@ function visit(node) {
   if (ts.isVariableDeclaration(node) && node.name.getText(ast) === 'toggleCalendarFullscreen') {
     expressions.toggle = node.initializer.getText(ast);
   }
+  if (ts.isVariableDeclaration(node) && node.name.getText(ast) === 'openCalendarPackageOnboarding') {
+    expressions.packages = node.initializer.getText(ast);
+  }
   if (ts.isCallExpression(node) && node.expression.getText(ast) === 'useEffect') {
     const callback = node.arguments[0]?.getText(ast) || '';
     if (callback.includes('const syncFullscreenState')) expressions.sync = callback;
@@ -30,6 +33,7 @@ function harness(panel = {}) {
     compactCalendar: false,
     calendarFullscreenError: '',
     activeTab: 'calendar',
+    dashboardUser: { role: 'owner' },
     selectedCalendarEvent: null,
     quickBooking: null,
     editingBooking: null,
@@ -48,6 +52,7 @@ function harness(panel = {}) {
   });
   context.setCalendarFullscreen = (value) => { context.calendarFullscreen = value; };
   context.setCalendarFullscreenError = (value) => { context.calendarFullscreenError = value; };
+  context.setActiveTab = (value) => { context.activeTab = value; };
   const run = (name) => {
     assert.ok(expressions[name], `Missing ${name} handler`);
     const compiled = ts.transpileModule(`(${expressions[name]})()`, {
@@ -57,6 +62,42 @@ function harness(panel = {}) {
   };
   return { context, listeners, run };
 }
+
+test('package onboarding exits native fullscreen before navigating to package registration', async () => {
+  const { context, run } = harness();
+  context.calendarFullscreen = true;
+  context.document.fullscreenElement = context.calendarPanelRef.current;
+  context.document.exitFullscreen = async () => {
+    assert.equal(context.activeTab, 'calendar');
+    context.document.fullscreenElement = null;
+  };
+  await run('packages');
+  assert.equal(context.activeTab, 'packages');
+  assert.equal(context.calendarFullscreen, false);
+  assert.equal(context.calendarFullscreenError, '');
+});
+
+test('package onboarding exits viewport mode and preserves owner-only access', async () => {
+  for (const role of ['owner', 'branch_manager', 'branch_receptionist']) {
+    const { context, run } = harness();
+    context.dashboardUser.role = role;
+    context.calendarFullscreen = true;
+    await run('packages');
+    assert.equal(context.activeTab, role === 'owner' ? 'packages' : 'calendar');
+    assert.equal(context.calendarFullscreen, role !== 'owner');
+  }
+});
+
+test('package onboarding reports fullscreen exit failures without navigating away', async () => {
+  const { context, run } = harness();
+  context.calendarFullscreen = true;
+  context.document.fullscreenElement = context.calendarPanelRef.current;
+  context.document.exitFullscreen = async () => { throw new Error('Exit failed'); };
+  await run('packages');
+  assert.equal(context.activeTab, 'calendar');
+  assert.equal(context.calendarFullscreen, true);
+  assert.equal(context.calendarFullscreenError, 'Exit failed');
+});
 
 test('fit-to-screen enters and exits viewport mode when mobile fullscreen APIs are absent', async () => {
   const { context, run } = harness();

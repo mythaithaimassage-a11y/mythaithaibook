@@ -1216,6 +1216,8 @@ export const dashboardThai: Record<string, string> = {
   'Booking edit notification email error': 'เกิดข้อผิดพลาดในการส่งอีเมลแจ้งการแก้ไขการจอง',
   'Booking saved, but the client email could not be sent: {value0}': 'บันทึกการจองแล้ว แต่ส่งอีเมลถึงลูกค้าไม่สำเร็จ: {value0}',
   'Alerts': 'การแจ้งเตือน',
+  'Package onboarding': 'ลงทะเบียนแพ็กเกจ',
+  'Unable to open package onboarding.': 'ไม่สามารถเปิดหน้าลงทะเบียนแพ็กเกจได้',
   'Help customers remember their appointment today.': 'ช่วยเตือนลูกค้าให้จำเวลานัดหมายวันนี้',
   'How to send reminders': 'วิธีส่งอีเมลเตือนนัดหมาย',
   'Choose customers': 'เลือกลูกค้า',

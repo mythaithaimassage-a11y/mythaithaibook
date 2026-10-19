@@ -171,6 +171,11 @@ date remain newest-first. Cards retain the original reschedule date/time,
 activity timestamp in the clinic time zone, and actor. The seven-day window
 still refers to when the activity occurred.
 
+Calendar toolbar dropdowns stay above sticky calendar headers and scroll within
+the viewport, including fullscreen. Owners can use **Add > Package onboarding**
+to open the existing package registration/verification form in Package tracking;
+the shortcut exits fullscreen first and preserves owner-only package access.
+
 The calendar **Manage** menu includes **Therapist availability** and **Work
 schedule**, also in mobile/fullscreen mode. Availability opens a modal above
 the calendar, defaults to its selected date and branch, and lets staff choose
