@@ -10514,6 +10514,7 @@ export default async function handler(req, res) {
     }
 
     let payload = req.body;
+    let manualBookingConfig;
     if (view === 'manual-booking') {
       if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return res.status(400).json({ message: 'Appointment details are required.' });
       const customerName = String(payload.customerName || '').trim();
@@ -10539,6 +10540,7 @@ export default async function handler(req, res) {
         return res.status(400).json({ message: error.message });
       }
       const scheduleOverrides = await getStaffWorkScheduleRows(sheets);
+      manualBookingConfig = { branches, services, therapists, scheduleOverrides };
       const eligible = therapists.filter((item) => item.active !== false && (!service.isRmt || item.rmtCertified) &&
         therapistShiftForDate(item, branch.id, date, scheduleOverrides).isWorking);
       const therapist = eligible.find((item) => String(item.id) === String(payload.therapistId));
@@ -10564,19 +10566,19 @@ export default async function handler(req, res) {
     } catch (error) {
       return res.status(400).json({ message: error.message });
     }
-    const selectedBranch = (await getBranches(sheets)).find((branch) => branch.active !== false && branch.name === payload.branchName);
+    const selectedBranch = (manualBookingConfig?.branches || await getBranches(sheets)).find((branch) => branch.active !== false && branch.name === payload.branchName);
     if (!selectedBranch) return res.status(400).json({ message: 'Choose an active branch.' });
     if (view === 'manual-booking') validateDashboardAppointmentTime(payload.time, Number(payload.durationMinutes));
     else validateAppointmentTime(payload.time, selectedBranch, payload.date, Number(payload.durationMinutes));
-    const bookingProfile = await getBusinessProfile(sheets);
+    const [bookingProfile, serviceCatalogue, scheduledTherapists, scheduleOverrides] = await Promise.all([
+      getBusinessProfile(sheets),
+      manualBookingConfig?.services || getServices(sheets),
+      manualBookingConfig?.therapists || getTherapists(sheets),
+      manualBookingConfig?.scheduleOverrides || getStaffWorkScheduleRows(sheets),
+    ]);
     if (view !== 'manual-booking') {
       validateBookingNotice(zonedBookingInstant(parseBookingDateTime(payload.date, payload.time), CALENDAR_TIME_ZONE), bookingProfile);
     }
-    const [serviceCatalogue, scheduledTherapists, scheduleOverrides] = await Promise.all([
-      getServices(sheets),
-      getTherapists(sheets),
-      getStaffWorkScheduleRows(sheets),
-    ]);
     const matchedService = serviceCatalogue.filter((item) => payload.serviceName === item.name || String(payload.serviceName).startsWith(item.name))
       .sort((a, b) => b.name.length - a.name.length)[0];
     const appointmentStartMinutes = appointmentTimeMinutes(payload.time);
@@ -10707,13 +10709,16 @@ export default async function handler(req, res) {
       overlappingBlocks.filter((block) => block.scope === 'therapist').map((block) => block.therapistName),
     );
 
-    const dayEvents = await calendarApi.events.list({
-      calendarId,
-      timeMin: `${payload.date}T00:00:00Z`,
-      timeMax: `${payload.date}T23:59:59Z`,
-      singleEvents: true,
-    });
-    const bookingRows = (await bqFetchBookingRows(getBigQueryClient())).data.values || [];
+    const [dayEvents, savedBookings] = await Promise.all([
+      calendarApi.events.list({
+        calendarId,
+        timeMin: `${payload.date}T00:00:00Z`,
+        timeMax: `${payload.date}T23:59:59Z`,
+        singleEvents: true,
+      }),
+      bqFetchBookingRows(getBigQueryClient()),
+    ]);
+    const bookingRows = savedBookings.data.values || [];
     const bookingStartIndex = bookingRows[0]?.[0] === 'Booking ID' ? 1 : 0;
     const overlappingBookings = bookingRows.slice(bookingStartIndex).filter((row) => {
         if (row[7] !== payload.date || ['Cancelled', 'No Show'].includes(String(row[24] || ''))) return false;

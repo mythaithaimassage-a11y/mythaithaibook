@@ -7604,8 +7604,10 @@ function AdminPortal({
           setActiveTab('calendar');
           setCalendarDate(date);
           setCalendarBranch(branchId);
-          if (activeTab === 'calendar' && date === calendarDate && branchId === calendarBranch) await loadCalendar();
-          await loadBookingsFromBackend();
+          await Promise.all([
+            activeTab === 'calendar' && date === calendarDate && branchId === calendarBranch ? loadCalendar() : Promise.resolve(),
+            loadBookingsFromBackend(),
+          ]);
         }}
       />}
 

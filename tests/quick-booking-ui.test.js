@@ -447,7 +447,7 @@ test('saving a quick booking does not filter the calendar to the booked therapis
   const saveHandler = app.slice(app.indexOf('{quickBooking && <QuickBooking'), app.indexOf('{/* TAB CONTENT: SERVICES CATALOGUE MANAGER */}'));
   assert.match(saveHandler, /setCalendarBranch\(branchId\)/);
   assert.doesNotMatch(saveHandler, /setCalendarTherapist\(therapistId\)/);
-  assert.match(saveHandler, /date === calendarDate && branchId === calendarBranch\) await loadCalendar\(\)/);
+  assert.match(saveHandler, /await Promise\.all\(\[\s*activeTab === 'calendar' && date === calendarDate && branchId === calendarBranch \? loadCalendar\(\) : Promise\.resolve\(\),\s*loadBookingsFromBackend\(\)/);
 });
 
 test('appointment details render inside the fullscreen calendar rather than behind it', () => {

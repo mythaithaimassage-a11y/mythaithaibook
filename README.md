@@ -377,6 +377,11 @@ historical/future Wix imports; staff schedules and availability blocks still app
 
 These appointments save to BigQuery and Google Calendar as **unpaid / pay at
 clinic**, without checkout, marketing enrollment, or a medical-history form.
+Manual saves reuse branch, service, therapist and work-schedule configuration
+within the request, and read calendar/database conflicts concurrently. Calendar
+and booking-list refreshes also run concurrently after saving. No cross-request
+cache is introduced; validation, writes and email delivery results are still
+awaited before the save is reported as complete.
 Medical history must still be completed before treatment. Email contacts receive
 the normal confirmation/reminder; phone-only bookings skip email delivery.
 The calendar displays the saved appointment and reports confirmation failures

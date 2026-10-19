@@ -180,11 +180,13 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   const dashboardChallenges = createDashboardChallengeStore();
   const dashboardUsers = [];
   let failHistoryWrite = false;
+  const configurationReads = [];
   t.mock.method(BigQuery.prototype, 'query', async ({ query, params }) => {
     const dashboardAuthResult = handleDashboardChallengeQuery(query, params, dashboardChallenges);
     if (dashboardAuthResult) return dashboardAuthResult;
     if (query.includes('appointment_config')) {
       if (query.startsWith('SELECT config_type, payload')) {
+        configurationReads.push(params.config_type);
         return [appointmentConfigRows.filter((row) =>
           row.config_type === params.config_type || row.config_type === params.migration_key,
         )];
@@ -744,8 +746,12 @@ test('booking choices persist, skipped history writes nothing, and standalone hi
   assert.equal((await request('manual-booking', manual)).code, 409);
   blockRows = [['Block ID']];
   assert.equal(events.length, eventCount, 'Invalid or unavailable bookings do not create events');
+  configurationReads.length = 0;
   const phoneBooking = await request('manual-booking', { ...manual, contact: undefined, email: '', phone: manual.contact });
   assert.equal(phoneBooking.code, 200, JSON.stringify(phoneBooking.data));
+  for (const type of ['services', 'therapists', 'work_schedule']) {
+    assert.equal(configurationReads.filter((value) => value === type).length, 1, `${type} is read once per manual save`);
+  }
   assert.match(phoneBooking.data.bookingId, /^MTT-/);
   assert.equal(phoneBooking.data.emailSkipped, true);
   assert.equal(phoneBooking.data.emailSent, false);
