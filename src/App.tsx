@@ -9508,7 +9508,7 @@ function AdminPortal({
 
       {selectedCalendarEvent && createPortal(
         <div className="fixed inset-0 z-[70] flex items-center justify-center overflow-y-auto bg-slate-950/55 p-4 backdrop-blur-sm" onClick={(event) => { if (event.target === event.currentTarget) setSelectedCalendarEvent(null); }}>
-          <section role="dialog" aria-modal="true" aria-labelledby="appointment-receipt-title" className="my-auto w-full max-w-xl overflow-hidden rounded-2xl bg-white shadow-2xl">
+          <section role="dialog" aria-modal="true" aria-labelledby="appointment-receipt-title" className="appointment-details-dialog my-auto w-full max-w-xl rounded-2xl bg-white shadow-2xl">
             <div className="flex items-start justify-between gap-4 bg-gradient-to-r from-slate-950 to-emerald-900 px-5 py-5 text-white sm:px-6">
               <div>
                 <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-200">{tr("Appointment details")}</p>

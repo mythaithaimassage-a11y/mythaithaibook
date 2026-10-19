@@ -211,6 +211,11 @@ The background page stays locked while the fitted calendar scrolls. If a
 browser rejects a native fullscreen request, the viewport layout still opens
 and the browser error is shown.
 
+Appointment details have their own viewport-height scroll area, including when
+opened inside the fitted calendar. Long details and receipt actions remain
+reachable by touch on Android and iPhone without scrolling the calendar behind
+the dialog.
+
 Mobile staff views hide the MedBook platform header by default. Platform
 switching remains available in the footer; desktop and public booking headers
 are unchanged. Selecting Booking Calendar on mobile automatically opens the
