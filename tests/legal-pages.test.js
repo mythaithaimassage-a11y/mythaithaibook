@@ -30,11 +30,12 @@ test('public policy URLs serve independent static documents through explicit Ver
   assert.match(await read('public/legal.css'), /:focus-visible/);
 });
 
-test('privacy policy describes medical records, providers, optional marketing and Gmail send-only authorization', async () => {
+test('privacy policy describes medical records, providers, optional marketing and authorized clinic mailbox access', async () => {
   const html = await read('public/privacy-policy.html');
   for (const text of [
     'medical', 'Vercel', 'BigQuery', 'Google Calendar', 'Square', 'Gemini',
-    'gmail.send', 'Limited Use', 'Retention', 'unsubscribe', 'outside your province or Canada',
+    'gmail.send', 'gmail.readonly', 'tracking image', 'approximate open signal', '180 days',
+    'Limited Use', 'Retention', 'unsubscribe', 'outside your province or Canada',
   ]) assert.ok(html.includes(text), `Missing privacy disclosure: ${text}`);
   assert.match(html, /does not request permission to read customers' inboxes/);
   assert.match(html, /Google API Services User Data Policy/);

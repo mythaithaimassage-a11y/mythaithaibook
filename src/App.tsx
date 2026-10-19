@@ -43,6 +43,7 @@ import TodayWorkSchedule from './TodayWorkSchedule';
 import CalendarAvailability from './CalendarAvailability';
 import BookingNotifications from './BookingNotifications';
 import BookingActivityFeed from './BookingActivityFeed';
+import CustomerCommunications from './CustomerCommunications';
 import { calendarEventRange, calendarEventStyle } from '../lib/calendar-layout.js';
 
 const MOCK_BRANCHES = [
@@ -4515,6 +4516,7 @@ function AdminPortal({
   const [businessProfileError, setBusinessProfileError] = useState('');
   const [businessProfileMessage, setBusinessProfileMessage] = useState('');
   const [selectedCalendarEvent, setSelectedCalendarEvent] = useState(null);
+  const [communicationBookingId, setCommunicationBookingId] = useState('');
   const [issuedReceipt, setIssuedReceipt] = useState(null);
   const [isIssuingReceipt, setIsIssuingReceipt] = useState(false);
   const [isMarkingPaid, setIsMarkingPaid] = useState(false);
@@ -4740,7 +4742,7 @@ function AdminPortal({
     document.documentElement.style.overflow = 'hidden';
     const exitViewportCalendar = (event: KeyboardEvent) => {
       if (event.key === 'Escape' && !event.defaultPrevented &&
-          !selectedCalendarEvent && !quickBooking && !editingBooking && !calendarAvailabilityOpen &&
+          !selectedCalendarEvent && !quickBooking && !editingBooking && !calendarAvailabilityOpen && !communicationBookingId &&
           document.fullscreenElement !== calendarPanelRef.current) {
         setCalendarFullscreen(false);
       }
@@ -4751,7 +4753,7 @@ function AdminPortal({
       document.documentElement.style.overflow = rootOverflow;
       document.removeEventListener('keydown', exitViewportCalendar);
     };
-  }, [calendarFullscreen, activeTab, selectedCalendarEvent, quickBooking, editingBooking, calendarAvailabilityOpen]);
+  }, [calendarFullscreen, activeTab, selectedCalendarEvent, quickBooking, editingBooking, calendarAvailabilityOpen, communicationBookingId]);
 
   const toggleCalendarFullscreen = async () => {
     setCalendarFullscreenError('');
@@ -4954,6 +4956,7 @@ function AdminPortal({
         (data.failed ? ` ${tr("{value0} failed to send.", { value0: data.failed })}` : '');
       setAlertsResult(summary);
       await Promise.all([loadAlerts(), loadBookingsFromBackend()]);
+      if (data.trackingWarnings?.length) setAlertsError((current) => [current, tr('The reminders were sent, but open tracking could not be saved for: {references}', { references: data.trackingWarnings.join(', ') })].filter(Boolean).join(' '));
     } catch (error) {
       setAlertsError(error.message || 'Unable to send appointment reminders.');
     } finally {
@@ -6846,7 +6849,7 @@ function AdminPortal({
     enabled: compactCalendar && activeTab === 'calendar' && resolvedCalendarViewMode !== 'agenda',
     fullscreen: calendarFullscreen,
     blocked: isLoadingCalendar || Boolean(calendarLoadError) || mobileNavOpen
-      || Boolean(selectedCalendarEvent || quickBooking || editingBooking || calendarAvailabilityOpen),
+      || Boolean(selectedCalendarEvent || quickBooking || editingBooking || calendarAvailabilityOpen || communicationBookingId),
     date: calendarDate,
     onNavigate: moveCalendarDate,
   });
@@ -7735,7 +7738,9 @@ function AdminPortal({
                           />
                           <div className="min-w-0 flex-1">
                             <div className="flex flex-wrap items-center gap-2">
-                              <span className="font-bold text-slate-900">{candidate.customerName || tr("Guest customer")}</span>
+                              <button type="button" onClick={() => setCommunicationBookingId(candidate.id)} disabled={!candidate.hasEmail}
+                                aria-label={tr('Email history for {name}', { name: candidate.customerName || tr("Guest customer") })}
+                                className="min-h-11 text-left font-bold text-slate-900 underline decoration-emerald-200 underline-offset-4 hover:text-emerald-800 disabled:no-underline">{candidate.customerName || tr("Guest customer")}</button>
                               {candidate.confirmedOnTime && (
                                 <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-900">
                                   <Check className="h-3 w-3" />
@@ -7774,6 +7779,7 @@ function AdminPortal({
                           <div className="flex items-center gap-2">
                             <button
                               type="button"
+                              aria-label={tr('Send reminder to {name}', { name: candidate.customerName || tr("Guest customer") })}
                               onClick={() => sendAlertReminders(candidate.id)}
                               disabled={isSendingAlerts || !candidate.eligible}
                               className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:opacity-40"
@@ -9541,6 +9547,7 @@ function AdminPortal({
                 return booking ? (
                   <>
                     <div className="flex flex-wrap gap-2">
+                      <button type="button" disabled={!booking.email} onClick={() => setCommunicationBookingId(booking.id)} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-bold text-sky-900 disabled:opacity-50"><Mail aria-hidden="true" className="h-4 w-4" />{tr('Email history & open status')}</button>
                       <button type="button" disabled={Boolean(cancellingBookingId)} onClick={() => openBookingEditor(booking)} className="rounded-lg border border-emerald-300 px-3 py-2 text-xs font-bold text-emerald-900 disabled:opacity-50">{tr("Edit booking")}</button>
                       {['owner', 'branch_manager', 'branch_receptionist'].includes(dashboardUser.role) && !['Cancelled', 'Completed', 'No Show'].includes(booking.status) && (
                         <button type="button" disabled={Boolean(cancellingBookingId)} onClick={() => cancelCalendarAppointment(booking)} className="rounded-lg border border-rose-300 px-3 py-2 text-xs font-bold text-rose-800 hover:bg-rose-50 disabled:opacity-50">{tr(cancellingBookingId === booking.id ? "Cancelling..." : "Cancel appointment")}</button>
@@ -9891,6 +9898,10 @@ function AdminPortal({
           </section>
         </div>,
         calendarFullscreen && calendarPanelRef.current ? calendarPanelRef.current : (typeof document !== 'undefined' ? document.body : null)
+      )}
+      {communicationBookingId && createPortal(
+        <CustomerCommunications key={communicationBookingId} bookingId={communicationBookingId} onClose={() => setCommunicationBookingId('')} />,
+        calendarFullscreen && calendarPanelRef.current ? calendarPanelRef.current : document.body
       )}
         </main>
       </div>

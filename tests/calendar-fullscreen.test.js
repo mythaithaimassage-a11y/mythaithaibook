@@ -34,6 +34,7 @@ function harness(panel = {}) {
     quickBooking: null,
     editingBooking: null,
     calendarAvailabilityOpen: false,
+    communicationBookingId: '',
     document: {
       fullscreenElement: null,
       body: { style: { overflow: 'auto' } },
@@ -158,7 +159,7 @@ test('viewport mode locks page scrolling, respects dialogs on Escape and restore
   const cleanup = run('viewport');
   assert.equal(context.document.body.style.overflow, 'hidden');
   assert.equal(context.document.documentElement.style.overflow, 'hidden');
-  for (const state of ['selectedCalendarEvent', 'quickBooking', 'editingBooking', 'calendarAvailabilityOpen']) {
+  for (const state of ['selectedCalendarEvent', 'quickBooking', 'editingBooking', 'calendarAvailabilityOpen', 'communicationBookingId']) {
     context[state] = {};
     listeners.get('keydown')({ key: 'Escape', defaultPrevented: false });
     assert.equal(context.calendarFullscreen, true);

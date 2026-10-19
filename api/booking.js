@@ -15,6 +15,7 @@ import { customerTypeForBooking } from '../lib/customer-type.js';
 import { isCoupleCandidate, branchesMatch } from '../lib/couple-pairing.js';
 import { applySavedTherapistAliases, parseTherapistAliases, planTherapistRename, readTherapistAliases, renameTherapistBookingBatch, renameTherapistLabel, saveTherapistAlias } from '../lib/therapist-rename.js';
 import { sendGmailMessage } from '../lib/gmail.js';
+import { createCustomerEmailStore, createReminderTracking, customerCommunicationAccess, readCustomerEmails } from '../lib/customer-communications.js';
 import { validateBookingContact } from '../lib/booking-contact.js';
 import { bookingAlertRecipients, deliverBookingAlerts, readBookingNotifications } from '../lib/booking-notifications.js';
 import { bookingActivityRecord, ensureBookingActivityTable, insertBookingActivity, readBookingActivity } from '../lib/booking-activity.js';
@@ -246,6 +247,12 @@ function getBigQueryClient() {
 
 function bookingsTableRef() {
   return `\`${BIGQUERY_PROJECT_ID}.${BIGQUERY_DATASET_ID}.${BIGQUERY_BOOKINGS_TABLE}\``;
+}
+
+let customerEmailStore;
+function getCustomerEmailStore() {
+  if (!customerEmailStore) customerEmailStore = createCustomerEmailStore(getBigQueryClient(), BIGQUERY_PROJECT_ID, BIGQUERY_DATASET_ID);
+  return customerEmailStore;
 }
 
 const BIGQUERY_BOOKING_ACTIVITY_TABLE = process.env.BIGQUERY_BOOKING_ACTIVITY_TABLE || 'booking_activity';
@@ -4965,6 +4972,15 @@ export default async function handler(req, res) {
   }
 
   try {
+    if (req.query?.view === 'email-open') {
+      if (req.method !== 'GET') return res.status(405).json({ message: 'Method Not Allowed' });
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+      res.setHeader('Pragma', 'no-cache');
+      await getCustomerEmailStore().recordOpen(req.query?.token);
+      res.setHeader('Content-Type', 'image/gif');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      return res.status(200).end(Buffer.from('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7', 'base64'));
+    }
     if (req.method === 'POST' && req.query?.view === 'therapist-logout') {
       res.setHeader('Set-Cookie', therapistCookie('', 0));
       return res.status(200).json({ status: 'signed_out' });
@@ -5174,7 +5190,7 @@ export default async function handler(req, res) {
     const historyViews = ['booking-history-preview', 'clear-booking-history'];
     const wixCalendarViews = ['wix-calendar-sync'];
     const validGetViews = ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'business-name', 'square-config', 'google-reviews', 'branches', 'services', 'therapists', 'staff-work-schedule', 'available-therapists', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal', 'company-join', 'find-booking', 'availability', 'unavailability', 'appointment-config-status', 'campaign-log', 'campaign-audience-options', 'review-request-audience', 'appointment-alerts-audience', 'confirm-attendance', 'therapist-accounts', 'wix-contacts', 'dashboard-users'];
-    if (req.method === 'GET' && !validGetViews.includes(view) && !['booking-notifications', 'booking-activity', 'therapist-name-merge', 'customer-search', 'wix-contacts-import', 'wix-bookings-import', ...packageViews, ...historyViews, ...wixCalendarViews].includes(view)) {
+    if (req.method === 'GET' && !validGetViews.includes(view) && !['customer-communications', 'booking-notifications', 'booking-activity', 'therapist-name-merge', 'customer-search', 'wix-contacts-import', 'wix-bookings-import', ...packageViews, ...historyViews, ...wixCalendarViews].includes(view)) {
       return res.status(404).json({ message: 'Unknown booking view' });
     }
     const ownerOnlyRequest =
@@ -5184,6 +5200,39 @@ export default async function handler(req, res) {
       (req.method === 'POST' && ['branches', 'services', 'therapists', 'unavailability'].includes(view));
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
     const dashboardSession = await getOwnerSession(req);
+    if (view === 'customer-communications') {
+      res.setHeader('Cache-Control', 'no-store');
+      if (!['owner', 'branch_manager', 'branch_receptionist'].includes(dashboardSession?.role)) {
+        return res.status(dashboardSession ? 403 : 401).json({ message: 'Dashboard sign-in required' });
+      }
+      if (req.method !== 'GET') return res.status(405).json({ message: 'Method Not Allowed' });
+      const sheets = createSheetsClient();
+      const [bookingResult, branches] = await Promise.all([
+        bqFetchBookingRows(getBigQueryClient()), getDashboardBranchNames(sheets, dashboardSession),
+      ]);
+      const access = customerCommunicationAccess(bookingResult.data.values || [], String(req.query?.bookingId || ''), dashboardSession, branches);
+      let reminders = [];
+      let trackingError = '';
+      try {
+        reminders = await getCustomerEmailStore().readReminders(access);
+      } catch (error) {
+        console.error('Customer reminder tracking read failed:', error.message || error);
+        trackingError = 'Reminder open tracking is unavailable. Ask the owner to check access to the customer_email_activity table.';
+      }
+      let history = { messages: [], nextPageToken: '' };
+      let historyError = '';
+      try {
+        history = await readCustomerEmails(createGmailApi(), access, req.query?.pageToken || '');
+      } catch (error) {
+        if (error.statusCode === 400) throw error;
+        console.error('Customer email history read failed:', error.message || error);
+        historyError = error.statusCode === 503 ? error.message : 'Unable to read the sender mailbox. Ask the owner to check Gmail authorization and try again.';
+      }
+      return res.status(200).json({
+        customer: { name: access.name, email: access.email, bookingId: access.bookingId },
+        ...history, reminders, historyError, trackingError, restricted: access.restricted,
+      });
+    }
     if (view === 'booking-notifications' || view === 'booking-activity') {
       res.setHeader('Cache-Control', 'no-store');
       if (!['owner', 'branch_manager', 'branch_receptionist'].includes(dashboardSession?.role)) {
@@ -5955,6 +6004,7 @@ export default async function handler(req, res) {
 
       const gmail = createGmailApi();
       const results = { sent: 0, failed: 0, skipped: 0 };
+      const trackingWarnings = [];
       const nowIso = new Date().toISOString();
 
       for (const row of rows) {
@@ -5997,18 +6047,37 @@ export default async function handler(req, res) {
         const confirmUrl = getConfirmAttendanceUrl(req, bookingId);
 
         try {
+          let tracking = null;
+          try {
+            const prepared = createReminderTracking(confirmUrl);
+            await getCustomerEmailStore().prepare(prepared.token, nowIso);
+            tracking = prepared;
+          } catch (error) {
+            console.error(`Reminder tracking setup failed for ${bookingId}:`, error.message || error);
+          }
           const emailMessage = formatAppointmentReminderEmail({
             booking,
             confirmUrl,
             manageUrl,
             businessProfile,
             senderEmail: GOOGLE_GMAIL_SENDER_EMAIL || businessProfile?.email || 'mythaithaimassage@gmail.com',
+            trackingUrl: tracking?.url || '',
           });
-          await sendGmailMessage(gmail, {
+          const delivery = await sendGmailMessage(gmail, {
             userId: 'me',
             requestBody: { raw: Buffer.from(emailMessage.raw).toString('base64url') },
           });
           results.sent += 1;
+          if (tracking) {
+            try {
+              await getCustomerEmailStore().recordSent(tracking.token, delivery.data?.id, booking, emailMessage.subject, nowIso);
+            } catch (error) {
+              console.error(`Reminder tracking log failed for ${bookingId}:`, error.message || error);
+              trackingWarnings.push(bookingId);
+            }
+          } else {
+            trackingWarnings.push(bookingId);
+          }
 
           const updatedNotes = buildReminderSentNotes(booking.statusNotes, nowIso);
           await bqUpdateBookingFields(bigquery, bookingId, { statusNotes: updatedNotes });
@@ -6018,7 +6087,7 @@ export default async function handler(req, res) {
         }
       }
 
-      return res.status(200).json(results);
+      return res.status(200).json({ ...results, trackingWarnings });
     }
 
     if (view === 'confirm-attendance') {

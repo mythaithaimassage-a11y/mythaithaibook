@@ -10,6 +10,11 @@
   overscroll-behavior: contain;
 }
 
+.customer-communications-dialog > div {
+  max-height: calc(100vh - 2rem);
+  max-height: calc(100dvh - 2rem);
+}
+
 .mobile-cell-label {
   display: none;
 }

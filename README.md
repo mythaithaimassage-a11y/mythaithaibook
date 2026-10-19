@@ -90,6 +90,48 @@ is absent or invalid. Valid-email bookings enable reminder controls unless
 otherwise ineligible (for example, no-show appointments). Upcoming filters
 and totals use the same fields as the reminder audience API.
 
+### Customer email history and reminder open signals
+
+Tap a customer's name in **Alerts**, or **Email history & open status** in
+appointment details, to open a mobile-friendly communication panel. It groups
+emails by date (clinic time zone), with category filters, booking references,
+sent/reply previews, and a quick summary of the loaded correspondence. **Load
+older emails** pages through the connected sender mailbox without marking
+messages as read or changing reminder, booking, marketing or review workflows.
+Bookings, receipts, reviews, marketing, membership messages and actual customer
+replies are included when present in that mailbox. Emails sent from other
+mailboxes, deleted emails, phone calls and external messaging apps are not
+available. Summaries are extractive previews, not AI-generated interpretations.
+
+The sender mailbox OAuth grant needs
+`https://www.googleapis.com/auth/gmail.readonly` **in addition to** its existing
+`https://www.googleapis.com/auth/gmail.send` permission. Reauthorize the same
+OAuth client and mailbox with both scopes, replace `GOOGLE_OAUTH_REFRESH_TOKEN`
+and redeploy. Sending still works with a send-only grant; the panel explicitly
+reports that mailbox history is unavailable rather than displaying a misleading
+empty conversation. Readonly is a restricted Gmail scope; production use may
+require additional Google consent-screen verification.
+
+New reminder emails include an opaque tracking pixel, disclosed in the email
+and privacy policy. Successful sends and first image-load signals are stored in
+the automatically created BigQuery `customer_email_activity` table in the
+configured dataset; the service account needs permission to create/read/write
+this table. No booking/payment tables are modified for tracking. Log failures
+are reported separately and do not retry or undo a sent reminder. Only new
+reminders are tracked; other email types and historical messages are labeled
+**Open tracking unavailable**. A missing signal is never labeled "unread":
+images may be blocked, prefetched or fetched by privacy proxies. Tokens accept
+signals for 180 days and contain no customer data; IP addresses and device
+profiles are not stored by this feature.
+
+History access requires a dashboard session and an accessible booking; the
+email is resolved server-side, never accepted from the client. Owners can view
+all correspondence for that customer address. Branch staff only see messages
+referencing accessible bookings (the mailbox search uses up to 100 booking
+references); unreferenced marketing and messages also referencing another
+branch's bookings are excluded. The panel explains this scope. No medical or
+internal notes are added to the conversation summary.
+
 New public and manual bookings email active dashboard owners and staff assigned
 to the booking's branch; the configured environment owner is included too.
 Therapist-only accounts are not recipients. Email delivery failures are logged
