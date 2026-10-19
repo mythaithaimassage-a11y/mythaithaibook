@@ -90,9 +90,9 @@ is absent or invalid. Valid-email bookings enable reminder controls unless
 otherwise ineligible (for example, no-show appointments). Upcoming filters
 and totals use the same fields as the reminder audience API.
 
-### Customer email history and reminder open signals
+### Customer email history and email open signals
 
-Tap a customer's name in **Alerts**, or **Email history & open status** in
+Tap a customer's name in **Alerts** or **Google Reviews**, or **Email history & open status** in
 appointment details, to open a mobile-friendly communication panel. It groups
 emails by date (clinic time zone), with category filters, booking references,
 sent/reply previews, and a quick summary of the loaded correspondence. **Load
@@ -112,13 +112,13 @@ reports that mailbox history is unavailable rather than displaying a misleading
 empty conversation. Readonly is a restricted Gmail scope; production use may
 require additional Google consent-screen verification.
 
-New reminder emails include an opaque tracking pixel, disclosed in the email
+New reminder and review-request emails include an opaque tracking pixel, disclosed in the email
 and privacy policy. Successful sends and first image-load signals are stored in
 the automatically created BigQuery `customer_email_activity` table in the
 configured dataset; the service account needs permission to create/read/write
 this table. No booking/payment tables are modified for tracking. Log failures
-are reported separately and do not retry or undo a sent reminder. Only new
-reminders are tracked; other email types and historical messages are labeled
+are reported separately and do not retry or undo a sent email. Only new
+reminders and review requests sent with tracking are tracked; other email types and historical messages are labeled
 **Open tracking unavailable**. A missing signal is never labeled "unread":
 images may be blocked, prefetched or fetched by privacy proxies. Tokens accept
 signals for 180 days and contain no customer data; IP addresses and device
@@ -1159,17 +1159,40 @@ in Sheets rather than moving to BigQuery.
 
 The owner dashboard has a **Google Reviews** section (under **Grow**) that
 shows your Google Business Profile's average rating, total rating count, and
-most recent reviews, along with a quick link to view all reviews on Google.
+the sample of reviews shared by Google, along with a link to all reviews on Google.
+Places returns at most five relevance-selected reviews, not a complete newest-first
+feed. The sample is sorted by publication date here; individual new reviews may
+not be included by Google. A complete newest-first feed requires a separate
+Business Profile API integration, which this dashboard does not currently use.
 
 ### Asking past customers for a review
 
-The **Ask for a review** button in that section opens a picker listing every
+The **Ask for a review** button scrolls to the mobile-friendly customer follow-up
+panel, listing every
 customer who has actually attended an appointment — a booking whose end time
 has already passed in the clinic's timezone and that was not cancelled, within
 the last 730 days — deduplicated by email and showing
 their most recent visit. Selecting customers and pressing **Send** emails each
 one a short message with a button linking to your Google review form.
 
+- Filter the latest attended visit by the last 7, 30 (default), 60, 90, 180 or
+  365 days, all available visits (up to 730 days), or inclusive custom dates.
+  Ranges include today and use the clinic time zone. Search name, email, booking
+  reference, service or branch; narrow by branch, service and review-email status.
+- Tap the customer's name or **View communication history** for the shared
+  date-grouped email history and summary.
+- Cards show the latest request's approximate open signal when tracking is
+  available. **Check replies** reads the actual Gmail thread for that request,
+  verifies the customer address, and shows a reply preview and checked timestamp.
+  Gmail readonly authorization is required; send-only permission still allows sending.
+  Older untracked requests can be viewed in communication history.
+- Replies are not checked until requested. Once checked, visible cards recheck
+  with customer refreshes; unchecked cards do not scan Gmail in the background.
+  An email open or reply does **not** prove a Google review was posted. Google
+  does not provide reviewer email addresses for customer-level matching.
+- Changing filters clears recipient selection. Only matching, explicitly selected
+  customers are sent emails; successfully submitted batches clear the selection
+  to prevent accidental repeat sends. Refreshing does not reset the filters.
 - An appointment counts as attended as soon as its end time passes, so a
   customer who was treated earlier the same day can be asked immediately.
 - Rows with a missing or unrecognised time fall back to counting as attended
@@ -1178,7 +1201,7 @@ one a short message with a button linking to your Google review form.
   be selected.
 - Every send is logged to a `ReviewRequests` tab in the Google Sheet (created
   automatically), so customers asked within the last 180 days are shown as
-  already asked and are not pre-selected. They can still be selected manually.
+  already asked and are excluded from **Select suggested**. They can still be selected manually.
 - Up to 50 customers can be emailed at a time.
 - Sending uses the same Gmail OAuth mailbox and business-profile requirements
   as email campaigns; if those are not configured the button explains what is
@@ -1200,9 +1223,14 @@ section, add these server-side Vercel Environment Variables:
 - `GOOGLE_PLACE_ID` (your business's Google Place ID — look it up with the
   [Place ID Finder](https://developers.google.com/maps/documentation/places/web-service/place-id))
 
-Redeploy after adding these. Reviews are cached for 10 minutes per server
-instance to stay within Places API quotas; use **Refresh** in the dashboard to
-force a check sooner. If these variables are not set, the section shows setup
+Redeploy after adding these. Reviews are cached for 60 seconds per server
+instance. The visible Reviews screen refreshes Google data and customer/open
+statuses every minute and when refocused; it pauses while hidden or sending.
+Updated-at timestamps remain visible, and refresh failures are shown without
+discarding the last successful data. **Refresh** bypasses the Places cache;
+**Refresh customers** updates customer/open statuses only. This increases Places
+API usage compared with the former ten-minute cache; monitor quotas and billing.
+If these variables are not set, the section shows setup
 instructions instead of an error. Note the Places API only returns up to 5 of
 the most relevant/recent reviews — for the full list, use the **View on
 Google** link.

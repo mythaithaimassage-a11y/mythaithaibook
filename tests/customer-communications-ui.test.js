@@ -85,6 +85,17 @@ test('a new reminder never inherits an older reminder open signal for the same a
   assert.doesNotMatch(summary, /Open signal detected \(approximate\)/);
 });
 
+test('review tracking has a separate summary and never populates the reminder summary', () => {
+  const review = { ...message, id: 'review-1', kind: 'Review request', subject: 'How was your visit to Clinic?', tracked: true, openedAt: '2026-10-19T15:03:00Z' };
+  const html = render('en', { messages: [review], reminders: [review] });
+  const summary = html.match(/<section aria-label="Quick communication summary"[\s\S]*?<\/section>/)?.[0];
+  assert.match(summary, /Latest review request[\s\S]*?Open signal detected/);
+  assert.match(summary, /No tracked reminder for this appointment/);
+  const newer = { ...review, id: 'untracked', tracked: false, openedAt: '', occurredAt: '2026-10-20T15:00:00Z' };
+  const updated = render('en', { messages: [newer, review], reminders: [review] });
+  assert.match(updated, /Latest review request[\s\S]*?Open tracking unavailable/);
+});
+
 test('the customer history labels translate while customer messages and booking references remain unchanged', () => {
   const html = render('th');
   assert.match(html, /สรุปการติดต่อโดยย่อ/);

@@ -15,7 +15,8 @@ import { customerTypeForBooking } from '../lib/customer-type.js';
 import { isCoupleCandidate, branchesMatch } from '../lib/couple-pairing.js';
 import { applySavedTherapistAliases, parseTherapistAliases, planTherapistRename, readTherapistAliases, renameTherapistBookingBatch, renameTherapistLabel, saveTherapistAlias } from '../lib/therapist-rename.js';
 import { sendGmailMessage } from '../lib/gmail.js';
-import { createCustomerEmailStore, createReminderTracking, customerCommunicationAccess, readCustomerEmails } from '../lib/customer-communications.js';
+import { createCustomerEmailStore, createEmailTracking, createReminderTracking, customerCommunicationAccess, readCustomerEmails } from '../lib/customer-communications.js';
+import { readReviewRequestReply, reviewEngagementForCustomer } from '../lib/review-requests.js';
 import { validateBookingContact } from '../lib/booking-contact.js';
 import { bookingAlertRecipients, deliverBookingAlerts, readBookingNotifications } from '../lib/booking-notifications.js';
 import { bookingActivityRecord, ensureBookingActivityTable, insertBookingActivity, readBookingActivity } from '../lib/booking-activity.js';
@@ -3705,7 +3706,7 @@ async function collectReviewRequestCandidates(sheets, bigquery) {
   return { candidates, stats };
 }
 
-async function sendReviewRequestEmail(gmail, { candidate, reviewUrl, businessProfile }) {
+async function sendReviewRequestEmail(gmail, { candidate, reviewUrl, businessProfile, trackingUrl = '' }) {
   const recipient = String(candidate.email || '').trim().toLowerCase();
   if (!/^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/.test(recipient)) {
     throw new Error('A valid customer email is required to send a review request.');
@@ -3727,9 +3728,11 @@ async function sendReviewRequestEmail(gmail, { candidate, reviewUrl, businessPro
     '',
     'Thank you,',
     safeBusinessName,
+    trackingUrl ? 'This email includes a small image to estimate opens. Privacy tools may load or block images; this is not a read receipt.' : '',
   ].join('\n');
   const html = `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>${escapeHtml(subject)}</title></head><body style="margin:0;background:#f3f5f4;padding:28px 12px;font-family:Arial,Helvetica,sans-serif;color:#18251f"><div style="display:none;max-height:0;overflow:hidden">${escapeHtml(visitLine)}</div><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td align="center"><table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width:600px;width:100%;background:#fff;border:1px solid #e2e9e5;border-radius:14px;overflow:hidden"><tr><td style="padding:26px 32px;background:#073d32;color:#fff"><p style="margin:0 0 8px;font-size:12px;letter-spacing:2px">${escapeHtml(safeBusinessName).toUpperCase()}</p><h1 style="margin:0;font-size:24px">How was your visit?</h1></td></tr><tr><td style="padding:28px 32px"><p style="margin:0 0 14px">${escapeHtml(greeting)}</p><p style="margin:0 0 18px;line-height:1.6">${escapeHtml(visitLine)}</p><p style="margin:0 0 24px;line-height:1.6">Would you take a moment to leave us a Google review? It only takes a minute and helps other people find us.</p><p style="margin:0 0 24px"><a href="${escapeHtml(reviewUrl)}" style="display:inline-block;padding:13px 24px;background:#087765;color:#fff;border-radius:9px;text-decoration:none;font-weight:bold">Leave a Google review</a></p><p style="margin:0;color:#5f6d66;font-size:13px;line-height:1.5">If the button does not work, paste this link into your browser:<br><a href="${escapeHtml(reviewUrl)}" style="color:#087765">${escapeHtml(reviewUrl)}</a></p></td></tr><tr><td style="padding:16px 32px;background:#f8faf9;color:#718078;font-size:12px">${escapeHtml(safeBusinessName)}${businessProfile.address ? ` · ${escapeHtml(businessProfile.address)}` : ''}<br>${escapeHtml(businessProfile.phone || '')}${businessProfile.phone && businessProfile.email ? ' · ' : ''}${escapeHtml(businessProfile.email || '')}</td></tr></table></td></tr></table></body></html>`;
   const boundary = `review_${crypto.randomBytes(12).toString('hex')}`;
+  const trackedHtml = trackingUrl ? html.replace('</body>', `<p style="font:12px Arial;color:#718078">This email includes a small image to estimate opens. Privacy tools may load or block images; this is not a read receipt.</p><img src="${escapeHtml(trackingUrl)}" width="1" height="1" alt="" /></body>`) : html;
   const encode = (value) => Buffer.from(value).toString('base64').match(/.{1,76}/g).join('\r\n');
   const raw = [
     `From: "${safeBusinessName}" <${GOOGLE_GMAIL_SENDER_EMAIL}>`,
@@ -3747,10 +3750,11 @@ async function sendReviewRequestEmail(gmail, { candidate, reviewUrl, businessPro
     'Content-Type: text/html; charset=UTF-8',
     'Content-Transfer-Encoding: base64',
     '',
-    encode(html),
+    encode(trackedHtml),
     `--${boundary}--`,
   ].join('\r\n');
-  await gmail.users.messages.send({ userId: 'me', requestBody: { raw: Buffer.from(raw).toString('base64url') } });
+  const delivery = await sendGmailMessage(gmail, { userId: 'me', requestBody: { raw: Buffer.from(raw).toString('base64url') } });
+  return { messageId: delivery.data?.id, subject };
 }
 
 const WEEKDAYS = [
@@ -4844,15 +4848,15 @@ function isGoogleReviewsConfigured() {
 
 let cachedGoogleReviews = null;
 let cachedGoogleReviewsAt = 0;
-const GOOGLE_REVIEWS_CACHE_MS = 10 * 60 * 1000;
+const GOOGLE_REVIEWS_CACHE_MS = 60 * 1000;
 
-async function fetchGoogleReviews() {
+async function fetchGoogleReviews({ force = false } = {}) {
   if (!isGoogleReviewsConfigured()) {
     const error = new Error('Google Reviews are not configured yet. Add GOOGLE_PLACES_API_KEY and GOOGLE_PLACE_ID to enable this.');
     error.statusCode = 503;
     throw error;
   }
-  if (cachedGoogleReviews && Date.now() - cachedGoogleReviewsAt < GOOGLE_REVIEWS_CACHE_MS) {
+  if (!force && cachedGoogleReviews && Date.now() - cachedGoogleReviewsAt < GOOGLE_REVIEWS_CACHE_MS) {
     return cachedGoogleReviews;
   }
   // Uses Places API (New) rather than the legacy `maps.googleapis.com/maps/api/place/details`
@@ -4879,6 +4883,7 @@ async function fetchGoogleReviews() {
     totalRatings: data.userRatingCount || 0,
     reviewUrl: `https://search.google.com/local/writereview?placeid=${encodeURIComponent(GOOGLE_PLACE_ID)}`,
     mapsUrl: data.googleMapsUri || '',
+    fetchedAt: new Date().toISOString(),
     reviews: (data.reviews || []).map((review) => ({
       authorName: review.authorAttribution?.displayName || 'Google user',
       authorPhotoUrl: review.authorAttribution?.photoUri || '',
@@ -4887,7 +4892,7 @@ async function fetchGoogleReviews() {
       relativeTime: review.relativePublishTimeDescription || '',
       time: review.publishTime ? new Date(review.publishTime).getTime() : null,
       text: review.text?.text || review.originalText?.text || '',
-    })),
+    })).sort((a, b) => (b.time || 0) - (a.time || 0)),
   };
   cachedGoogleReviews = payload;
   cachedGoogleReviewsAt = Date.now();
@@ -5190,7 +5195,7 @@ export default async function handler(req, res) {
     const historyViews = ['booking-history-preview', 'clear-booking-history'];
     const wixCalendarViews = ['wix-calendar-sync'];
     const validGetViews = ['', 'calendar', 'patient-history', 'appointment-notes', 'business-profile', 'business-name', 'square-config', 'google-reviews', 'branches', 'services', 'therapists', 'staff-work-schedule', 'available-therapists', 'google-ads-report', 'loyalty-program', 'loyalty-dashboard', 'loyalty-eligibility', 'therapist-dashboard', 'therapist-session', 'unsubscribe', 'company-portal', 'company-join', 'find-booking', 'availability', 'unavailability', 'appointment-config-status', 'campaign-log', 'campaign-audience-options', 'review-request-audience', 'appointment-alerts-audience', 'confirm-attendance', 'therapist-accounts', 'wix-contacts', 'dashboard-users'];
-    if (req.method === 'GET' && !validGetViews.includes(view) && !['customer-communications', 'booking-notifications', 'booking-activity', 'therapist-name-merge', 'customer-search', 'wix-contacts-import', 'wix-bookings-import', ...packageViews, ...historyViews, ...wixCalendarViews].includes(view)) {
+    if (req.method === 'GET' && !validGetViews.includes(view) && !['review-request-reply', 'customer-communications', 'booking-notifications', 'booking-activity', 'therapist-name-merge', 'customer-search', 'wix-contacts-import', 'wix-bookings-import', ...packageViews, ...historyViews, ...wixCalendarViews].includes(view)) {
       return res.status(404).json({ message: 'Unknown booking view' });
     }
     const ownerOnlyRequest =
@@ -5200,6 +5205,16 @@ export default async function handler(req, res) {
       (req.method === 'POST' && ['branches', 'services', 'therapists', 'unavailability'].includes(view));
     if (ownerOnlyRequest) res.setHeader('Cache-Control', 'no-store');
     const dashboardSession = await getOwnerSession(req);
+    if (view === 'review-request-reply') {
+      res.setHeader('Cache-Control', 'no-store');
+      if (dashboardSession?.role !== 'owner') return res.status(dashboardSession ? 403 : 401).json({ message: 'Owner sign-in required' });
+      if (req.method !== 'GET') return res.status(405).json({ message: 'Method Not Allowed' });
+      const result = await bqFetchBookingRows(getBigQueryClient());
+      const access = customerCommunicationAccess(result.data.values || [], String(req.query?.bookingId || ''), dashboardSession, null);
+      const [request] = await getCustomerEmailStore().readReviewEngagement([access.email]);
+      if (!request) return res.status(404).json({ message: 'No tracked review email is available. Open communication history to view older emails.' });
+      return res.status(200).json(await readReviewRequestReply(createGmailApi(), access, request.messageId));
+    }
     if (view === 'customer-communications') {
       res.setHeader('Cache-Control', 'no-store');
       if (!['owner', 'branch_manager', 'branch_receptionist'].includes(dashboardSession?.role)) {
@@ -5874,7 +5889,7 @@ export default async function handler(req, res) {
       if (!isGoogleReviewsConfigured()) {
         return res.status(200).json({ enabled: false });
       }
-      const reviews = await fetchGoogleReviews();
+      const reviews = await fetchGoogleReviews({ force: req.query?.refresh === '1' });
       return res.status(200).json({ enabled: true, ...reviews });
     }
 
@@ -5889,9 +5904,19 @@ export default async function handler(req, res) {
         getBusinessProfile(sheets),
       ]);
       const sendBlockReason = getCampaignSendBlockReason(businessProfile);
+      let engagement = [];
+      let trackingError = '';
+      try {
+        engagement = await getCustomerEmailStore().readReviewEngagement(candidates.map((candidate) => candidate.email));
+      } catch (error) {
+        console.error('Review request engagement read failed:', error.message || error);
+        trackingError = 'Review email tracking is unavailable. Customer search and sending are still available.';
+      }
       return res.status(200).json({
         enabled: true,
-        candidates,
+        candidates: candidates.map((candidate) => reviewEngagementForCustomer(candidate, engagement)),
+        trackingError,
+        fetchedAt: new Date().toISOString(),
         stats,
         cooldownDays: REVIEW_REQUEST_COOLDOWN_DAYS,
         lookbackDays: REVIEW_REQUEST_LOOKBACK_DAYS,
@@ -5933,23 +5958,44 @@ export default async function handler(req, res) {
       const gmail = createGmailApi();
       const requestedAt = new Date().toISOString();
       const results = { sent: 0, failed: 0 };
+      const trackingWarnings = [];
       const logged = [];
       for (const candidate of recipients) {
         try {
-          await sendReviewRequestEmail(gmail, { candidate, reviewUrl: reviews.reviewUrl, businessProfile });
+          let tracking = null;
+          try {
+            const prepared = createEmailTracking(getConfirmAttendanceUrl(req, candidate.bookingId));
+            await getCustomerEmailStore().prepare(prepared.token, requestedAt);
+            tracking = prepared;
+          } catch (error) {
+            console.error('Review request tracking preparation failed:', error.message || error);
+          }
+          const delivery = await sendReviewRequestEmail(gmail, { candidate, reviewUrl: reviews.reviewUrl, businessProfile, trackingUrl: tracking?.url || '' });
           results.sent += 1;
           logged.push({ email: candidate.email, name: candidate.name, bookingId: candidate.bookingId, requestedAt });
+          if (tracking) {
+            try {
+              await getCustomerEmailStore().recordSent(tracking.token, delivery.messageId, {
+                id: candidate.bookingId, email: candidate.email, branchName: candidate.branchName,
+              }, delivery.subject, requestedAt);
+            } catch (error) {
+              console.error('Review request tracking log failed:', error.message || error);
+              trackingWarnings.push(candidate.email);
+            }
+          } else trackingWarnings.push(candidate.email);
         } catch (error) {
           results.failed += 1;
           console.error('Review request delivery failed:', error.message || error);
         }
       }
+      let logError = '';
       try {
         await recordReviewRequests(sheets, logged);
       } catch (error) {
         console.error('Review request log write failed:', error.message || error);
+        logError = 'Review emails were sent, but the request log could not be updated. Refresh communication history before sending again.';
       }
-      return res.status(200).json({ ...results, skipped: selected.size - recipients.length });
+      return res.status(200).json({ ...results, skipped: selected.size - recipients.length, trackingWarnings, logError });
     }
 
     if (req.method === 'GET' && view === 'appointment-alerts-audience') {

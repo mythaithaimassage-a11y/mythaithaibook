@@ -4,6 +4,7 @@ import { useTranslation } from './localization';
 
 export type CustomerEmail = {
   id: string;
+  threadId?: string;
   subject: string;
   snippet: string;
   direction: 'received' | 'sent';
@@ -77,7 +78,8 @@ export function CustomerCommunicationHistory({ data, bookingId }: { data: Commun
   const messages = mergeCustomerEmails(data.messages, data.reminders);
   const latestReply = messages.find((email) => email.direction === 'received');
   const latestSent = messages.find((email) => email.direction === 'sent');
-  const latestReminder = messages.find((email) => email.tracked && email.bookingIds.includes(bookingId));
+  const latestReminder = messages.find((email) => email.tracked && email.kind === 'Reminder' && email.bookingIds.includes(bookingId));
+  const latestReview = messages.find((email) => email.direction === 'sent' && email.kind === 'Review request');
   const shown = messages.filter((email) => filter === 'All emails' || (filter === 'Customer replies' ? email.direction === 'received' : email.kind === filter));
   const filters = ['All emails', 'Customer replies', ...new Set(messages.map((email) => email.kind))];
   const timestamp = (value: string) => new Intl.DateTimeFormat(locale, {
@@ -88,7 +90,7 @@ export function CustomerCommunicationHistory({ data, bookingId }: { data: Commun
     <div className="space-y-5">
       {data.historyError && <div role="alert" className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-950">
         <p className="font-bold">{tr('Mailbox history unavailable')}</p><p>{tr(data.historyError)}</p>
-        <p className="mt-1">{tr('Saved reminder tracking is shown below. The conversation summary is incomplete until mailbox access is restored.')}</p>
+        <p className="mt-1">{tr('Saved email tracking is shown below. The conversation summary is incomplete until mailbox access is restored.')}</p>
       </div>}
       {data.trackingError && <div role="alert" className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-950"><p className="font-bold">{tr('Reminder tracking unavailable')}</p><p>{tr(data.trackingError)}</p></div>}
       {data.restricted && <p className="flex items-start gap-2 text-xs leading-5 text-slate-500"><ShieldCheck aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" />{tr('Branch access: only emails referencing accessible bookings are shown. Unreferenced marketing emails are visible to the owner only.')}</p>}
@@ -102,6 +104,11 @@ export function CustomerCommunicationHistory({ data, bookingId }: { data: Commun
             ['Open signals', messages.filter((email) => email.openedAt).length],
           ].map(([label, count]) => <div key={label} className="min-w-0 rounded-xl border border-white bg-white/80 p-3"><p className="text-xl font-black text-slate-900">{count}</p><p className="mt-1 break-words text-[11px] font-semibold text-slate-500">{tr(String(label))}</p></div>)}
         </div>
+        {latestReview && <div className="mt-3 rounded-xl border border-amber-100 bg-white p-3">
+          <p className="text-xs font-bold text-slate-500">{tr('Latest review request')}</p>
+          <p className="mt-1 text-sm font-bold text-slate-900">{tr(!latestReview.tracked ? 'Open tracking unavailable' : latestReview.openedAt ? 'Open signal detected (approximate)' : 'No open signal yet')}</p>
+          <p className="mt-1 text-xs text-slate-500">{timestamp(latestReview.occurredAt)}</p>
+        </div>}
         <div className="mt-4 rounded-xl border border-emerald-100 bg-white p-3">
           <p className="text-xs font-bold text-slate-500">{tr('Latest reminder for this appointment')}</p>
           <p className="mt-1 flex items-center gap-2 text-sm font-bold text-emerald-950">
@@ -121,7 +128,7 @@ export function CustomerCommunicationHistory({ data, bookingId }: { data: Commun
           <p className="mt-1 break-words text-xs leading-5 text-slate-600">{latestReply.snippet}</p>
         </div> : !data.historyError && <p className="mt-3 text-xs text-slate-500">{tr('No customer reply in the loaded history.')}</p>}
       </section>
-      <p className="rounded-xl bg-slate-100 p-3 text-xs leading-5 text-slate-500">{tr('Open signals are approximate, not read receipts. Images may be blocked or loaded automatically by privacy tools. No signal does not mean unread. Only reminders sent after tracking was added can be tracked.')}</p>
+      <p className="rounded-xl bg-slate-100 p-3 text-xs leading-5 text-slate-500">{tr('Open signals are approximate, not read receipts. Images may be blocked or loaded automatically by privacy tools. No signal does not mean unread. Only new reminders and review requests sent with tracking can show open signals.')}</p>
       <nav aria-label={tr('Filter customer emails')} className="flex gap-2 overflow-x-auto pb-2">
         {filters.map((value) => <button key={value} type="button" aria-pressed={filter === value} onClick={() => setFilter(value)}
           className={`min-h-11 shrink-0 rounded-full border px-4 text-xs font-bold transition ${filter === value ? 'border-emerald-900 bg-emerald-900 text-white' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}`}>{tr(value)}</button>)}

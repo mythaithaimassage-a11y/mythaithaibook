@@ -44,6 +44,7 @@ import CalendarAvailability from './CalendarAvailability';
 import BookingNotifications from './BookingNotifications';
 import BookingActivityFeed from './BookingActivityFeed';
 import CustomerCommunications from './CustomerCommunications';
+import ReviewCustomers from './ReviewCustomers';
 import { calendarEventRange, calendarEventStyle } from '../lib/calendar-layout.js';
 
 const MOCK_BRANCHES = [
@@ -4561,12 +4562,13 @@ function AdminPortal({
   const [googleReviews, setGoogleReviews] = useState(null);
   const [isLoadingGoogleReviews, setIsLoadingGoogleReviews] = useState(false);
   const [googleReviewsError, setGoogleReviewsError] = useState('');
-  const [reviewRequestOpen, setReviewRequestOpen] = useState(false);
   const [reviewRequestData, setReviewRequestData] = useState(null);
-  const [reviewRequestSelected, setReviewRequestSelected] = useState([]);
+  const reviewsLoading = useRef(false);
+  const reviewAudienceLoading = useRef(false);
   const [isLoadingReviewRequests, setIsLoadingReviewRequests] = useState(false);
   const [isSendingReviewRequests, setIsSendingReviewRequests] = useState(false);
   const [reviewRequestError, setReviewRequestError] = useState('');
+  const [reviewRequestSendError, setReviewRequestSendError] = useState('');
   const [reviewRequestResult, setReviewRequestResult] = useState('');
   const [alertsData, setAlertsData] = useState(null);
   const [alertsSelected, setAlertsSelected] = useState([]);
@@ -4837,11 +4839,13 @@ function AdminPortal({
     if (activeTab === 'google-ads') loadGoogleAdsReport();
   }, [activeTab]);
 
-  const loadGoogleReviews = async () => {
+  const loadGoogleReviews = async (force = false) => {
+    if (reviewsLoading.current) return;
+    reviewsLoading.current = true;
     setIsLoadingGoogleReviews(true);
     setGoogleReviewsError('');
     try {
-      const response = await fetch('/api/booking?view=google-reviews');
+      const response = await fetch(`/api/booking?view=google-reviews${force === true ? '&refresh=1' : ''}`, { cache: 'no-store' });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || `Google Reviews returned status ${response.status}`);
       setGoogleReviews(data);
@@ -4849,61 +4853,73 @@ function AdminPortal({
       setGoogleReviewsError(error.message || 'Unable to load Google reviews.');
     } finally {
       setIsLoadingGoogleReviews(false);
+      reviewsLoading.current = false;
     }
   };
 
-  useEffect(() => {
-    if (activeTab === 'reviews') loadGoogleReviews();
-  }, [activeTab]);
-
   const loadReviewRequests = async () => {
+    if (reviewAudienceLoading.current) return;
+    reviewAudienceLoading.current = true;
     setIsLoadingReviewRequests(true);
     setReviewRequestError('');
-    setReviewRequestResult('');
     try {
-      const response = await fetch('/api/booking?view=review-request-audience');
+      const response = await fetch('/api/booking?view=review-request-audience', { cache: 'no-store' });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
       setReviewRequestData(data);
-      setReviewRequestSelected((data.candidates || []).filter((c) => c.eligible).map((c) => c.email));
     } catch (error) {
       setReviewRequestError(error.message || 'Unable to load customers who have visited.');
     } finally {
       setIsLoadingReviewRequests(false);
+      reviewAudienceLoading.current = false;
     }
   };
 
-  const openReviewRequests = () => {
-    setReviewRequestOpen(true);
-    loadReviewRequests();
+  const reviewRefresh = useRef(() => {});
+  reviewRefresh.current = () => {
+    if (document.visibilityState === 'hidden' || isSendingReviewRequests) return;
+    void loadGoogleReviews();
+    void loadReviewRequests();
   };
+  useEffect(() => {
+    if (activeTab !== 'reviews') return;
+    reviewRefresh.current();
+    const refresh = () => reviewRefresh.current();
+    const timer = window.setInterval(refresh, 60000);
+    document.addEventListener('visibilitychange', refresh);
+    window.addEventListener('focus', refresh);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', refresh);
+      window.removeEventListener('focus', refresh);
+    };
+  }, [activeTab]);
 
-  const toggleReviewRequestRecipient = (email) => {
-    setReviewRequestSelected((current) =>
-      current.includes(email) ? current.filter((value) => value !== email) : [...current, email],
-    );
-  };
-
-  const sendReviewRequests = async () => {
-    if (!reviewRequestSelected.length) return;
+  const sendReviewRequests = async (emails) => {
+    if (!emails?.length || isSendingReviewRequests) return false;
     setIsSendingReviewRequests(true);
-    setReviewRequestError('');
+    setReviewRequestSendError('');
     setReviewRequestResult('');
     try {
       const response = await fetch('/api/booking?view=review-request-send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ emails: reviewRequestSelected }),
+        body: JSON.stringify({ emails }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || `Server returned status ${response.status}`);
-      const summary = `Review request sent to ${data.sent} customer${data.sent === 1 ? '' : 's'}.` +
-        (data.failed ? ` ${data.failed} failed to send.` : '') +
-        (data.skipped ? ` ${data.skipped} skipped (unsubscribed or no longer eligible).` : '');
+      const summary = tr('Review requests: {sent} sent, {failed} failed, {skipped} skipped.', { sent: data.sent, failed: data.failed, skipped: data.skipped });
       await loadReviewRequests();
       setReviewRequestResult(summary);
+      const warnings = [
+        data.logError ? tr(data.logError) : '',
+        data.trackingWarnings?.length ? tr('Review emails were sent, but open tracking could not be saved for: {emails}', { emails: data.trackingWarnings.join(', ') }) : '',
+      ].filter(Boolean).join(' ');
+      if (warnings) setReviewRequestSendError(warnings);
+      return data.sent > 0;
     } catch (error) {
-      setReviewRequestError(error.message || 'Unable to send review requests.');
+      setReviewRequestSendError(error.message || 'Unable to send review requests.');
+      return false;
     } finally {
       setIsSendingReviewRequests(false);
     }
@@ -8855,18 +8871,18 @@ function AdminPortal({
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-[0.16em] text-amber-200">{tr("Grow your practice")}</p>
                     <h2 className="mt-1 text-xl font-bold">{tr("Google Reviews")}</h2>
-                    <MobileHelp><p className="mt-1 max-w-2xl text-sm text-slate-300">{tr("See your latest Google Business Profile reviews and rating at a glance.")}</p></MobileHelp>
+                    <MobileHelp><p className="mt-1 max-w-2xl text-sm text-slate-300">{tr("See your Google rating, shared reviews and customer follow-up at a glance.")}</p></MobileHelp>
                   </div>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <button type="button" onClick={loadGoogleReviews} disabled={isLoadingGoogleReviews} className="inline-flex items-center gap-2 rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-xs font-semibold text-white transition hover:bg-white/15 disabled:opacity-50">
+                  <button type="button" onClick={() => { void loadGoogleReviews(true); void loadReviewRequests(); }} disabled={isLoadingGoogleReviews || isSendingReviewRequests} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-white/20 bg-white/10 px-3 py-2 text-xs font-semibold text-white transition hover:bg-white/15 disabled:opacity-50">
                     <RefreshCw className={`h-3.5 w-3.5 ${isLoadingGoogleReviews ? 'animate-spin' : ''}`} />{tr("Refresh")}</button>
                   {googleReviews?.reviewUrl && (
-                    <button type="button" onClick={openReviewRequests} className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-900 transition hover:bg-amber-50">{tr("Ask for a review")}<Mail className="h-3.5 w-3.5" />
+                    <button type="button" onClick={() => document.getElementById('review-customers')?.scrollIntoView({ behavior: 'smooth', block: 'start' })} className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-900 transition hover:bg-amber-50">{tr("Ask for a review")}<Mail className="h-3.5 w-3.5" />
                     </button>
                   )}
                   {googleReviews?.mapsUrl && (
-                    <a href={googleReviews.mapsUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-900 transition hover:bg-amber-50">{tr("View on Google")}</a>
+                    <a href={googleReviews.mapsUrl} target="_blank" rel="noreferrer" className="inline-flex min-h-11 items-center gap-2 rounded-lg bg-white px-3 py-2 text-xs font-semibold text-slate-900 transition hover:bg-amber-50">{tr("View on Google")}</a>
                   )}
                 </div>
               </div>
@@ -8874,6 +8890,7 @@ function AdminPortal({
           </section>
 
           {googleReviewsError && <div role="alert" className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">{tr(googleReviewsError)}</div>}
+          {googleReviews?.fetchedAt && <p role="status" className="text-xs text-slate-500">{tr('Google data updated at {time}. Refreshes every minute while this screen is visible.', { time: new Intl.DateTimeFormat(locale, { timeZone: 'America/Toronto', dateStyle: 'medium', timeStyle: 'short' }).format(new Date(googleReviews.fetchedAt)) })}</p>}
           {isLoadingGoogleReviews && !googleReviews && <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">{tr("Fetching your Google reviews…")}</div>}
 
           {googleReviews?.enabled === false && (
@@ -8907,8 +8924,8 @@ function AdminPortal({
 
               <section className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
                 <div className="border-b border-slate-100 px-5 py-4">
-                  <h3 className="text-base font-semibold text-slate-900">{tr("Most recent reviews")}</h3>
-                  <MobileHelp><p className="mt-1 text-xs text-slate-500">{tr("Google surfaces up to 5 recent reviews through the Places API.")}</p></MobileHelp>
+                  <h3 className="text-base font-semibold text-slate-900">{tr("Reviews shared by Google")}</h3>
+                  <p className="mt-1 text-xs leading-5 text-slate-500">{tr("Google provides up to 5 relevance-selected reviews, sorted here by date. This is not a complete latest-review feed. View on Google for the full list.")}</p>
                 </div>
                 {googleReviews.reviews.length === 0 ? (
                   <p className="p-8 text-center text-sm text-slate-500">{tr("No reviews are available yet.")}</p>
@@ -8938,90 +8955,40 @@ function AdminPortal({
                   </ul>
                 )}
               </section>
-              <p className="text-xs leading-5 text-slate-500">{tr("Reviews are read-only and refresh from Google every few minutes. Use \"Ask for a review\" to email past customers a link to your Google review form.")}</p>
+              <p className="text-xs leading-5 text-slate-500">{tr("Email opens are approximate. An email reply is not a posted Google review. Google does not provide reviewer email addresses, so individual review completion cannot be verified here.")}</p>
             </>
           )}
 
-          {reviewRequestOpen && (
-            <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/50 p-4 sm:p-8">
-              <div className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white shadow-xl">
-                <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+          {googleReviews?.enabled && (
+            <section id="review-customers" className="scroll-mt-20 rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
                   <div>
-                    <h3 className="text-base font-bold text-slate-950">{tr("Ask past customers for a review")}</h3>
+                    <h3 className="text-base font-bold text-slate-950">{tr("Review requests & customer follow-up")}</h3>
                     <MobileHelp><p className="mt-1 text-xs text-slate-500">{tr("Emails a Google review link to customers who have already attended an appointment")}{reviewRequestData?.lookbackDays ? tr(" in the last {value0} days", { value0: reviewRequestData.lookbackDays }) : ''}.
                       {reviewRequestData?.senderEmail ? tr(" Sent from {value0}.", { value0: reviewRequestData.senderEmail }) : ''}
                     </p></MobileHelp>
+                    <p className="mt-2 text-xs leading-5 text-slate-500">{tr('Tap a customer to view all communication. New review emails include approximate open tracking. Check replies to read responses in the same review-email thread.')}</p>
                   </div>
-                  <button type="button" onClick={() => setReviewRequestOpen(false)} className="rounded-lg p-1.5 text-slate-500 transition hover:bg-slate-100"><X className="h-4 w-4" /></button>
+                  <button type="button" onClick={() => { void loadReviewRequests(); }} disabled={isLoadingReviewRequests || isSendingReviewRequests} className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-slate-200 px-3 text-xs font-bold text-slate-600 disabled:opacity-50"><RefreshCw aria-hidden="true" className={`h-4 w-4 ${isLoadingReviewRequests ? 'animate-spin' : ''}`} />{tr('Refresh customers')}</button>
                 </div>
 
-                <div className="max-h-[55vh] overflow-y-auto px-5 py-4">
+                <div className="px-4 py-4 sm:px-5">
                   {reviewRequestError && <div role="alert" className="mb-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">{tr(reviewRequestError)}</div>}
-                  {reviewRequestResult && <div className="mb-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">{reviewRequestResult}</div>}
+                  {reviewRequestSendError && <div role="alert" className="mb-3 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">{tr(reviewRequestSendError)}</div>}
+                  {reviewRequestResult && <div role="status" className="mb-3 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">{tr(reviewRequestResult)}</div>}
                   {reviewRequestData?.sendBlockReason && <div role="alert" className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">{tr(reviewRequestData.sendBlockReason)}</div>}
+                  {reviewRequestData?.trackingError && <p role="alert" className="mb-3 rounded-xl bg-amber-50 p-3 text-xs text-amber-900">{tr(reviewRequestData.trackingError)}</p>}
+                  {reviewRequestData?.fetchedAt && <p className="mb-3 text-xs text-slate-500">{tr('Customer status updated at {time}', { time: new Intl.DateTimeFormat(locale, { timeZone: 'America/Toronto', dateStyle: 'short', timeStyle: 'short' }).format(new Date(reviewRequestData.fetchedAt)) })}</p>}
 
-                  {isLoadingReviewRequests && <p className="py-8 text-center text-sm text-slate-500">{tr("Finding customers who have visited…")}</p>}
-
-                  {!isLoadingReviewRequests && reviewRequestData && !reviewRequestData.candidates?.length && (
-                    <div className="py-8 text-center text-sm text-slate-500">
-                      <p className="font-semibold text-slate-700">{tr("No completed visits to ask yet.")}</p>
-                      {reviewRequestData.stats && (
-                        <p className="mx-auto mt-2 max-w-sm text-xs leading-5">{tr("Checked")}{reviewRequestData.stats.totalBookings} {tr("booking")}{reviewRequestData.stats.totalBookings === 1 ? '' : tr("s")}:
-                          {' '}{reviewRequestData.stats.notVisitedYet}{tr("not finished yet,")}{' '}{reviewRequestData.stats.cancelled}{tr("cancelled,")}{' '}{reviewRequestData.stats.missingEmail}{tr("without a valid email,")}{' '}{reviewRequestData.stats.tooOld} {tr("older than")} {reviewRequestData.lookbackDays}{tr("days. A customer appears here once their appointment end time has passed.")}</p>
-                      )}
-                    </div>
-                  )}
-
-                  {!isLoadingReviewRequests && !!reviewRequestData?.candidates?.length && (
-                    <>
-                      <div className="mb-2 flex items-center justify-between text-xs">
-                        <span className="font-semibold text-slate-600">{reviewRequestSelected.length} {tr("of")} {reviewRequestData.candidates.length} {tr("selected")}</span>
-                        <div className="flex gap-3">
-                          <button type="button" onClick={() => setReviewRequestSelected(reviewRequestData.candidates.filter((c) => !c.unsubscribed).map((c) => c.email))} className="font-semibold text-emerald-800 hover:underline">{tr("Select all")}</button>
-                          <button type="button" onClick={() => setReviewRequestSelected([])} className="font-semibold text-slate-500 hover:underline">{tr("Clear")}</button>
-                        </div>
-                      </div>
-                      <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200">
-                        {reviewRequestData.candidates.map((candidate) => (
-                          <li key={candidate.email} className="flex items-start gap-3 px-3 py-2.5">
-                            <input
-                              type="checkbox"
-                              className="mt-1 h-4 w-4 accent-emerald-700 disabled:opacity-40"
-                              checked={reviewRequestSelected.includes(candidate.email)}
-                              disabled={candidate.unsubscribed}
-                              onChange={() => toggleReviewRequestRecipient(candidate.email)}
-                            />
-                            <div className="min-w-0 flex-1">
-                              <p className="truncate text-sm font-semibold text-slate-900">{candidate.name || candidate.email}</p>
-                              <p className="truncate text-xs text-slate-500">{candidate.email}</p>
-                              <p className="mt-0.5 text-xs text-slate-500">{tr("Last visit")}{candidate.visitDate}{candidate.serviceName ? tr(" · {value0}", { value0: candidate.serviceName }) : ''}
-                              </p>
-                              {candidate.unsubscribed && <p className="mt-0.5 text-xs font-semibold text-amber-800">{tr("Unsubscribed from emails")}</p>}
-                              {!candidate.unsubscribed && candidate.lastRequestedAt && (
-                                <p className="mt-0.5 text-xs text-slate-400">{tr("Already asked on")} {candidate.lastRequestedAt.slice(0, 10)}</p>
-                              )}
-                            </div>
-                          </li>
-                        ))}
-                      </ul>
-                    </>
-                  )}
+                  {isLoadingReviewRequests && !reviewRequestData && <p role="status" className="py-8 text-center text-sm text-slate-500">{tr("Finding customers who have visited…")}</p>}
+                  {reviewRequestData && <ReviewCustomers
+                    candidates={reviewRequestData.candidates || []} maximum={reviewRequestData.maxRecipients || 50}
+                    busy={isSendingReviewRequests || isLoadingReviewRequests}
+                    sending={isSendingReviewRequests} sendBlocked={reviewRequestData.sendReady === false}
+                    revision={reviewRequestData.fetchedAt || ''} onOpen={setCommunicationBookingId} onSend={sendReviewRequests}
+                  />}
                 </div>
-
-                <div className="flex items-center justify-between gap-3 border-t border-slate-200 px-5 py-4">
-                  <button type="button" onClick={loadReviewRequests} disabled={isLoadingReviewRequests || isSendingReviewRequests} className="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50">
-                    <RefreshCw className={`h-3.5 w-3.5 ${isLoadingReviewRequests ? 'animate-spin' : ''}`} />{tr("Refresh")}</button>
-                  <button
-                    type="button"
-                    onClick={sendReviewRequests}
-                    disabled={isSendingReviewRequests || isLoadingReviewRequests || !reviewRequestSelected.length || reviewRequestData?.sendReady === false}
-                    className="inline-flex items-center gap-2 rounded-xl bg-emerald-950 px-4 py-2.5 text-xs font-bold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-45"
-                  >
-                    <Mail className="h-4 w-4" />{isSendingReviewRequests ? tr("Sending…") : tr("Send to {value0}", { value0: reviewRequestSelected.length })}
-                  </button>
-                </div>
-              </div>
-            </div>
+            </section>
           )}
         </div>
       )}
