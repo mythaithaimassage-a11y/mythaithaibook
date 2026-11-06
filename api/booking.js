@@ -101,7 +101,7 @@ const DEFAULT_BUSINESS_PROFILE = {
   legalName: '',
   tagline: 'Traditional Thai massage & wellness',
   email: 'mythaithaimassage@gmail.com',
-  phone: '+1 437 898 7424',
+  phone: '+1 437 848 4436',
   website: 'https://mythaithaimassage.com',
   address: 'Ontario, Canada',
   taxRegistrationNumber: '',
