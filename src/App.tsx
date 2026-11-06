@@ -48,10 +48,7 @@ import ReviewCustomers from './ReviewCustomers';
 import { calendarEventRange, calendarEventStyle } from '../lib/calendar-layout.js';
 
 const MOCK_BRANCHES = [
-  { id: 1, name: "Mississauga Central", address: "4310 Sherwoodtowne Blvd", city: "Mississauga, ON", phone: "+1 437 898 7424" },
-  { id: 2, name: "Oakville Downtown", address: "123 Lakeshore Rd E", city: "Oakville, ON", phone: "+1 437 898 7424" },
-  { id: 3, name: "Toronto West", address: "456 Bloor St W", city: "Toronto, ON", phone: "+1 437 898 7424" },
-  { id: 4, name: "Yorkville Flagship", address: "88 Yorkville Ave", city: "Toronto, ON", phone: "+1 437 898 7424" }
+  { id: 1, name: "Mississauga Central", address: "4310 Sherwoodtowne Blvd", city: "Mississauga, ON", phone: "+1 437 848 4436" }
 ];
 
 const INITIAL_SERVICES = [
@@ -127,7 +124,7 @@ const DEFAULT_BUSINESS_PROFILE = {
   legalName: '',
   tagline: 'Traditional Thai massage & wellness',
   email: 'mythaithaimassage@gmail.com',
-  phone: '+1 437 898 7424',
+  phone: '+1 437 848 4436',
   website: 'https://mythaithaimassage.com',
   address: 'Ontario, Canada',
   taxRegistrationNumber: '',
@@ -2980,9 +2977,9 @@ function CustomerPortal({ branches, services, therapists, sheetsWebhookUrl, onNe
           </div>
 
           <div className="grid grid-cols-2 items-stretch gap-2 text-xs sm:flex sm:flex-wrap sm:justify-end">
-            <a href="tel:+14378987424" className="inline-flex min-h-11 items-center justify-center rounded-xl border border-white/15 bg-white/10 px-2 py-2 text-center text-emerald-50 transition hover:bg-white/15 sm:px-3">
+            <a href="tel:+14378484436" className="inline-flex min-h-11 items-center justify-center rounded-xl border border-white/15 bg-white/10 px-2 py-2 text-center text-emerald-50 transition hover:bg-white/15 sm:px-3">
               <Phone className="mr-1.5 h-3.5 w-3.5 text-emerald-200" />
-              <span className="break-words">+1 437 898 7424</span>
+              <span className="break-words">+1 437 848 4436</span>
             </a>
             <a href="https://Mythaithaimassage.com" target="_blank" rel="noreferrer" className="inline-flex min-h-11 items-center justify-center rounded-xl border border-white/15 bg-white/10 px-2 py-2 text-center text-emerald-50 transition hover:bg-white/15 sm:px-3">
               <Globe className="mr-1.5 h-3.5 w-3.5 text-emerald-200" />
@@ -9256,7 +9253,7 @@ function AdminPortal({
                     { key: 'legalName', label: 'Legal business name', type: 'text', placeholder: 'Legal name for receipts' },
                     { key: 'tagline', label: 'Short description', type: 'text', placeholder: 'Traditional Thai massage & wellness' },
                     { key: 'email', label: 'Business email', type: 'email', placeholder: 'hello@example.com' },
-                    { key: 'phone', label: 'Phone number', type: 'tel', placeholder: '+1 437 898 7424' },
+                    { key: 'phone', label: 'Phone number', type: 'tel', placeholder: '+1 437 848 4436' },
                     { key: 'website', label: 'Website', type: 'url', placeholder: 'https://example.com' },
                     { key: 'address', label: 'Business location', type: 'text', placeholder: 'City, Province' },
                     { key: 'taxRegistrationNumber', label: 'GST/HST registration number', type: 'text', placeholder: 'Optional — enter only your registered number' },
