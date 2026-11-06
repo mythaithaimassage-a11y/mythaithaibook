@@ -208,7 +208,7 @@ export default function QuickBooking(props: Props) {
           <label className="block text-xs font-bold text-stone-700">{tr('Phone')}<input type="tel" autoComplete="tel" required={!email.trim()} maxLength={40} value={phone} onChange={(event) => {
             setPhone(event.target.value);
             setSelectedCustomer(null);
-          }} aria-describedby="quick-booking-contact-help" placeholder="+1 437 898 7424" className={inputClass} /></label>
+          }} aria-describedby="quick-booking-contact-help" placeholder="+1 437 848 4436" className={inputClass} /></label>
         </div>
         <p id="quick-booking-contact-help" className="text-xs text-stone-500">{tr('Enter at least one email address or phone number.')}</p>
         <p className="text-xs text-stone-500">{tr('Saved hours and public visibility apply to online booking. Dashboard staff can book any time on a working day; conflicts and time off still apply.')}</p>
