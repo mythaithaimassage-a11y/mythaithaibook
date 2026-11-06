@@ -111,10 +111,7 @@ const DEFAULT_BUSINESS_PROFILE = {
 };
 const BRANCH_FIELDS = ['ID', 'Name', 'Address', 'City', 'Phone', 'Active', 'Updated At', 'Collects Deposit', 'Allow Clinic Payment', 'Allow Deposit Payment', 'Allow Full Payment', 'Business Hours'];
 const DEFAULT_BRANCHES = [
-  { id: 1, name: 'Mississauga Central', address: '4310 Sherwoodtowne Blvd', city: 'Mississauga, ON', phone: '+1 437 898 7424', active: true },
-  { id: 2, name: 'Oakville Downtown', address: '123 Lakeshore Rd E', city: 'Oakville, ON', phone: '+1 437 898 7424', active: true },
-  { id: 3, name: 'Toronto West', address: '456 Bloor St W', city: 'Toronto, ON', phone: '+1 437 898 7424', active: true },
-  { id: 4, name: 'Yorkville Flagship', address: '88 Yorkville Ave', city: 'Toronto, ON', phone: '+1 437 898 7424', active: true },
+  { id: 1, name: 'Mississauga Central', address: '4310 Sherwoodtowne Blvd', city: 'Mississauga, ON', phone: '+1 437 848 4436', active: true },
 ];
 const SERVICE_FIELDS = ['ID', 'Name', 'Category', 'Duration', 'Price', 'Deposit', 'Is RMT', 'Tax Rate', 'Description', 'Active', 'Updated At'];
 const DEFAULT_SERVICES = [
@@ -142,10 +139,10 @@ const DEFAULT_SERVICES = [
 const THERAPIST_FIELDS = ['ID', 'Name', 'Bio', 'Rating', 'Thai Certified', 'RMT Certified', 'Branch IDs', 'Schedule', 'Active', 'Updated At'];
 const WEEKDAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
 const DEFAULT_THERAPISTS = [
-  { id: 1, name: 'Kanya S.', bio: '10+ years traditional Wat Pho Thai technique experience', rating: 4.9, thaiCertified: true, rmtCertified: false, branches: [1, 2], schedule: {}, active: true },
-  { id: 2, name: 'Michael T., RMT', bio: 'CMTO Registered Massage Therapist & Deep Tissue specialist', rating: 4.8, thaiCertified: true, rmtCertified: true, branches: [1, 3], schedule: {}, active: true },
-  { id: 3, name: 'Priya P.', bio: 'Hot stone specialist and body stretch master', rating: 4.9, thaiCertified: true, rmtCertified: false, branches: [2, 4], schedule: {}, active: true },
-  { id: 4, name: 'Somchai R., RMT', bio: 'Acupuncture practitioner and sports rehabilitation', rating: 5.0, thaiCertified: true, rmtCertified: true, branches: [1, 4], schedule: {}, active: true },
+  { id: 1, name: 'TATA', bio: '10+ years traditional Wat Pho Thai technique experience', rating: 5, thaiCertified: true, rmtCertified: false, branches: [1, 2], schedule: {}, active: true },
+  { id: 2, name: 'Tanya', bio: '10+ years traditional Thai Massage Therapist & Deep Tissue specialist', rating: 5, thaiCertified: true, rmtCertified: true, branches: [1, 3], schedule: {}, active: true },
+  { id: 3, name: 'Noi', bio: 'Hot stone specialist and body stretch master', rating: 5, thaiCertified: true, rmtCertified: false, branches: [2, 4], schedule: {}, active: true },
+  { id: 4, name: 'TUN', bio: 'Acupuncture practitioner and sports rehabilitation', rating: 5.0, thaiCertified: true, rmtCertified: true, branches: [1, 4], schedule: {}, active: true },
 ];
 
 // Returns the weekday key ('sun'..'sat') for a YYYY-MM-DD date string, avoiding timezone shifts.
